@@ -696,6 +696,16 @@ textarea {
   background: #f6fffb;
 }
 
+.stage-card.running {
+  border-color: #fed7aa;
+  background: #fffaf3;
+}
+
+.stage-card.failed {
+  border-color: #fecdd3;
+  background: #fff7f8;
+}
+
 .stage-card-head {
   display: flex;
   justify-content: space-between;

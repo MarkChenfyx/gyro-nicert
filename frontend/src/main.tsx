@@ -31,9 +31,8 @@ const zh = {
   clearAll: "\u6e05\u9664\u5168\u90e8",
   refresh: "\u5237\u65b0",
   waiting: "\u7b49\u5f85\u4efb\u52a1",
-  strategyAndBaseline: "\u7b56\u7565\u751f\u6210\u4e0e\u57fa\u7ebf\u56de\u6d4b",
-  logicDiagnosis: "\u903b\u8f91\u8bca\u65ad",
-  assetExperiment: "\u8d44\u4ea7\u56de\u6d4b\u4e0e\u53c2\u6570\u5b9e\u9a8c",
+  strategyCodeGeneration: "\u751f\u6210 strategy.py",
+  baselineBacktest: "\u57fa\u7ebf\u56de\u6d4b",
   startConfig: "\u542f\u52a8\u914d\u7f6e",
   currentProgress: "\u5f53\u524d\u8fdb\u5ea6",
   resultHub: "\u7ed3\u679c\u5165\u53e3",
@@ -86,9 +85,8 @@ const zh = {
 };
 
 const PIPELINE_STAGES = [
-  { title: zh.strategyAndBaseline, note: "\u751f\u6210 strategy.py\uff0c\u5e76\u521b\u5efa\u5f53\u524d\u4e34\u65f6 baseline run\u3002" },
-  { title: zh.logicDiagnosis, note: "\u8bca\u65ad\u5f15\u64ce\u5c1a\u672a\u63a5\u5165\uff0c\u5f53\u524d\u4fdd\u7559\u9636\u6bb5\u5165\u53e3\u3002" },
-  { title: zh.assetExperiment, note: "\u771f\u5b9e\u56de\u6d4b\u548c\u53c2\u6570\u4f18\u5316\u63a5\u5165\u540e\u5728\u8fd9\u91cc\u63a8\u8fdb\u3002" }
+  { key: "generation", title: zh.strategyCodeGeneration, note: "\u6839\u636e\u81ea\u7136\u8bed\u8a00\u8f93\u5165\u751f\u6210 vn.py CTA strategy.py\uff0c\u5e76\u767b\u8bb0\u7b56\u7565\u4ee3\u7801\u7248\u672c\u3002" },
+  { key: "backtest", title: zh.baselineBacktest, note: "\u4f7f\u7528\u672c\u5730 SQLite \u884c\u60c5\u6570\u636e\u8fd0\u884c\u771f\u5b9e baseline \u56de\u6d4b\uff0c\u751f\u6210 run\u3001curve \u548c trades\u3002" }
 ];
 
 const SOURCE_FILES = [
@@ -326,10 +324,22 @@ function StrategyGeneratePage({
   const [researchError, setResearchError] = useState<any>(null);
   const [generationResult, setGenerationResult] = useState<any>(null);
   const latestTask = tasks[0];
-  const progress = latestTask ? Number(latestTask.progress || 0) : 0;
   const coverageMissingRanges = extractMissingRanges(coverage);
   const researchMissingRanges = extractMissingRanges(researchError?.backtest);
   const missingRanges = coverageMissingRanges.length > 0 ? coverageMissingRanges : researchMissingRanges;
+  const generationDone = Boolean(generationResult?.strategy || lastResearch?.generation?.strategy);
+  const baselineDone = Boolean(lastResearch?.baseline?.run?.run_id);
+  const baselineFailed = Boolean(researchError || lastResearch?.error);
+  const pipelineStages = PIPELINE_STAGES.map((stage) => {
+    if (stage.key === "generation") {
+      const status = generationDone ? "completed" : (loadingGenerate || loadingResearch ? "running" : "pending");
+      return { ...stage, status };
+    }
+    const status = baselineDone ? "completed" : (baselineFailed ? "failed" : (loadingResearch ? "running" : "pending"));
+    return { ...stage, status };
+  });
+  const completedStageCount = pipelineStages.filter((stage) => stage.status === "completed").length;
+  const workflowProgress = pipelineStages.length > 0 ? completedStageCount / pipelineStages.length : 0;
 
   useEffect(() => {
     let active = true;
@@ -587,19 +597,19 @@ function StrategyGeneratePage({
             <div className="progress-shell">
               <div className="progress-caption">
                 <div className="progress-stage-block"><span className="progress-caption-label">stage</span><strong>{latestTask?.task_type || zh.waiting}</strong></div>
-                <div className="progress-percent-block"><strong>{Math.round(progress * 100)}%</strong><span>{latestTask ? "1 / 3" : "0 / 3"}</span></div>
+                <div className="progress-percent-block"><strong>{Math.round(workflowProgress * 100)}%</strong><span>{completedStageCount} / {pipelineStages.length}</span></div>
               </div>
-              <div className="progress-track"><div className="progress-fill" style={{ width: `${Math.round(progress * 100)}%` }} /></div>
+              <div className="progress-track"><div className="progress-fill" style={{ width: `${Math.round(workflowProgress * 100)}%` }} /></div>
               <div className="job-meta"><span>started_at {formatDate(latestTask?.created_at)}</span><span>duration -</span></div>
             </div>
           </section>
 
           <section className="stage-grid">
-            {PIPELINE_STAGES.map((stage, index) => (
-              <div className={`stage-card ${index === 0 && latestTask ? "completed" : "pending"}`} key={stage.title}>
+            {pipelineStages.map((stage, index) => (
+              <div className={`stage-card ${stage.status}`} key={stage.title}>
                 <div className="stage-card-head">
                   <div><p className="stage-index">0{index + 1}</p><h3>{stage.title}</h3></div>
-                  <span className={index === 0 && latestTask ? "status-pill status-completed" : "status-pill status-pending"}>{index === 0 && latestTask ? "completed" : "pending"}</span>
+                  <span className={statusClass(stage.status)}>{stage.status}</span>
                 </div>
                 <p className="stage-copy">{stage.note}</p>
               </div>

@@ -1,0 +1,14 @@
+[project]
+name = "gyro-nicert"
+version = "0.1.0"
+description = "Quant Research Workbench foundation"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.139.0",
+  "uvicorn>=0.50.0",
+  "httpx>=0.28.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

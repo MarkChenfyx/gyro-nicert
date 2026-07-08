@@ -1,0 +1,14 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+storage/runtime/
+storage/cache/
+storage/db/*.sqlite
+storage/db/*.db
+strategies/generated/
+frontend/node_modules/
+frontend/dist/
+*.tsbuildinfo
+outputs/

@@ -12,17 +12,19 @@ import {
   getNaturalLanguageSource,
   getPoolCurve,
   getPoolItem,
+  getVariantCurve,
   listNaturalLanguageSources,
   listPool,
   listTasks
 } from "./api";
 import "./styles.css";
 
-type PageKey = "generate" | "optimize" | "pool";
+type PageKey = "launch" | "generate" | "optimize" | "pool";
 
 const zh = {
   workbench: "\u7814\u7a76\u5de5\u4f5c\u53f0",
   subtitle: "\u81ea\u7136\u8bed\u8a00\u7b56\u7565\u751f\u6210\u3001\u53c2\u6570\u5b9e\u9a8c\u548c\u7b56\u7565\u6c60\u6c89\u6dc0\u7684\u7edf\u4e00\u5165\u53e3\u3002",
+  launchFlow: "\u542f\u52a8\u6d41\u7a0b",
   generate: "\u7b56\u7565\u751f\u6210",
   optimize: "\u53c2\u6570\u4f18\u5316",
   pool: "\u7b56\u7565\u6c60",
@@ -214,6 +216,7 @@ function Sidebar({
 
       <section className="sidebar-section nav-section">
         {[
+          ["launch", zh.launchFlow],
           ["generate", zh.generate],
           ["optimize", zh.optimize],
           ["pool", zh.pool]
@@ -284,12 +287,13 @@ function HeroMetrics({ lastRun, poolCount, taskCount }: { lastRun: any; poolCoun
   );
 }
 
-function StrategyGeneratePage({
+function LaunchFlowPage({
   tasks,
   poolCount,
   lastResearch,
   onResearchCreated,
   onGenerated,
+  onOpenGenerated,
   onGoOptimize,
   refreshPool,
   refreshTasks
@@ -299,6 +303,7 @@ function StrategyGeneratePage({
   lastResearch: any;
   onResearchCreated: (payload: any) => void;
   onGenerated: (payload: any) => void;
+  onOpenGenerated: () => void;
   onGoOptimize: () => void;
   refreshPool: () => Promise<void>;
   refreshTasks: () => Promise<void>;
@@ -398,6 +403,7 @@ function StrategyGeneratePage({
       onGenerated(payload);
       await refreshTasks();
       message.success("strategy.py generated");
+      onOpenGenerated();
     } catch (error) {
       message.error(String(error));
     } finally {
@@ -467,6 +473,7 @@ function StrategyGeneratePage({
         message.warning(String(payload.error || "backtest failed"));
       } else {
         message.success("research run created");
+        onOpenGenerated();
       }
     } catch (error) {
       message.error(String(error));
@@ -495,7 +502,7 @@ function StrategyGeneratePage({
       <div className="hero-band">
         <div>
           <p className="eyebrow">G&amp;N</p>
-          <h2>{zh.generate}</h2>
+          <h2>{zh.launchFlow}</h2>
           <p className="hero-copy">API first research workflow. Current baseline is marked as temporary fallback.</p>
         </div>
         <HeroMetrics lastRun={lastResearch} poolCount={poolCount} taskCount={tasks.length} />
@@ -641,6 +648,7 @@ function StrategyGeneratePage({
               <div><h3>{zh.resultHub}</h3><p className="band-note">Use the latest run or strategy for parameter research.</p></div>
               <div className="action-row">
                 <Button onClick={onGoOptimize}>{zh.goOptimize}</Button>
+                <Button onClick={onOpenGenerated}>{zh.generate}</Button>
                 <Button disabled={!lastResearch?.baseline?.run?.run_id} loading={loadingPool} onClick={admitBaseline}>admit baseline</Button>
               </div>
             </div>
@@ -651,16 +659,123 @@ function StrategyGeneratePage({
           </section>
         </div>
       </div>
+    </section>
+  );
+}
 
-      {(generationResult || lastResearch) && (
-        <section className="band code-band">
-          <div className="band-head compact">
-            <div><h3>strategy.py</h3><p className="band-note">Returned by strategy generation API.</p></div>
-            <span className={statusClass(generationResult?.task?.status || lastResearch?.generation?.task?.status)}>{generationResult?.task?.status || lastResearch?.generation?.task?.status}</span>
-          </div>
-          <pre className="code-block">{generationResult?.generation?.strategy_code || lastResearch?.generation?.generation?.strategy_code || ""}</pre>
+function StrategyGenerationPage({
+  lastGenerated,
+  lastResearch,
+  onBackLaunch,
+  onGoOptimize
+}: {
+  lastGenerated: any;
+  lastResearch: any;
+  onBackLaunch: () => void;
+  onGoOptimize: () => void;
+}) {
+  const [curveRows, setCurveRows] = useState<any[]>([]);
+  const runId = lastResearch?.baseline?.run?.run_id;
+  const generationPayload = lastResearch?.generation || lastGenerated;
+  const generation = generationPayload?.generation || {};
+  const strategy = generationPayload?.strategy || {};
+  const metrics = lastResearch?.backtest?.metrics || lastResearch?.baseline?.result?.metrics || lastResearch?.baseline?.variant?.metrics || {};
+  const diagnostics = [
+    ...(Array.isArray(generation?.diagnostics) ? generation.diagnostics : []),
+    ...(Array.isArray(lastResearch?.backtest?.diagnostics) ? lastResearch.backtest.diagnostics : [])
+  ];
+  const code = generation?.strategy_code || "";
+
+  useEffect(() => {
+    let active = true;
+    if (!runId) {
+      setCurveRows(lastResearch?.backtest?.daily_results || []);
+      return;
+    }
+    getVariantCurve(runId, "baseline")
+      .then((payload) => {
+        if (active) setCurveRows(payload.data || []);
+      })
+      .catch((error) => {
+        if (active) {
+          setCurveRows(lastResearch?.backtest?.daily_results || []);
+          message.warning(String(error));
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [runId, lastResearch]);
+
+  if (!generationPayload && !lastResearch) {
+    return (
+      <section className="view is-active">
+        <div className="hero-band compact-hero">
+          <div><p className="eyebrow">Strategy Generation</p><h2>{zh.generate}</h2><p className="hero-copy">No generated strategy yet.</p></div>
+          <div className="action-row"><Button className="primary-button" onClick={onBackLaunch}>{zh.launchFlow}</Button></div>
+        </div>
+        <section className="band empty-state">Start a workflow first, then generated code and result diagnostics will appear here.</section>
+      </section>
+    );
+  }
+
+  return (
+    <section className="view is-active">
+      <div className="hero-band compact-hero">
+        <div>
+          <p className="eyebrow">Strategy Generation</p>
+          <h2>{zh.generate}</h2>
+          <p className="hero-copy">Generated strategy code, diagnostics and baseline result preview.</p>
+        </div>
+        <div className="action-row">
+          <Button onClick={onBackLaunch}>{zh.launchFlow}</Button>
+          <Button disabled={!runId} onClick={onGoOptimize}>{zh.goOptimize}</Button>
+        </div>
+      </div>
+
+      <section className="band library-shell">
+        <div className="library-section-head">
+          <div><h3>{strategy.strategy_name || generation.strategy_name || generation.class_name || "-"}</h3><p>{strategy.strategy_id || runId || "-"}</p></div>
+          <span className={statusClass(lastResearch?.error ? "failed" : generationPayload?.task?.status || "completed")}>{lastResearch?.error ? "failed" : generationPayload?.task?.status || "completed"}</span>
+        </div>
+        <div className="library-metric-grid">
+          <div className="library-metric-card"><span>Sharpe</span><strong>{formatNumber(metrics.sharpe ?? metrics.sharpe_ratio)}</strong></div>
+          <div className="library-metric-card positive"><span>{zh.return}</span><strong>{formatPercent(metrics.annual_return ?? metrics.total_return)}</strong></div>
+          <div className="library-metric-card negative"><span>{zh.drawdown}</span><strong>{formatPercent(metrics.max_drawdown ?? metrics.max_ddpercent)}</strong></div>
+          <div className="library-metric-card"><span>run</span><strong>{runId || "-"}</strong></div>
+        </div>
+      </section>
+
+      {curveRows.length > 0 && (
+        <section className="band library-shell">
+          <div className="library-section-head"><div><h3>{zh.curve}</h3><p>baseline curve</p></div></div>
+          <div className="library-curve-panel"><CurveChart rows={curveRows} /></div>
         </section>
       )}
+
+      <section className="band library-shell">
+        <div className="library-section-head"><div><h3>diagnostics</h3><p>{diagnostics.length} records</p></div></div>
+        {diagnostics.length ? (
+          <div className="diagnostic-list">
+            {diagnostics.map((item: any, index: number) => (
+              <div className="diagnostic-item" key={`${item.message || "diag"}-${index}`}>
+                <span className={statusClass(item.level === "error" ? "failed" : "completed")}>{item.level || "info"}</span>
+                <p>{item.message || JSON.stringify(item)}</p>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="empty-state">No diagnostics returned.</div>
+        )}
+      </section>
+
+      <section className="band code-band">
+        <div className="band-head compact">
+          <div><h3>strategy.py</h3><p className="band-note">Returned by strategy generation API.</p></div>
+          <span className={statusClass(code ? "completed" : "pending")}>{code ? "completed" : "pending"}</span>
+        </div>
+        <pre className="code-block">{code || ""}</pre>
+      </section>
     </section>
   );
 }
@@ -795,11 +910,11 @@ function PoolPage({ poolItems, refreshPool }: { poolItems: any[]; refreshPool: (
 }
 
 function App() {
-  const [page, setPage] = useState<PageKey>("generate");
+  const [page, setPage] = useState<PageKey>("launch");
   const [tasks, setTasks] = useState<any[]>([]);
   const [poolItems, setPoolItems] = useState<any[]>([]);
   const [lastResearch, setLastResearch] = useState<any>(null);
-  const [, setLastGenerated] = useState<any>(null);
+  const [lastGenerated, setLastGenerated] = useState<any>(null);
 
   async function refreshTasks() {
     const payload = await listTasks();
@@ -821,8 +936,8 @@ function App() {
       <div className="shell">
         <Sidebar page={page} onPageChange={setPage} tasks={tasks} onRefreshTasks={refreshTasks} />
         <main className="workspace">
-          {page === "generate" && (
-            <StrategyGeneratePage
+          {page === "launch" && (
+            <LaunchFlowPage
               tasks={tasks}
               poolCount={poolItems.length}
               lastResearch={lastResearch}
@@ -831,11 +946,13 @@ function App() {
                 refreshPool().catch((error) => message.error(String(error)));
               }}
               onGenerated={setLastGenerated}
+              onOpenGenerated={() => setPage("generate")}
               onGoOptimize={() => setPage("optimize")}
               refreshPool={refreshPool}
               refreshTasks={refreshTasks}
             />
           )}
+          {page === "generate" && <StrategyGenerationPage lastGenerated={lastGenerated} lastResearch={lastResearch} onBackLaunch={() => setPage("launch")} onGoOptimize={() => setPage("optimize")} />}
           {page === "optimize" && <ParameterOptimizationPage lastResearch={lastResearch} />}
           {page === "pool" && <PoolPage poolItems={poolItems} refreshPool={refreshPool} />}
         </main>

@@ -794,6 +794,28 @@ textarea {
   color: #dc2626;
 }
 
+.diagnostic-list {
+  display: grid;
+  gap: 10px;
+}
+
+.diagnostic-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  padding: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.76);
+}
+
+.diagnostic-item p {
+  margin: 0;
+  color: #334155;
+  overflow-wrap: anywhere;
+}
+
 .library-table-wrap {
   overflow: auto;
   border-radius: 8px;

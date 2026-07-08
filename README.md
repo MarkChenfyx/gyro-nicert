@@ -98,14 +98,10 @@ Currently supported test chain:
 - Add variant to pool.
 - Read pool item detail after deleting runtime artifacts.
 
-Still not implemented:
+Still not fully implemented:
 
-- React.
-- FastAPI.
-- Real RQData.
-- Real vn.py backtesting.
-- Real natural-language generation.
-- Real parameter optimization.
+- Production-grade parameter optimization API and frontend workflow.
+- Full strategy-pool multi-variant comparison workflow.
 
 ## Phase 3 And 3.5
 
@@ -122,9 +118,9 @@ Backend services depend on strategy generation only through:
 generate_strategy_from_text(source_text: str, options: dict | None = None) -> dict
 ```
 
-The default `LegacyAgentGenerator` is intentionally small and only models the old agent shape: preprocess, spec creation, strategy codegen, and basic code validation. It does not write SQLite, create tasks/runs, enter the pool, run backtests, run optimization, read old outputs, or depend on the old project.
+The default strategy generator is the API-backed generator. The old generator remains outside the main path.
 
-`backtesting.run_backtest(...)` and `strategy_optimization.optimize_parameters(...)` support deterministic mock mode. Real vn.py backtesting and real parameter optimization are not implemented.
+`backtesting.run_backtest(...)` supports deterministic mock mode and real vn.py CTA backtesting from local SQLite market data. `strategy_optimization.optimize_parameters(...)` keeps mock mode for tests and now has a legacy-style adapter for manual grid parameter search; it does not write storage, create runs, or modify strategy code.
 
 New services:
 

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from strategy_generation import generate_strategy_from_text
+from tests.test_api_strategy_generator import VALID_CODE, patch_provider
 
 
 REQUIRED_KEYS = {
@@ -20,8 +22,23 @@ REQUIRED_KEYS = {
 }
 
 
-def test_generate_strategy_from_text_returns_stable_success_contract() -> None:
-    result = generate_strategy_from_text("moving average breakout strategy", options={"strategy_name": "MA Breakout"})
+def test_generate_strategy_from_text_returns_stable_success_contract(monkeypatch) -> None:
+    code_json = json.dumps(VALID_CODE)
+    patch_provider(
+        monkeypatch,
+        f"""{{
+  "success": true,
+  "strategy_name": "MA Breakout",
+  "class_name": "ApiMaStrategy",
+  "strategy_code": {code_json},
+  "parameters": {{"fixed_size": {{"default": 1, "description": "fixed order size"}}}},
+  "description": "test strategy",
+  "strategy_type": "trend_following",
+  "diagnostics": [],
+  "error": null
+}}""",
+    )
+    result = generate_strategy_from_text("moving average breakout strategy")
 
     assert set(result) == REQUIRED_KEYS
     assert result["success"] is True
@@ -30,14 +47,14 @@ def test_generate_strategy_from_text_returns_stable_success_contract() -> None:
     assert result["class_name"]
     assert "class " in result["strategy_code"]
     assert result["params"]["fixed_size"] == 1
-    assert result["spec"]["schema"] == "strategy_generation.strategy_spec.v1"
+    assert result["spec"]["strategy_type"] == "trend_following"
     assert result["diagnostics"]
-    assert result["generator_name"] == "legacy_agent_generator"
+    assert result["generator_name"] == "api_strategy_generator"
     assert result["generator_version"]
     assert result["error"] is None
 
 
-def test_generate_strategy_from_text_failure_contract() -> None:
+def test_generate_strategy_from_text_failure_contract(monkeypatch) -> None:
     result = generate_strategy_from_text("   ")
 
     assert set(result) == REQUIRED_KEYS
@@ -45,6 +62,30 @@ def test_generate_strategy_from_text_failure_contract() -> None:
     assert result["strategy_code"] is None
     assert result["error"] == "source_text is empty"
     assert result["diagnostics"][0]["level"] == "error"
+
+
+def test_generate_strategy_from_text_uses_api_generator(monkeypatch) -> None:
+    code_json = json.dumps(VALID_CODE)
+    patch_provider(
+        monkeypatch,
+        f"""{{
+  "success": true,
+  "strategy_name": "API MA Strategy",
+  "class_name": "ApiMaStrategy",
+  "strategy_code": {code_json},
+  "parameters": {{"fixed_size": {{"default": 1, "description": "fixed order size"}}}},
+  "description": "test strategy",
+  "strategy_type": "trend_following",
+  "diagnostics": [],
+  "error": null
+}}""",
+    )
+
+    result = generate_strategy_from_text("use moving averages")
+
+    assert result["success"] is True
+    assert result["generator_name"] == "api_strategy_generator"
+    assert result["class_name"] == "ApiMaStrategy"
 
 
 def test_backend_services_do_not_import_strategy_generation_internals() -> None:

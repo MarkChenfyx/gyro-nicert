@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from typing import Any
 
+from common.time_utils import now_iso
 from data_manager.database import get_market_db_connection
 
 
@@ -30,7 +30,7 @@ ON data_coverage(symbol, exchange, interval, source);
 
 
 def _now() -> str:
-    return datetime.now(UTC).replace(microsecond=0).isoformat()
+    return now_iso()
 
 
 def ensure_market_schema() -> None:

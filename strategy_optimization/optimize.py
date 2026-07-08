@@ -2,13 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-
-OPTIMIZER_NAME = "mock_parameter_optimizer"
-OPTIMIZER_VERSION = "phase3_5_boundary_v1"
-
-
-def _diagnostic(level: str, message: str) -> dict[str, str]:
-    return {"level": level, "message": message}
+from strategy_optimization.optimizers.registry import get_optimizer, resolve_method
 
 
 def optimize_parameters(
@@ -21,31 +15,14 @@ def optimize_parameters(
     objective: str = "sharpe",
     options: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    mode = str(dict(options or {}).get("mode") or dict(backtest_config or {}).get("mode") or "").strip().lower()
-    if mode == "mock":
-        parameters = dict(base_parameters or {})
-        candidate = {
-            "parameters": parameters,
-            "metrics": {"objective": objective, "score": 0.0, "sharpe": 0.0},
-        }
-        return {
-            "success": True,
-            "recommended": candidate,
-            "candidates": [candidate],
-            "grid_summary": [{"rank": 1, "parameters": parameters, "score": 0.0}],
-            "diagnostics": [_diagnostic("info", "mock mode returned base parameters as recommendation")],
-            "optimizer_name": OPTIMIZER_NAME,
-            "optimizer_version": OPTIMIZER_VERSION,
-            "error": None,
-        }
-    return {
-        "success": False,
-        "recommended": None,
-        "candidates": [],
-        "grid_summary": [],
-        "diagnostics": [_diagnostic("error", "real parameter optimization is not implemented in Phase 3.5")],
-        "optimizer_name": OPTIMIZER_NAME,
-        "optimizer_version": OPTIMIZER_VERSION,
-        "error": "parameter optimization is not implemented; pass options['mode']='mock' or backtest_config['mode']='mock'",
-    }
-
+    method = resolve_method(options, backtest_config)
+    return get_optimizer(method).optimize(
+        strategy_code=strategy_code,
+        class_name=class_name,
+        vt_symbol=vt_symbol,
+        base_parameters=base_parameters,
+        parameter_space=parameter_space,
+        backtest_config=backtest_config,
+        objective=objective,
+        options=options,
+    )

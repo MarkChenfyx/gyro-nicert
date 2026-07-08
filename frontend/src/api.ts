@@ -83,6 +83,10 @@ export function getRun(runId: string) {
   return request<any>(`/api/runs/${encodeURIComponent(runId)}`);
 }
 
+export function listRuns(limit = 100) {
+  return request<any>(`/api/runs?limit=${encodeURIComponent(String(limit))}`);
+}
+
 export function getVariantCurve(runId: string, variantName: string) {
   return request<any>(`/api/runs/${encodeURIComponent(runId)}/variants/${encodeURIComponent(variantName)}/curve`);
 }
@@ -106,6 +110,31 @@ export function getPoolCurve(poolItemId: string) {
   return request<any>(`/api/pool/${encodeURIComponent(poolItemId)}/curve`);
 }
 
+export function comparePool(poolItemIds: string[]) {
+  return request<any>("/api/pool/compare", {
+    method: "POST",
+    body: JSON.stringify({ pool_item_ids: poolItemIds })
+  });
+}
+
 export function listTasks() {
   return request<any>("/api/tasks");
+}
+
+export function getOptimizationMethods() {
+  return request<any>("/api/optimization/methods");
+}
+
+export function getOptimizationSearchSpace(runId: string, variantName = "baseline") {
+  return request<any>("/api/optimization/search-space", {
+    method: "POST",
+    body: JSON.stringify({ run_id: runId, variant_name: variantName })
+  });
+}
+
+export function runOptimization(payload: any) {
+  return request<any>("/api/optimization/run", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
 }

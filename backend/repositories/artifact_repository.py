@@ -1,15 +1,15 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from common.time_utils import now_iso
 from data_manager.database import get_app_db_connection
 
 
 def _now() -> str:
-    return datetime.now(UTC).replace(microsecond=0).isoformat()
+    return now_iso()
 
 
 def create_artifact(
@@ -68,4 +68,3 @@ def get_artifact(artifact_id: str) -> dict[str, Any] | None:
             (str(artifact_id),),
         ).fetchone()
     return dict(row) if row is not None else None
-

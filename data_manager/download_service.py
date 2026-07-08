@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from typing import Any, Protocol
 from uuid import uuid4
 
+from common.time_utils import timestamp_id
 from data_manager import coverage_service, market_repository
 from data_manager.rqdata_client import get_default_client
 
@@ -16,8 +16,7 @@ class BarClient(Protocol):
 
 
 def _download_task_id() -> str:
-    stamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
-    return f"download_{stamp}_{uuid4().hex[:6]}"
+    return f"download_{timestamp_id()}_{uuid4().hex[:6]}"
 
 
 def download_bars(

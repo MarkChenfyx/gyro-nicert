@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
+from common.time_utils import timestamp_id
 from backend.core.hashing import compute_sha256
 from backend.core.paths import GENERATED_STRATEGIES_ROOT
 from backend.domain.enums import ArtifactType
@@ -11,8 +11,7 @@ from backend.repositories import artifact_repository, strategy_repository
 
 
 def _strategy_id() -> str:
-    stamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
-    return f"strategy_{stamp}_{uuid4().hex[:6]}"
+    return f"strategy_{timestamp_id()}_{uuid4().hex[:6]}"
 
 
 def register_generated_strategy(strategy_name: str, source_text: str, code: str) -> dict[str, Any]:
@@ -39,4 +38,3 @@ def register_generated_strategy(strategy_name: str, source_text: str, code: str)
         sha256=code_hash,
     )
     return strategy
-

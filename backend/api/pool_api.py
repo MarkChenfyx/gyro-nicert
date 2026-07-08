@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Query
 
-from backend.api.schemas import PoolAddRequest
+from backend.api.schemas import PoolAddRequest, PoolCompareRequest
 from backend.services import pool_service, query_service
 
 
@@ -18,6 +18,11 @@ def add_to_pool(payload: PoolAddRequest) -> dict:
         note=payload.note,
         vt_symbol=payload.vt_symbol,
     )
+
+
+@router.post("/compare")
+def compare_pool_items(payload: PoolCompareRequest) -> dict:
+    return pool_service.compare_pool_items(payload.pool_item_ids)
 
 
 @router.get("")
@@ -51,4 +56,3 @@ def get_pool_item(pool_item_id: str) -> dict:
 @router.get("/{pool_item_id}/curve")
 def get_pool_curve(pool_item_id: str) -> dict:
     return query_service.get_pool_curve(pool_item_id)
-

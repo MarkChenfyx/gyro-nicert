@@ -52,6 +52,103 @@ def _metric(metrics: dict[str, Any], *names: str) -> float | None:
     return None
 
 
+def _text(value: Any, default: str = "") -> str:
+    text = str(value or "").strip()
+    return text or default
+
+
+def _tags_from_detail(detail: dict[str, Any]) -> list[str]:
+    tags = detail.get("tags")
+    if isinstance(tags, list):
+        return [str(item) for item in tags]
+    if isinstance(tags, dict) and isinstance(tags.get("tags"), list):
+        return [str(item) for item in tags["tags"]]
+    raw = detail.get("pool_item", {}).get("tags")
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, list):
+                return [str(item) for item in parsed]
+        except json.JSONDecodeError:
+            return [raw]
+    return []
+
+
+def _params_from_detail(detail: dict[str, Any]) -> dict[str, Any]:
+    config = dict(detail.get("config") or {})
+    manifest = dict(detail.get("manifest") or {})
+    result = dict(detail.get("result") or {})
+    for candidate in (
+        config.get("parameters"),
+        manifest.get("parameters"),
+        result.get("params"),
+        result.get("parameters"),
+    ):
+        if isinstance(candidate, dict):
+            return candidate
+    return {}
+
+
+def _date_from_row(row: dict[str, Any]) -> str:
+    return _text(row.get("date") or row.get("datetime") or row.get("trading_day"))
+
+
+def _float_from_row(row: dict[str, Any], *names: str) -> float | None:
+    for name in names:
+        value = row.get(name)
+        if value in {None, ""}:
+            continue
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _benchmark_curve(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    base: float | None = None
+    curve: list[dict[str, Any]] = []
+    for row in rows:
+        close = _float_from_row(row, "close_price", "close", "price")
+        if close is None:
+            continue
+        if base in {None, 0}:
+            base = close
+        if not base:
+            continue
+        curve.append({"date": _date_from_row(row), "value": (close / base - 1.0) * 100.0})
+    if curve:
+        return curve, None
+    return [], {"level": "warning", "message": "benchmark curve unavailable: selected pool curves do not contain close_price/close/price"}
+
+
+def _compare_item(detail: dict[str, Any]) -> dict[str, Any]:
+    item = dict(detail.get("pool_item") or {})
+    manifest = dict(detail.get("manifest") or {})
+    result = dict(detail.get("result") or {})
+    metrics = dict(result.get("metrics") or result)
+    daily = dict(detail.get("daily_results") or {})
+    trades = dict(detail.get("trades") or {})
+    curve = list(daily.get("data") or [])
+    trades_rows = list(trades.get("data") or [])
+    variant_name = _text(manifest.get("source_variant_name") or manifest.get("variant_name") or item.get("source_variant_id"), "-")
+    return {
+        "pool_item_id": item.get("pool_item_id"),
+        "strategy_id": item.get("strategy_id"),
+        "strategy_name": item.get("strategy_name"),
+        "vt_symbol": item.get("vt_symbol"),
+        "variant_name": variant_name,
+        "created_at": item.get("created_at"),
+        "source_run_id": item.get("source_run_id"),
+        "metrics": metrics,
+        "params": _params_from_detail(detail),
+        "tags": _tags_from_detail(detail),
+        "notes": detail.get("notes") or "",
+        "curve": curve,
+        "trades_preview": trades_rows[:20],
+    }
+
+
 def add_variant_to_pool(
     run_id: str,
     variant_name: str,
@@ -149,3 +246,38 @@ def list_pool_items(
         order=order,
         limit=limit,
     )
+
+
+def compare_pool_items(pool_item_ids: list[str] | None) -> dict[str, Any]:
+    diagnostics: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    items: list[dict[str, Any]] = []
+    for raw_id in pool_item_ids or []:
+        pool_item_id = _text(raw_id)
+        if not pool_item_id or pool_item_id in seen:
+            continue
+        seen.add(pool_item_id)
+        try:
+            detail = get_pool_item_detail(pool_item_id)
+        except FileNotFoundError:
+            diagnostics.append({"level": "warning", "message": f"pool item not found: {pool_item_id}", "pool_item_id": pool_item_id})
+            continue
+        payload = _compare_item(detail)
+        if not payload["curve"]:
+            diagnostics.append({"level": "warning", "message": "pool item has no daily curve", "pool_item_id": pool_item_id})
+        items.append(payload)
+
+    benchmark_rows: list[dict[str, Any]] = []
+    benchmark_diagnostic: dict[str, Any] | None = None
+    for item in items:
+        benchmark_rows, benchmark_diagnostic = _benchmark_curve(list(item.get("curve") or []))
+        if benchmark_rows:
+            break
+    if benchmark_diagnostic and items:
+        diagnostics.append(benchmark_diagnostic)
+
+    return {
+        "items": items,
+        "benchmark": {"label": "Buy & Hold", "curve": benchmark_rows},
+        "diagnostics": diagnostics,
+    }

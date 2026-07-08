@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 import sys
@@ -11,6 +12,7 @@ from fastapi.testclient import TestClient
 from backend.main import app
 from backend.services import strategy_generation_service
 from data_manager import market_repository
+from tests.test_api_strategy_generator import VALID_CODE, patch_provider
 
 
 def setup_module() -> None:
@@ -18,7 +20,22 @@ def setup_module() -> None:
     subprocess.run([sys.executable, str(root / "scripts" / "init_db.py")], cwd=root, check=True)
 
 
-def test_api_layer_end_to_end() -> None:
+def test_api_layer_end_to_end(monkeypatch) -> None:
+    code_json = json.dumps(VALID_CODE)
+    patch_provider(
+        monkeypatch,
+        f"""{{
+  "success": true,
+  "strategy_name": "API Strategy",
+  "class_name": "ApiMaStrategy",
+  "strategy_code": {code_json},
+  "parameters": {{"fixed_size": {{"default": 1, "description": "fixed order size"}}}},
+  "description": "test strategy",
+  "strategy_type": "trend_following",
+  "diagnostics": [],
+  "error": null
+}}""",
+    )
     client = TestClient(app)
     generated_strategy_dir: Path | None = None
     research_strategy_dir: Path | None = None

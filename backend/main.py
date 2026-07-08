@@ -4,7 +4,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from backend.api import data_api, natural_language_api, pool_api, research_api, run_api, strategy_api, task_api
+from backend.api import data_api, natural_language_api, optimization_api, pool_api, research_api, run_api, strategy_api, task_api
 
 
 app = FastAPI(title="gyro_nicert API", version="0.1.0")
@@ -45,3 +45,4 @@ app.include_router(pool_api.router)
 app.include_router(task_api.router)
 app.include_router(data_api.router)
 app.include_router(natural_language_api.router)
+app.include_router(optimization_api.router)

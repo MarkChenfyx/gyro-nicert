@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -9,17 +8,17 @@ import csv
 import json
 import shutil
 
+from common.time_utils import now_iso, timestamp_id
 from backend.core.hashing import compute_sha256
 from backend.core.paths import POOL_STRATEGIES_ROOT, RUNS_ROOT
 
 
 def _now() -> str:
-    return datetime.now(UTC).replace(microsecond=0).isoformat()
+    return now_iso()
 
 
 def _stamp_id(prefix: str) -> str:
-    stamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
-    return f"{prefix}_{stamp}_{uuid4().hex[:6]}"
+    return f"{prefix}_{timestamp_id()}_{uuid4().hex[:6]}"
 
 
 def _run_path(run_id: str) -> Path:
@@ -137,6 +136,10 @@ def save_variant_result(
         "daily_results_path": daily_results_path,
         "trades_path": trades_path,
     }
+
+
+def save_variant_grid_summary(run_id: str, variant_name: str, grid_summary: Any) -> Path:
+    return _write_csv(_run_path(run_id) / "variants" / str(variant_name) / "grid_summary.csv", grid_summary)
 
 
 def create_pool_snapshot(

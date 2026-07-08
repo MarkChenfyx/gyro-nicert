@@ -5,10 +5,13 @@ __pycache__/
 .pytest_cache/
 storage/runtime/
 storage/cache/
+storage/pool/
 storage/db/*.sqlite
 storage/db/*.db
 strategies/generated/
+strategies/validated/
 frontend/node_modules/
 frontend/dist/
 *.tsbuildinfo
+*.log
 outputs/

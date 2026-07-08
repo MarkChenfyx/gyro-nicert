@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 import json
 
+from common.time_utils import now_iso, timestamp_id
 from data_manager.database import get_app_db_connection
 
 
@@ -18,12 +18,11 @@ ALLOWED_SORT_FIELDS = {
 
 
 def _now() -> str:
-    return datetime.now(UTC).replace(microsecond=0).isoformat()
+    return now_iso()
 
 
 def _pool_item_id() -> str:
-    stamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
-    return f"pool_{stamp}_{uuid4().hex[:6]}"
+    return f"pool_{timestamp_id()}_{uuid4().hex[:6]}"
 
 
 def create_pool_item(
@@ -123,4 +122,3 @@ def list_pool_items(
     with get_app_db_connection() as connection:
         rows = connection.execute(sql, tuple(values)).fetchall()
     return [dict(row) for row in rows]
-

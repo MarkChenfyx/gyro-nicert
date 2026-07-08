@@ -34,6 +34,10 @@ class PoolAddRequest(BaseModel):
     vt_symbol: str | None = None
 
 
+class PoolCompareRequest(BaseModel):
+    pool_item_ids: list[str] = Field(default_factory=list)
+
+
 class PoolListQuery(BaseModel):
     keyword: str | None = None
     vt_symbol: str | None = None
@@ -50,3 +54,18 @@ class DataDownloadRequest(BaseModel):
     interval: str = "1m"
     start_date: str
     end_date: str
+
+
+class OptimizationSearchSpaceRequest(BaseModel):
+    run_id: str
+    variant_name: str = "baseline"
+
+
+class OptimizationRunRequest(BaseModel):
+    run_id: str
+    variant_name: str = "baseline"
+    method: str = "manual_grid"
+    selected_parameters: list[str] = Field(default_factory=list)
+    parameter_ranges: dict[str, Any] = Field(default_factory=dict)
+    objective: str = "sharpe"
+    max_trials: int = Field(default=200, ge=1, le=5000)

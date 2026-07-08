@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from typing import Any
 
+from common.time_utils import now_iso
 from data_manager.database import get_app_db_connection
 
 
 def _now() -> str:
-    return datetime.now(UTC).replace(microsecond=0).isoformat()
+    return now_iso()
 
 
 def create_run(
@@ -77,4 +77,3 @@ def list_runs(limit: int = 100) -> list[dict[str, Any]]:
             (safe_limit,),
         ).fetchall()
     return [dict(row) for row in rows]
-

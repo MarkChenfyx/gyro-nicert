@@ -1,15 +1,15 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
+from common.time_utils import now_iso
 from backend.domain.enums import TaskStatus
 from data_manager.database import get_app_db_connection
 
 
 def _now() -> str:
-    return datetime.now(UTC).replace(microsecond=0).isoformat()
+    return now_iso()
 
 
 def _row_to_dict(row: Any) -> dict[str, Any] | None:
@@ -110,4 +110,3 @@ def list_tasks(limit: int = 100) -> list[dict[str, Any]]:
             (safe_limit,),
         ).fetchall()
     return [dict(row) for row in rows]
-

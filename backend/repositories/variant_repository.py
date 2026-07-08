@@ -1,19 +1,18 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
+from common.time_utils import now_iso, timestamp_id
 from data_manager.database import get_app_db_connection
 
 
 def _now() -> str:
-    return datetime.now(UTC).replace(microsecond=0).isoformat()
+    return now_iso()
 
 
 def _variant_id() -> str:
-    stamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
-    return f"variant_{stamp}_{uuid4().hex[:6]}"
+    return f"variant_{timestamp_id()}_{uuid4().hex[:6]}"
 
 
 def create_variant(
@@ -90,4 +89,3 @@ def list_variants(run_id: str) -> list[dict[str, Any]]:
             (str(run_id),),
         ).fetchall()
     return [dict(row) for row in rows]
-

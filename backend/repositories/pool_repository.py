@@ -32,6 +32,8 @@ def create_pool_item(
     source_variant_id: str,
     pool_path: str,
     strategy_name: str,
+    strategy_family: str | None = None,
+    strategy_version: str | None = None,
     vt_symbol: str | None = None,
     annual_return: float | None = None,
     max_drawdown: float | None = None,
@@ -47,9 +49,10 @@ def create_pool_item(
             """
             INSERT INTO pool_items (
                 pool_item_id, strategy_id, source_run_id, source_variant_id, pool_path,
-                strategy_name, vt_symbol, annual_return, max_drawdown, sharpe, calmar, tags, created_at
+                strategy_name, strategy_family, strategy_version, vt_symbol,
+                annual_return, max_drawdown, sharpe, calmar, tags, created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 resolved_pool_item_id,
@@ -58,6 +61,8 @@ def create_pool_item(
                 str(source_variant_id),
                 str(pool_path),
                 str(strategy_name),
+                strategy_family,
+                strategy_version,
                 vt_symbol,
                 annual_return,
                 max_drawdown,

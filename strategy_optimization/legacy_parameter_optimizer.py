@@ -8,6 +8,7 @@ import json
 import math
 
 import backtesting
+from strategy_optimization.optimizers.common import enrich_metrics_with_curve_returns
 
 
 OPTIMIZER_NAME = "legacy_parameter_optimizer"
@@ -364,7 +365,7 @@ def _metric_value(metrics: dict[str, Any], key: str, default: float = 0.0) -> fl
         "total_return": ["total_return", "annual_return", "total_net_pnl"],
         "annual_return": ["annual_return", "total_return"],
         "calmar": ["calmar", "return_drawdown_ratio"],
-        "drawdown": ["max_drawdown", "max_ddpercent"],
+        "drawdown": ["max_drawdown_pct", "max_ddpercent", "max_drawdown"],
     }
     for name in aliases.get(key, [key]):
         try:
@@ -378,7 +379,7 @@ def _metric_value(metrics: dict[str, Any], key: str, default: float = 0.0) -> fl
 
 def _score(metrics: dict[str, Any], objective: str) -> float:
     normalized = str(objective or "sharpe").strip().lower()
-    if normalized in {"max_drawdown", "drawdown", "max_ddpercent"}:
+    if normalized in {"max_drawdown", "drawdown", "max_ddpercent", "max_drawdown_pct"}:
         return -abs(_metric_value(metrics, "drawdown", 0.0))
     return _metric_value(metrics, normalized, _metric_value(metrics, "sharpe", _metric_value(metrics, "total_return", 0.0)))
 
@@ -427,7 +428,10 @@ class LegacyParameterOptimizer:
                 parameters=dict(candidate["parameters"]),
                 config=dict(backtest_config or {}),
             )
-            metrics = dict(result.get("metrics") or {})
+            metrics = enrich_metrics_with_curve_returns(
+                dict(result.get("metrics") or {}),
+                list(result.get("daily_results") or []),
+            )
             score = _score(metrics, objective) if result.get("success") else float("-inf")
             candidate_payload = {
                 "label": candidate["label"],
@@ -445,6 +449,10 @@ class LegacyParameterOptimizer:
                     "label": candidate["label"],
                     "parameters": dict(candidate["overrides"]),
                     "score": score,
+                    "sharpe": metrics.get("sharpe"),
+                    "strategy_return": metrics.get("strategy_return"),
+                    "benchmark_return": metrics.get("benchmark_return"),
+                    "excess_return": metrics.get("excess_return"),
                     "success": bool(result.get("success")),
                     "error": result.get("error"),
                 }

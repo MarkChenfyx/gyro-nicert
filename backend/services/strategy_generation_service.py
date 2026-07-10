@@ -7,7 +7,7 @@ import json
 from backend.core.hashing import compute_sha256
 from backend.domain.enums import ArtifactType, TaskType
 from backend.repositories import artifact_repository
-from backend.services import strategy_service, task_service
+from backend.services import natural_language_source_service, strategy_service, task_service
 from strategy_generation import generate_strategy_from_text
 
 
@@ -26,19 +26,23 @@ def _validate_generation_result(result: dict[str, Any]) -> None:
         raise ValueError("strategy generation returned neither strategy_name nor class_name")
 
 
-def generate_and_register_strategy(source_text: str, options: dict[str, Any] | None = None) -> dict[str, Any]:
+def generate_and_register_strategy(source_filename: str, options: dict[str, Any] | None = None) -> dict[str, Any]:
     task = task_service.create_task(TaskType.STRATEGY_GENERATION.value, message="Strategy generation queued")
     generation_result: dict[str, Any] = {}
     try:
         task = task_service.mark_running(task["task_id"], message="Generating strategy code")
+        source_payload = natural_language_source_service.read_source_file(source_filename)
+        source_text = str(source_payload.get("text") or "")
         generation_result = generate_strategy_from_text(source_text, options=options)
         _validate_generation_result(generation_result)
 
-        strategy_name = str(generation_result.get("strategy_name") or generation_result.get("class_name") or "Generated Strategy")
+        strategy_name = str(generation_result.get("strategy_name") or generation_result.get("class_name") or source_payload.get("name") or "Generated Strategy")
         strategy = strategy_service.register_generated_strategy(
             strategy_name=strategy_name,
             source_text=str(generation_result.get("source_text") or source_text),
             code=str(generation_result["strategy_code"]),
+            source_filename=str(source_payload.get("name") or source_filename),
+            class_name=str(generation_result.get("class_name") or "").strip() or None,
         )
         report_path = _write_generation_report(strategy["code_path"], generation_result)
         report_artifact = artifact_repository.create_artifact(

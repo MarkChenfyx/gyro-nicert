@@ -141,7 +141,11 @@ def _trade_records(trades: list[Any]) -> list[dict[str, Any]]:
 def _metric_aliases(statistics: dict[str, Any]) -> dict[str, Any]:
     metrics = dict(statistics or {})
     metrics["annual_return"] = metrics.get("annual_return", 0)
-    metrics["max_drawdown"] = metrics.get("max_drawdown", metrics.get("max_ddpercent", 0))
+    raw_drawdown_value = metrics.get("max_drawdown", metrics.get("max_drawdown_value", 0))
+    raw_drawdown_pct = metrics.get("max_ddpercent", metrics.get("max_drawdown_pct", 0))
+    metrics["max_drawdown_value"] = raw_drawdown_value
+    metrics["max_drawdown_pct"] = raw_drawdown_pct
+    metrics["max_drawdown"] = raw_drawdown_pct
     metrics["sharpe"] = metrics.get("sharpe_ratio", metrics.get("sharpe", 0))
     metrics["calmar"] = metrics.get("return_drawdown_ratio", metrics.get("calmar", 0))
     return _json_safe(metrics)

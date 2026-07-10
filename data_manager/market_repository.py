@@ -146,6 +146,42 @@ def get_coverage(symbol: str, exchange: str, interval: str, *, source: str = "rq
     return dict(row) if row is not None else None
 
 
+def get_observed_range(
+    symbol: str,
+    exchange: str,
+    interval: str,
+    *,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> dict[str, Any]:
+    ensure_market_schema()
+    clauses = ["symbol = ?", "exchange = ?", "interval = ?"]
+    values: list[Any] = [symbol, exchange, interval]
+    if start_date:
+        clauses.append("datetime >= ?")
+        values.append(str(start_date))
+    if end_date:
+        clauses.append("datetime <= ?")
+        values.append(str(end_date))
+    where = " AND ".join(clauses)
+    with get_market_db_connection() as connection:
+        row = connection.execute(
+            f"""
+            SELECT MIN(datetime) AS start_date, MAX(datetime) AS end_date, COUNT(*) AS bar_count
+            FROM bars
+            WHERE {where}
+            """,
+            tuple(values),
+        ).fetchone()
+    if row is None:
+        return {"start_date": None, "end_date": None, "bar_count": 0}
+    return {
+        "start_date": row["start_date"],
+        "end_date": row["end_date"],
+        "bar_count": int(row["bar_count"] or 0),
+    }
+
+
 def list_symbols(limit: int = 1000) -> list[dict[str, Any]]:
     ensure_market_schema()
     safe_limit = max(1, min(int(limit or 1000), 5000))

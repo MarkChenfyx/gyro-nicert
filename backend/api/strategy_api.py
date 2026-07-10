@@ -12,7 +12,6 @@ router = APIRouter(prefix="/api/strategies", tags=["strategies"])
 @router.post("/generate")
 def generate_strategy(payload: StrategyGenerateRequest) -> dict:
     return strategy_generation_service.generate_and_register_strategy(
-        payload.source_text,
+        payload.source_filename,
         options=payload.options,
     )
-

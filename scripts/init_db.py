@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import sqlite3
 import sys
 from pathlib import Path
@@ -30,8 +31,12 @@ CREATE TABLE IF NOT EXISTS tasks (
 CREATE TABLE IF NOT EXISTS strategies (
     strategy_id TEXT PRIMARY KEY,
     strategy_name TEXT NOT NULL,
+    strategy_family TEXT NOT NULL,
+    strategy_version TEXT NOT NULL,
+    source_filename TEXT NOT NULL,
     source_type TEXT NOT NULL,
     source_text TEXT,
+    class_name TEXT,
     code_path TEXT NOT NULL,
     code_hash TEXT,
     created_at TEXT NOT NULL
@@ -67,6 +72,8 @@ CREATE TABLE IF NOT EXISTS pool_items (
     source_variant_id TEXT NOT NULL,
     pool_path TEXT NOT NULL,
     strategy_name TEXT NOT NULL,
+    strategy_family TEXT,
+    strategy_version TEXT,
     vt_symbol TEXT,
     annual_return REAL,
     max_drawdown REAL,
@@ -151,17 +158,45 @@ ON data_coverage(symbol, exchange, interval, source);
 """
 
 
-def initialize_database(path: Path, schema: str) -> None:
+APP_RESET = """
+DROP TABLE IF EXISTS tasks;
+DROP TABLE IF EXISTS strategies;
+DROP TABLE IF EXISTS runs;
+DROP TABLE IF EXISTS run_variants;
+DROP TABLE IF EXISTS pool_items;
+DROP TABLE IF EXISTS artifacts;
+"""
+
+
+MARKET_RESET = """
+DROP TABLE IF EXISTS data_coverage;
+DROP TABLE IF EXISTS download_tasks;
+DROP TABLE IF EXISTS bars_1m;
+DROP TABLE IF EXISTS bars;
+"""
+
+
+def initialize_database(path: Path, schema: str, *, reset: bool = False) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(path) as connection:
-        connection.executescript(schema)
+        connection.executescript(schema if reset else schema.replace(APP_RESET, "").replace(MARKET_RESET, ""))
         connection.commit()
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--reset", action="store_true", help="drop and recreate app tables only")
+    parser.add_argument("--reset-app", action="store_true", help="drop and recreate app tables only")
+    parser.add_argument("--reset-market", action="store_true", help="drop and recreate market tables")
+    parser.add_argument("--reset-all", action="store_true", help="drop and recreate both app and market tables")
+    args = parser.parse_args()
     ensure_directories()
-    initialize_database(DB_ROOT / "app.sqlite", APP_SCHEMA)
-    initialize_database(DB_ROOT / "market_data.sqlite", MARKET_SCHEMA)
+
+    reset_app = bool(args.reset or args.reset_app or args.reset_all)
+    reset_market = bool(args.reset_market or args.reset_all)
+
+    initialize_database(DB_ROOT / "app.sqlite", f"{APP_RESET}{APP_SCHEMA}", reset=reset_app)
+    initialize_database(DB_ROOT / "market_data.sqlite", f"{MARKET_RESET}{MARKET_SCHEMA}", reset=reset_market)
     print(f"Initialized app database: {DB_ROOT / 'app.sqlite'}")
     print(f"Initialized market database: {DB_ROOT / 'market_data.sqlite'}")
 

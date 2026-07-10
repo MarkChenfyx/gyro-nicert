@@ -5,7 +5,7 @@ from typing import Any
 
 import backtesting
 
-from strategy_optimization.optimizers.common import candidate_grid, diagnostic, score_metrics
+from strategy_optimization.optimizers.common import candidate_grid, diagnostic, enrich_metrics_with_curve_returns, score_metrics
 
 
 @dataclass(slots=True)
@@ -26,6 +26,9 @@ class ManualGridOptimizer:
         options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         options = dict(options or {})
+        progress_callback = options.get("progress_callback")
+        if progress_callback is not None and not callable(progress_callback):
+            progress_callback = None
         diagnostics: list[dict[str, Any]] = [diagnostic("info", "manual grid optimizer started")]
         if not str(strategy_code or "").strip():
             return self._failure("strategy_code is empty", diagnostics)
@@ -45,6 +48,8 @@ class ManualGridOptimizer:
         diagnostics.extend(grid_diagnostics)
         if not candidates:
             return self._failure("no valid parameter candidates", diagnostics)
+        if progress_callback:
+            progress_callback(0, len(candidates), f"参数优化进行中 0/{len(candidates)} 组")
 
         candidate_results: list[dict[str, Any]] = []
         grid_summary: list[dict[str, Any]] = []
@@ -57,7 +62,10 @@ class ManualGridOptimizer:
                 parameters=dict(candidate["parameters"]),
                 config=dict(backtest_config or {}),
             )
-            metrics = dict(result.get("metrics") or {})
+            metrics = enrich_metrics_with_curve_returns(
+                dict(result.get("metrics") or {}),
+                list(result.get("daily_results") or []),
+            )
             score = score_metrics(metrics, objective) if result.get("success") else float("-inf")
             candidate_payload = {
                 "label": candidate["label"],
@@ -75,6 +83,10 @@ class ManualGridOptimizer:
                     "label": candidate["label"],
                     "parameters": dict(candidate["overrides"]),
                     "score": score,
+                    "sharpe": metrics.get("sharpe"),
+                    "strategy_return": metrics.get("strategy_return"),
+                    "benchmark_return": metrics.get("benchmark_return"),
+                    "excess_return": metrics.get("excess_return"),
                     "success": bool(result.get("success")),
                     "error": result.get("error"),
                 }
@@ -82,6 +94,8 @@ class ManualGridOptimizer:
             if result.get("success") and (best_result is None or score > float(best_result["candidate"]["score"])):
                 best_result = {"candidate": candidate_payload, "backtest": result}
             diagnostics.append(diagnostic("info", f"candidate {index}/{len(candidates)} evaluated", label=candidate["label"]))
+            if progress_callback:
+                progress_callback(index, len(candidates), f"参数优化进行中 {index}/{len(candidates)} 组")
 
         successful = [candidate for candidate in candidate_results if candidate["success"]]
         if not successful or best_result is None:

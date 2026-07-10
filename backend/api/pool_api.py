@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Query
 
-from backend.api.schemas import PoolAddRequest, PoolCompareRequest
+from backend.api.schemas import PoolAddRequest, PoolCompareRequest, PoolRerunRequest
 from backend.services import pool_service, query_service
 
 
@@ -23,6 +23,11 @@ def add_to_pool(payload: PoolAddRequest) -> dict:
 @router.post("/compare")
 def compare_pool_items(payload: PoolCompareRequest) -> dict:
     return pool_service.compare_pool_items(payload.pool_item_ids)
+
+
+@router.post("/rerun")
+def rerun_pool_items(payload: PoolRerunRequest) -> dict:
+    return pool_service.rerun_pool_items_to_latest(payload.pool_item_ids, end_date=payload.end_date)
 
 
 @router.get("")

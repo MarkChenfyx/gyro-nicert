@@ -25,8 +25,7 @@ def _register_artifact(owner_type: str, owner_id: str, artifact_type: str, path:
 
 
 def create_baseline_run(
-    strategy_id: str,
-    strategy_name: str,
+    strategy: dict[str, Any],
     source_text: str,
     config_payload: dict[str, Any],
     strategy_code: str,
@@ -34,13 +33,13 @@ def create_baseline_run(
     daily_results: Any = None,
     trades: Any = None,
 ) -> dict[str, Any]:
+    strategy_id = str(strategy["strategy_id"])
     task = task_service.create_task(TaskType.BACKTEST.value, message="Baseline run queued", related_strategy_id=strategy_id)
     try:
         task = task_service.mark_running(task["task_id"], message="Creating baseline run artifacts")
         run_artifact = artifact_service.create_run_artifact(
             run_type=RunType.BASELINE.value,
-            strategy_id=strategy_id,
-            strategy_name=strategy_name,
+            strategy=strategy,
             source="service_test",
         )
         run_id = str(run_artifact["run_id"])
@@ -102,4 +101,3 @@ def create_baseline_run(
     except Exception as exc:
         task_service.mark_failed(task["task_id"], error=str(exc), message="Baseline run failed")
         raise
-

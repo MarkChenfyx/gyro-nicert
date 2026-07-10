@@ -77,6 +77,9 @@ def list_optimizable_runs(limit: int = 100) -> dict[str, Any]:
             {
                 **run,
                 "strategy_name": strategy.get("strategy_name") or run.get("strategy_id"),
+                "strategy_family": strategy.get("strategy_family") or "",
+                "strategy_version": strategy.get("strategy_version") or "",
+                "source_filename": strategy.get("source_filename") or "",
                 "vt_symbol": config.get("vt_symbol") or f"{config.get('symbol', '')}.{config.get('exchange', '')}".strip("."),
                 "interval": config.get("interval") or "",
                 "mode": config.get("mode") or "",
@@ -117,6 +120,7 @@ def _result_payload(optimization: dict[str, Any], selected_variant: str, artifac
     metrics = dict(recommended.get("metrics") or {})
     return {
         "metrics": metrics,
+        "objective": optimization.get("objective"),
         "recommended": {
             "label": recommended.get("label"),
             "parameters": recommended.get("parameters") or {},
@@ -163,6 +167,14 @@ def run_optimization(
     task = task_service.create_task(TaskType.OPTIMIZATION.value, message="Optimization queued", related_run_id=run_id, related_strategy_id=str(context["run"]["strategy_id"]))
     try:
         task = task_service.mark_running(task["task_id"], message=f"Running {resolved_method} optimization")
+        def progress_callback(current: int, total: int, message: str) -> None:
+            safe_total = max(1, int(total or 1))
+            safe_current = max(0, min(int(current or 0), safe_total))
+            task_service.mark_progress(
+                task["task_id"],
+                safe_current / safe_total,
+                message=message,
+            )
         optimization = optimize_parameters(
             strategy_code=str(context["strategy_code"]),
             class_name=str(context["inventory"].get("class_name") or ""),
@@ -175,6 +187,7 @@ def run_optimization(
                 "method": resolved_method,
                 "selected_parameters": selected,
                 "max_trials": max_trials,
+                "progress_callback": progress_callback,
             },
         )
         if not optimization.get("success"):
@@ -224,6 +237,7 @@ def run_optimization(
             "variant": variant,
             "selected_variant": selected_variant,
             "optimization": payload,
+            "objective": objective,
             "grid_summary": optimization.get("grid_summary") or [],
             "artifact_paths": artifact_paths,
             "error": None,
@@ -236,6 +250,7 @@ def run_optimization(
             "variant": None,
             "selected_variant": selected_variant,
             "optimization": {},
+            "objective": objective,
             "grid_summary": [],
             "artifact_paths": {},
             "error": str(exc),

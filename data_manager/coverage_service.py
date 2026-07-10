@@ -29,11 +29,15 @@ def _covers_requested_range(
     *,
     start_date: str | None,
     end_date: str | None,
+    observed_start: datetime | None = None,
+    observed_end: datetime | None = None,
 ) -> bool:
     if not local_start or not local_end:
         return False
     if _is_date_only(start_date) and _is_date_only(end_date):
-        return local_start.date() <= requested_start.date() and local_end.date() >= requested_end.date()
+        if observed_start is None or observed_end is None:
+            return False
+        return observed_start <= requested_end and observed_end >= requested_start
     return local_start <= requested_start and local_end >= requested_end
 
 
@@ -51,6 +55,15 @@ def get_data_coverage(
     requested_end = _parse_dt(end_date)
     local_start = _parse_dt(coverage.get("start_date")) if coverage else None
     local_end = _parse_dt(coverage.get("end_date")) if coverage else None
+    observed = market_repository.get_observed_range(
+        symbol,
+        exchange,
+        interval,
+        start_date=requested_start.isoformat() if requested_start else None,
+        end_date=requested_end.isoformat() if requested_end else None,
+    ) if requested_start and requested_end else {"start_date": None, "end_date": None, "bar_count": 0}
+    observed_start = _parse_dt(observed.get("start_date")) if observed.get("start_date") else None
+    observed_end = _parse_dt(observed.get("end_date")) if observed.get("end_date") else None
 
     if not coverage:
         status = "missing"
@@ -62,6 +75,8 @@ def get_data_coverage(
             requested_end,
             start_date=start_date,
             end_date=end_date,
+            observed_start=observed_start,
+            observed_end=observed_end,
         ) else "partial"
     else:
         status = "available"
@@ -71,12 +86,14 @@ def get_data_coverage(
         if not local_start or not local_end:
             missing_ranges.append({"start_date": requested_start.isoformat(), "end_date": requested_end.isoformat()})
         else:
-            start_missing = local_start.date() > requested_start.date() if _is_date_only(start_date) else local_start > requested_start
-            end_missing = local_end.date() < requested_end.date() if _is_date_only(end_date) else local_end < requested_end
+            range_start = observed_start if _is_date_only(start_date) and observed_start else local_start
+            range_end = observed_end if _is_date_only(end_date) and observed_end else local_end
+            start_missing = range_start.date() > requested_start.date() if _is_date_only(start_date) else range_start > requested_start
+            end_missing = range_end.date() < requested_end.date() if _is_date_only(end_date) else range_end < requested_end
             if start_missing:
-                missing_ranges.append({"start_date": requested_start.isoformat(), "end_date": local_start.isoformat()})
+                missing_ranges.append({"start_date": requested_start.isoformat(), "end_date": range_start.isoformat()})
             if end_missing:
-                missing_ranges.append({"start_date": local_end.isoformat(), "end_date": requested_end.isoformat()})
+                missing_ranges.append({"start_date": range_end.isoformat(), "end_date": requested_end.isoformat()})
 
     return {
         "symbol": symbol,
@@ -88,6 +105,8 @@ def get_data_coverage(
         "requested_end": requested_end.isoformat() if requested_end else None,
         "local_start": local_start.isoformat() if local_start else None,
         "local_end": local_end.isoformat() if local_end else None,
+        "observed_start": observed_start.isoformat() if observed_start else None,
+        "observed_end": observed_end.isoformat() if observed_end else None,
         "bar_count": int(coverage.get("bar_count") or 0) if coverage else 0,
         "missing_ranges": missing_ranges,
         "coverage": coverage,

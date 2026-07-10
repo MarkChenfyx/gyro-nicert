@@ -32,6 +32,17 @@ def mark_running(task_id: str, message: str | None = None) -> dict[str, Any]:
     )
 
 
+def mark_progress(task_id: str, progress: float, message: str | None = None) -> dict[str, Any]:
+    normalized = max(0.0, min(1.0, float(progress)))
+    return task_repository.update_task_status(
+        task_id,
+        TaskStatus.RUNNING.value,
+        progress=normalized,
+        message=message,
+        error="",
+    )
+
+
 def mark_completed(task_id: str, message: str | None = None) -> dict[str, Any]:
     return task_repository.update_task_status(
         task_id,
@@ -57,4 +68,3 @@ def get_task(task_id: str) -> dict[str, Any] | None:
 
 def list_tasks(limit: int = 100) -> list[dict[str, Any]]:
     return task_repository.list_tasks(limit=limit)
-

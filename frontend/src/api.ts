@@ -16,15 +16,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return payload as T;
 }
 
-export function generateStrategy(sourceText: string) {
+export function generateStrategy(sourceFilename: string) {
   return request<any>("/api/strategies/generate", {
     method: "POST",
-    body: JSON.stringify({ source_text: sourceText })
+    body: JSON.stringify({ source_filename: sourceFilename })
   });
 }
 
 export type ResearchCreatePayload = {
-  source_text: string;
+  source_filename: string;
   symbol: string;
   exchange: string;
   interval: string;
@@ -48,6 +48,51 @@ export type DataDownloadPayload = {
 
 export function createResearch(payload: ResearchCreatePayload) {
   return request<any>("/api/research/create", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export type ResearchBaselinePayload = {
+  strategy_id: string;
+  symbol: string;
+  exchange: string;
+  interval: string;
+  start_date?: string;
+  end_date?: string;
+  capital?: number;
+  rate?: number;
+  slippage?: number;
+  size?: number;
+  pricetick?: number;
+  mode?: "real" | "mock";
+};
+
+export function createResearchBaseline(payload: ResearchBaselinePayload) {
+  return request<any>("/api/research/baseline", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export type ResearchCodeBaselinePayload = {
+  strategy_name: string;
+  strategy_code: string;
+  symbol: string;
+  exchange: string;
+  interval: string;
+  start_date?: string;
+  end_date?: string;
+  capital?: number;
+  rate?: number;
+  slippage?: number;
+  size?: number;
+  pricetick?: number;
+  mode?: "real" | "mock";
+};
+
+export function createResearchBaselineFromCode(payload: ResearchCodeBaselinePayload) {
+  return request<any>("/api/research/baseline-from-code", {
     method: "POST",
     body: JSON.stringify(payload)
   });
@@ -77,6 +122,20 @@ export function listNaturalLanguageSources() {
 
 export function getNaturalLanguageSource(filename: string) {
   return request<any>(`/api/natural-language/sources/${encodeURIComponent(filename)}`);
+}
+
+export function createNaturalLanguageSource(filename: string, text: string) {
+  return request<any>("/api/natural-language/sources", {
+    method: "POST",
+    body: JSON.stringify({ filename, text })
+  });
+}
+
+export function updateNaturalLanguageSource(filename: string, text: string) {
+  return request<any>(`/api/natural-language/sources/${encodeURIComponent(filename)}`, {
+    method: "PUT",
+    body: JSON.stringify({ text })
+  });
 }
 
 export function getRun(runId: string) {
@@ -114,6 +173,13 @@ export function comparePool(poolItemIds: string[]) {
   return request<any>("/api/pool/compare", {
     method: "POST",
     body: JSON.stringify({ pool_item_ids: poolItemIds })
+  });
+}
+
+export function rerunPool(poolItemIds: string[], endDate?: string) {
+  return request<any>("/api/pool/rerun", {
+    method: "POST",
+    body: JSON.stringify({ pool_item_ids: poolItemIds, end_date: endDate })
   });
 }
 

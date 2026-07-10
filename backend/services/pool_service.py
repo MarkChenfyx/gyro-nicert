@@ -1,14 +1,19 @@
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 from typing import Any
 import csv
 import json
 
+from backtesting import run_backtest
+from backtesting.local_data_provider import split_vt_symbol
+from common.time_utils import now_beijing
+from data_manager import coverage_service, download_service
 from backend.core.hashing import compute_sha256
-from backend.domain.enums import ArtifactType
+from backend.domain.enums import ArtifactType, TaskType
 from backend.repositories import artifact_repository, pool_repository, run_repository, strategy_repository, variant_repository
-from backend.services import artifact_service
+from backend.services import artifact_service, task_service
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -55,6 +60,11 @@ def _metric(metrics: dict[str, Any], *names: str) -> float | None:
 def _text(value: Any, default: str = "") -> str:
     text = str(value or "").strip()
     return text or default
+
+
+def _date_only(value: str | None, default: str = "") -> str:
+    text = _text(value, default)
+    return text[:10] if len(text) >= 10 else text
 
 
 def _tags_from_detail(detail: dict[str, Any]) -> list[str]:
@@ -122,6 +132,17 @@ def _benchmark_curve(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], 
     return [], {"level": "warning", "message": "benchmark curve unavailable: selected pool curves do not contain close_price/close/price"}
 
 
+def _extract_class_name(strategy_code: str) -> str:
+    try:
+        tree = ast.parse(strategy_code)
+    except SyntaxError:
+        return ""
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef) and not node.name.startswith("_"):
+            return node.name
+    return ""
+
+
 def _compare_item(detail: dict[str, Any]) -> dict[str, Any]:
     item = dict(detail.get("pool_item") or {})
     manifest = dict(detail.get("manifest") or {})
@@ -136,6 +157,8 @@ def _compare_item(detail: dict[str, Any]) -> dict[str, Any]:
         "pool_item_id": item.get("pool_item_id"),
         "strategy_id": item.get("strategy_id"),
         "strategy_name": item.get("strategy_name"),
+        "strategy_family": item.get("strategy_family"),
+        "strategy_version": item.get("strategy_version"),
         "vt_symbol": item.get("vt_symbol"),
         "variant_name": variant_name,
         "created_at": item.get("created_at"),
@@ -147,6 +170,114 @@ def _compare_item(detail: dict[str, Any]) -> dict[str, Any]:
         "curve": curve,
         "trades_preview": trades_rows[:20],
     }
+
+
+def _compare_payload_from_parts(detail: dict[str, Any], *, metrics: dict[str, Any], curve: list[dict[str, Any]], trades_rows: list[dict[str, Any]]) -> dict[str, Any]:
+    item = dict(detail.get("pool_item") or {})
+    manifest = dict(detail.get("manifest") or {})
+    variant_name = _text(manifest.get("source_variant_name") or manifest.get("variant_name") or item.get("source_variant_id"), "-")
+    return {
+        "pool_item_id": item.get("pool_item_id"),
+        "strategy_id": item.get("strategy_id"),
+        "strategy_name": item.get("strategy_name"),
+        "strategy_family": item.get("strategy_family"),
+        "strategy_version": item.get("strategy_version"),
+        "vt_symbol": item.get("vt_symbol"),
+        "variant_name": variant_name,
+        "created_at": item.get("created_at"),
+        "source_run_id": item.get("source_run_id"),
+        "metrics": metrics,
+        "params": _params_from_detail(detail),
+        "tags": _tags_from_detail(detail),
+        "notes": detail.get("notes") or "",
+        "curve": curve,
+        "trades_preview": trades_rows[:20],
+    }
+
+
+def _rerun_payload(detail: dict[str, Any], end_date: str | None = None) -> dict[str, Any]:
+    item = dict(detail.get("pool_item") or {})
+    config = dict(detail.get("config") or {})
+    manifest = dict(detail.get("manifest") or {})
+    strategy_code = _text(detail.get("strategy_code"))
+    if not strategy_code:
+        raise FileNotFoundError(f"strategy code not found for pool item: {item.get('pool_item_id')}")
+    vt_symbol = _text(item.get("vt_symbol") or config.get("vt_symbol"))
+    if not vt_symbol:
+        raise ValueError(f"vt_symbol missing for pool item: {item.get('pool_item_id')}")
+    symbol, exchange = split_vt_symbol(vt_symbol)
+    interval = _text(config.get("interval"), "1m")
+    rerun_end = _date_only(end_date, now_beijing().date().isoformat())
+    rerun_start = _date_only(config.get("start_date"))
+    if not rerun_start:
+        local_coverage = coverage_service.get_data_coverage(symbol, exchange, interval)
+        rerun_start = _date_only(local_coverage.get("local_start"))
+    if not rerun_start or not rerun_end:
+        raise ValueError(f"local market data unavailable for {vt_symbol} {interval}")
+    requested_coverage = coverage_service.get_data_coverage(
+        symbol,
+        exchange,
+        interval,
+        start_date=rerun_start,
+        end_date=rerun_end,
+    )
+    if requested_coverage.get("status") != "covered":
+        missing_ranges = list(requested_coverage.get("missing_ranges") or [])
+        if not missing_ranges:
+            missing_ranges = [{"start_date": rerun_start, "end_date": rerun_end}]
+        for missing in missing_ranges:
+            download_start = _date_only(missing.get("start_date"), rerun_start)
+            download_end = _date_only(missing.get("end_date"), rerun_end)
+            if not download_start or not download_end or download_start > download_end:
+                continue
+            download_result = download_service.download_bars(
+                symbol,
+                exchange,
+                interval,
+                download_start,
+                download_end,
+            )
+            if not download_result.get("success"):
+                raise RuntimeError(str(download_result.get("error") or f"download failed for {vt_symbol} {download_start} -> {download_end}"))
+        requested_coverage = coverage_service.get_data_coverage(
+            symbol,
+            exchange,
+            interval,
+            start_date=rerun_start,
+            end_date=rerun_end,
+        )
+        if requested_coverage.get("status") != "covered":
+            raise RuntimeError(f"market data still incomplete for {vt_symbol} {interval} {rerun_start} -> {rerun_end}")
+    class_name = _text(manifest.get("class_name") or config.get("class_name") or _extract_class_name(strategy_code))
+    if not class_name:
+        raise ValueError(f"class_name missing for pool item: {item.get('pool_item_id')}")
+
+    backtest_result = run_backtest(
+        strategy_code=strategy_code,
+        class_name=class_name,
+        vt_symbol=vt_symbol,
+        parameters=_params_from_detail(detail),
+        config={
+            **config,
+            "vt_symbol": vt_symbol,
+            "symbol": symbol,
+            "exchange": exchange,
+            "interval": interval,
+            "start_date": rerun_start,
+            "end_date": rerun_end,
+            "mode": "real",
+        },
+    )
+    if not backtest_result.get("success"):
+        raise RuntimeError(str(backtest_result.get("error") or "pool rerun failed"))
+
+    metrics = dict(backtest_result.get("metrics") or {})
+    curve = list(backtest_result.get("daily_results") or [])
+    trades_rows = list(backtest_result.get("trades") or [])
+    payload = _compare_payload_from_parts(detail, metrics=metrics, curve=curve, trades_rows=trades_rows)
+    payload["rerun_end"] = rerun_end
+    payload["rerun_start"] = rerun_start
+    return payload
 
 
 def add_variant_to_pool(
@@ -178,9 +309,11 @@ def add_variant_to_pool(
         source_variant_id=str(variant["variant_id"]),
         pool_path=str(pool_path),
         strategy_name=strategy_name,
+        strategy_family=str(strategy.get("strategy_family") or ""),
+        strategy_version=str(strategy.get("strategy_version") or ""),
         vt_symbol=vt_symbol,
         annual_return=_metric(metrics, "annual_return"),
-        max_drawdown=_metric(metrics, "max_drawdown", "max_ddpercent"),
+        max_drawdown=_metric(metrics, "max_drawdown_pct", "max_ddpercent", "max_drawdown"),
         sharpe=_metric(metrics, "sharpe", "sharpe_ratio"),
         calmar=_metric(metrics, "calmar", "return_drawdown_ratio"),
         tags=tags,
@@ -280,4 +413,56 @@ def compare_pool_items(pool_item_ids: list[str] | None) -> dict[str, Any]:
         "items": items,
         "benchmark": {"label": "Buy & Hold", "curve": benchmark_rows},
         "diagnostics": diagnostics,
+    }
+
+
+def rerun_pool_items_to_latest(pool_item_ids: list[str] | None, *, end_date: str | None = None) -> dict[str, Any]:
+    requested_ids = [_text(item) for item in pool_item_ids or [] if _text(item)]
+    requested_end_date = _date_only(end_date, now_beijing().date().isoformat())
+    if not requested_ids:
+        return {
+            "task": None,
+            "items": [],
+            "benchmark": {"label": "Buy & Hold", "curve": []},
+            "diagnostics": [],
+            "rerun_end": requested_end_date,
+        }
+
+    task = task_service.create_task(TaskType.POOL_REBUILD.value, message="Pool rerun queued")
+    task = task_service.mark_running(task["task_id"], message="Rerunning selected pool items")
+    diagnostics: list[dict[str, Any]] = []
+    items: list[dict[str, Any]] = []
+
+    for pool_item_id in requested_ids:
+        try:
+            detail = get_pool_item_detail(pool_item_id)
+        except FileNotFoundError:
+            diagnostics.append({"level": "warning", "message": f"pool item not found: {pool_item_id}", "pool_item_id": pool_item_id})
+            continue
+
+        try:
+            items.append(_rerun_payload(detail, end_date=requested_end_date))
+        except Exception as exc:
+            diagnostics.append({"level": "warning", "message": f"pool rerun failed: {pool_item_id} | {exc}", "pool_item_id": pool_item_id})
+
+    benchmark_rows: list[dict[str, Any]] = []
+    benchmark_diagnostic: dict[str, Any] | None = None
+    for item in items:
+        benchmark_rows, benchmark_diagnostic = _benchmark_curve(list(item.get("curve") or []))
+        if benchmark_rows:
+            break
+    if benchmark_diagnostic and items:
+        diagnostics.append(benchmark_diagnostic)
+
+    if items:
+        task = task_service.mark_completed(task["task_id"], message="Pool rerun completed")
+    else:
+        task = task_service.mark_failed(task["task_id"], error="No selected pool items reran successfully", message="Pool rerun failed")
+
+    return {
+        "task": task,
+        "items": items,
+        "benchmark": {"label": "Buy & Hold", "curve": benchmark_rows},
+        "diagnostics": diagnostics,
+        "rerun_end": requested_end_date or _text(items[0].get("rerun_end") if items else ""),
     }

@@ -6,12 +6,12 @@ from pydantic import BaseModel, Field
 
 
 class StrategyGenerateRequest(BaseModel):
-    source_text: str
+    source_filename: str
     options: dict[str, Any] | None = None
 
 
 class ResearchCreateRequest(BaseModel):
-    source_text: str
+    source_filename: str
     symbol: str = "510300"
     exchange: str = "SSE"
     interval: str = "1m"
@@ -26,6 +26,37 @@ class ResearchCreateRequest(BaseModel):
     options: dict[str, Any] | None = None
 
 
+class ResearchBaselineCreateRequest(BaseModel):
+    strategy_id: str
+    symbol: str = "510300"
+    exchange: str = "SSE"
+    interval: str = "1m"
+    start_date: str | None = None
+    end_date: str | None = None
+    capital: float = 100000.0
+    rate: float = 0.000045
+    slippage: float = 0.001
+    size: float = 1.0
+    pricetick: float = 0.001
+    mode: str = "real"
+
+
+class ResearchCodeBaselineCreateRequest(BaseModel):
+    strategy_name: str
+    strategy_code: str
+    symbol: str = "510300"
+    exchange: str = "SSE"
+    interval: str = "1m"
+    start_date: str | None = None
+    end_date: str | None = None
+    capital: float = 100000.0
+    rate: float = 0.000045
+    slippage: float = 0.001
+    size: float = 1.0
+    pricetick: float = 0.001
+    mode: str = "real"
+
+
 class PoolAddRequest(BaseModel):
     run_id: str
     variant_name: str = "baseline"
@@ -36,6 +67,11 @@ class PoolAddRequest(BaseModel):
 
 class PoolCompareRequest(BaseModel):
     pool_item_ids: list[str] = Field(default_factory=list)
+
+
+class PoolRerunRequest(BaseModel):
+    pool_item_ids: list[str] = Field(default_factory=list)
+    end_date: str | None = None
 
 
 class PoolListQuery(BaseModel):
@@ -54,6 +90,15 @@ class DataDownloadRequest(BaseModel):
     interval: str = "1m"
     start_date: str
     end_date: str
+
+
+class NaturalLanguageSourceCreateRequest(BaseModel):
+    filename: str
+    text: str = ""
+
+
+class NaturalLanguageSourceUpdateRequest(BaseModel):
+    text: str = ""
 
 
 class OptimizationSearchSpaceRequest(BaseModel):

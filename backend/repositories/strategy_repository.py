@@ -13,8 +13,12 @@ def _now() -> str:
 def create_strategy(
     strategy_id: str,
     strategy_name: str,
+    strategy_family: str,
+    strategy_version: str,
+    source_filename: str,
     source_type: str,
     source_text: str | None,
+    class_name: str | None,
     code_path: str,
     code_hash: str | None = None,
 ) -> dict[str, Any]:
@@ -23,15 +27,20 @@ def create_strategy(
         connection.execute(
             """
             INSERT INTO strategies (
-                strategy_id, strategy_name, source_type, source_text, code_path, code_hash, created_at
+                strategy_id, strategy_name, strategy_family, strategy_version, source_filename,
+                source_type, source_text, class_name, code_path, code_hash, created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 str(strategy_id),
                 str(strategy_name),
+                str(strategy_family),
+                str(strategy_version),
+                str(source_filename),
                 str(source_type),
                 source_text,
+                class_name,
                 str(code_path),
                 code_hash,
                 created_at,

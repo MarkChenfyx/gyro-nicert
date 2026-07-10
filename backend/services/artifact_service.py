@@ -81,7 +81,7 @@ def _copy_optional(source: Path, destination: Path) -> Path | None:
     return destination
 
 
-def create_run_artifact(run_type: str, strategy_id: str, strategy_name: str, source: str) -> dict[str, Any]:
+def create_run_artifact(run_type: str, strategy: dict[str, Any], source: str) -> dict[str, Any]:
     run_id = _stamp_id("run")
     run_path = _run_path(run_id)
     run_path.mkdir(parents=True, exist_ok=False)
@@ -90,8 +90,12 @@ def create_run_artifact(run_type: str, strategy_id: str, strategy_name: str, sou
         "schema": "gyro_nicert.run_manifest.v1",
         "run_id": run_id,
         "run_type": str(run_type),
-        "strategy_id": str(strategy_id),
-        "strategy_name": str(strategy_name),
+        "strategy_id": str(strategy.get("strategy_id") or ""),
+        "strategy_name": str(strategy.get("strategy_name") or ""),
+        "strategy_family": str(strategy.get("strategy_family") or ""),
+        "strategy_version": str(strategy.get("strategy_version") or ""),
+        "source_filename": str(strategy.get("source_filename") or ""),
+        "class_name": str(strategy.get("class_name") or ""),
         "source": str(source),
         "run_path": str(run_path),
         "created_at": _now(),

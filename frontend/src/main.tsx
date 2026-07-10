@@ -31,8 +31,7 @@ import "./styles.css";
 type PageKey = "launch" | "generate" | "optimize" | "pool";
 const PAGE_STORAGE_KEY = "gyro_nicert.active_page";
 const OPTIMIZE_DRAFT_STORAGE_KEY = "gyro_nicert.optimize_draft";
-const BENCHMARK_CURVE_COLOR = "#eab308";
-const CUMULATIVE_CHART_GRID = { left: 56, right: 18, top: 20, bottom: 42 };
+const BENCHMARK_CURVE_COLOR = "#64748b";
 
 function isPageKey(value: string): value is PageKey {
   return value === "launch" || value === "generate" || value === "optimize" || value === "pool";
@@ -78,6 +77,7 @@ const zh = {
   inputMode: "\u8f93\u5165\u65b9\u5f0f",
   naturalLanguageMode: "\u81ea\u7136\u8bed\u8a00\u751f\u6210",
   manualCodeMode: "\u76f4\u63a5\u7c98\u8d34\u7b56\u7565\u4ee3\u7801",
+  localCodeMode: "\u4ece\u672c\u5730\u4e0a\u4f20\u7b56\u7565\u4ee3\u7801",
   backtestConfig: "\u53c2\u6570\u8bbe\u7f6e",
   symbol: "\u6807\u7684 / \u4ea4\u6613\u6240",
   interval: "\u5468\u671f",
@@ -131,6 +131,12 @@ type SourceFile = {
   name: string;
   size?: number;
   modified_at?: string;
+};
+
+type LocalStrategyFile = {
+  name: string;
+  relativePath: string;
+  code: string;
 };
 
 type WorkflowUiState = {
@@ -258,9 +264,19 @@ type NormalizedCurveSeries = {
   label: string;
   type: "strategy" | "benchmark";
   points: NormalizedCurvePoint[];
+  drawdownPoints: NormalizedCurvePoint[];
   totalReturn: number;
+  maxDrawdown: number;
   basis?: "pnl" | "price";
 };
+
+function buildDrawdownSeries(points: NormalizedCurvePoint[]): NormalizedCurvePoint[] {
+  let peak = 0;
+  return points.map((point) => {
+    peak = Math.max(peak, point.value);
+    return { date: point.date, value: Math.min(0, point.value - peak) };
+  });
+}
 
 function finiteNumber(value: unknown): number | null {
   const parsed = Number(value);
@@ -306,6 +322,24 @@ function shiftDate(value: string, months = 0, years = 0): string {
   if (months) next.setMonth(next.getMonth() + months);
   if (years) next.setFullYear(next.getFullYear() + years);
   return next.toISOString().slice(0, 10);
+}
+
+function curveDateBoundsForRows(rows: any[]): { min: string; max: string } {
+  const dates = rows.map((row) => normalizeDateKey(rowDate(row))).filter(Boolean).sort();
+  const today = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Shanghai" });
+  const dataMax = dates[dates.length - 1] || "";
+  return { min: dates[0] || "", max: dataMax > today ? dataMax : today };
+}
+
+function shortcutDateRange(bounds: { min: string; max: string }, range: "3m" | "6m" | "1y" | "all") {
+  if (!bounds.min || !bounds.max) return { start: "", end: "" };
+  if (range === "all") return { start: bounds.min, end: bounds.max };
+  const requestedStart = range === "3m"
+    ? shiftDate(bounds.max, -3)
+    : range === "6m"
+      ? shiftDate(bounds.max, -6)
+      : shiftDate(bounds.max, 0, -1);
+  return { start: requestedStart < bounds.min ? bounds.min : requestedStart, end: bounds.max };
 }
 
 function valueFromKeys(row: any, keys: string[]): number | null {
@@ -371,12 +405,15 @@ function cumulativeBuyHoldSeries(rows: any[]): NormalizedCurvePoint[] {
 function buildStrategyCurve(rows: any[]): NormalizedCurveSeries | null {
   const points = cumulativeStrategySeries(rows);
   if (!points.length) return null;
+  const drawdownPoints = buildDrawdownSeries(points);
   return {
     key: "strategy",
     label: "策略累计收益",
     type: "strategy",
     points,
+    drawdownPoints,
     totalReturn: points[points.length - 1]?.value ?? 0,
+    maxDrawdown: Math.min(...drawdownPoints.map((point) => point.value), 0),
     basis: "pnl"
   };
 }
@@ -392,7 +429,9 @@ function buildNormalizedCurveSeries(rows: any[]): NormalizedCurveSeries[] {
       label: "buy & hold",
       type: "benchmark",
       points: buyHoldPoints,
+      drawdownPoints: buildDrawdownSeries(buyHoldPoints),
       totalReturn: buyHoldPoints[buyHoldPoints.length - 1]?.value ?? 0,
+      maxDrawdown: Math.min(...buildDrawdownSeries(buyHoldPoints).map((point) => point.value), 0),
       basis: "price"
     });
   }
@@ -408,11 +447,26 @@ function variantDisplayLabel(variantName: string) {
 
 function curveSeriesColor(item: NormalizedCurveSeries, index = 0) {
   if (item.type === "benchmark") return BENCHMARK_CURVE_COLOR;
-  const token = `${item.key} ${item.label}`.toLowerCase();
-  if (token.includes("baseline")) return "#4f6df5";
-  if (token.includes("manual")) return "#de4b39";
-  const palette = ["#0f766e", "#8b5cf6", "#0891b2", "#f97316", "#7c3aed"];
-  return palette[index % palette.length];
+  const token = String(item.key || "").toLowerCase().replace(/^variant:/, "");
+  if (token === "baseline" || token === "strategy") return "#4f6df5";
+  if (token === "manual_grid") return "#de4b39";
+  const palette = [
+    "#0f766e",
+    "#7c3aed",
+    "#0284c7",
+    "#ea580c",
+    "#16a34a",
+    "#db2777",
+    "#4f46e5",
+    "#ca8a04",
+    "#0d9488",
+    "#9333ea",
+    "#dc2626",
+    "#2563eb"
+  ];
+  const stableKey = String(item.key || item.label || index).replace(/^variant:/, "");
+  const hash = Array.from(stableKey).reduce((value, character) => ((value * 31) + character.charCodeAt(0)) >>> 0, 0);
+  return palette[hash % palette.length];
 }
 
 function curveColorForKey(
@@ -424,7 +478,7 @@ function curveColorForKey(
 ) {
   const orderedIndex = orderedKeys.indexOf(key);
   return curveSeriesColor(
-    { key, label, type, points: [], totalReturn: 0 },
+    { key, label, type, points: [], drawdownPoints: [], totalReturn: 0, maxDrawdown: 0 },
     orderedIndex >= 0 ? orderedIndex : fallbackIndex
   );
 }
@@ -441,30 +495,57 @@ function buildCumulativeChartOption(series: NormalizedCurveSeries[], dates: stri
       backgroundColor: "rgba(15,23,42,0.92)",
       borderWidth: 0,
       textStyle: { color: "#f8fafc" },
-      valueFormatter: (value: number | string) => formatReturnPct(value)
+      valueFormatter: (value: number | string) => formatReturnPct(value),
+      axisPointer: { type: "cross", lineStyle: { color: "#94a3b8", type: "dashed" } }
     },
-    grid: CUMULATIVE_CHART_GRID,
-    xAxis: {
-      type: "category",
-      boundaryGap: false,
-      data: dates,
-      axisLine: { lineStyle: { color: "#cbd5e1" } },
-      axisLabel: { color: "#64748b" }
-    },
-    yAxis: {
-      type: "value",
-      min: rawMin - padding,
-      max: rawMax + padding,
-      axisLabel: {
-        color: "#64748b",
-        formatter: (value: number) => formatReturnPct(value, 1)
+    grid: [
+      { left: 62, right: 22, top: 24, height: "58%" },
+      { left: 62, right: 22, top: "74%", height: "16%" }
+    ],
+    xAxis: [
+      {
+        type: "category",
+        boundaryGap: false,
+        data: dates,
+        gridIndex: 0,
+        axisLine: { lineStyle: { color: "#cbd5e1" } },
+        axisLabel: { show: false },
+        axisTick: { show: false }
       },
-      splitLine: { lineStyle: { color: "rgba(203,213,225,0.6)" } }
-    },
-    series: series.map((item, index) => ({
+      {
+        type: "category",
+        boundaryGap: false,
+        data: dates,
+        gridIndex: 1,
+        axisLine: { lineStyle: { color: "#cbd5e1" } },
+        axisLabel: { color: "#64748b", hideOverlap: true },
+        axisTick: { show: false }
+      }
+    ],
+    yAxis: [
+      {
+        type: "value",
+        gridIndex: 0,
+        min: rawMin - padding,
+        max: rawMax + padding,
+        axisLabel: { color: "#64748b", formatter: (value: number) => formatReturnPct(value, 1) },
+        splitLine: { lineStyle: { color: "rgba(203,213,225,0.52)" } }
+      },
+      {
+        type: "value",
+        gridIndex: 1,
+        max: 0,
+        axisLabel: { color: "#94a3b8", formatter: (value: number) => formatReturnPct(value, 1) },
+        splitLine: { show: false }
+      }
+    ],
+    series: [
+      ...series.map((item, index) => ({
       color: curveSeriesColor(item, index),
       name: item.label,
       type: "line",
+      xAxisIndex: 0,
+      yAxisIndex: 0,
       smooth: false,
       showSymbol: false,
       emphasis: { focus: "series" },
@@ -473,11 +554,33 @@ function buildCumulativeChartOption(series: NormalizedCurveSeries[], dates: stri
         width: item.type === "benchmark" ? 2 : 3,
         type: item.type === "benchmark" ? "dashed" : "solid"
       },
+      markLine: index === 0 ? {
+        silent: true,
+        symbol: "none",
+        label: { show: false },
+        lineStyle: { color: "#94a3b8", width: 1 },
+        data: [{ yAxis: 0 }]
+      } : undefined,
       data: dates.map((date) => {
         const point = item.points.find((entry) => entry.date === date);
         return point ? point.value : null;
       })
-    }))
+      })),
+      ...series.filter((item) => item.type === "strategy").map((item, index) => ({
+        name: `${item.label} 回撤`,
+        type: "line",
+        xAxisIndex: 1,
+        yAxisIndex: 1,
+        showSymbol: false,
+        smooth: false,
+        lineStyle: { color: curveSeriesColor(item, index), width: 1.5, opacity: 0.7 },
+        areaStyle: { color: "rgba(220,38,38,0.14)" },
+        data: dates.map((date) => {
+          const point = item.drawdownPoints.find((entry) => entry.date === date);
+          return point ? point.value : null;
+        })
+      }))
+    ]
   };
 }
 
@@ -506,6 +609,10 @@ function CurveChart({ rows, height = 340, showLegend = true }: { rows: any[]; he
   }, [dates, series]);
   return (
     <div className="curve-chart-shell">
+      <div className="curve-chart-heading">
+        <div><strong>单位仓位累计收益</strong><span>固定数量 · 非复利</span></div>
+        <span>下方为策略回撤</span>
+      </div>
       <div ref={ref} className="curve-canvas" style={{ height }} />
       {showLegend && series.length > 0 && (
         <div className="curve-legend">
@@ -516,7 +623,8 @@ function CurveChart({ rows, height = 340, showLegend = true }: { rows: any[]; he
                 <strong>{item.label}</strong>
               </div>
               <div className="curve-series-metrics">
-                累计收益 {formatReturnPct(item.totalReturn, 2)}
+                <span>累计 {formatReturnPct(item.totalReturn, 2)}</span>
+                <span>回撤 {formatReturnPct(item.maxDrawdown, 2)}</span>
               </div>
             </div>
           ))}
@@ -599,6 +707,10 @@ function MultiVariantCurveChart({
 
   return (
     <div className="curve-chart-shell">
+      <div className="curve-chart-heading">
+        <div><strong>单位仓位累计收益</strong><span>固定数量 · 非复利</span></div>
+        <span>下方为策略回撤</span>
+      </div>
       <div ref={ref} className="curve-canvas" style={{ height }} />
       {showLegend && series.length > 0 && (
         <div className="curve-legend">
@@ -609,7 +721,8 @@ function MultiVariantCurveChart({
                 <strong>{item.label}</strong>
               </div>
               <div className="curve-series-metrics">
-                累计收益 {formatReturnPct(item.totalReturn, 2)}
+                <span>累计 {formatReturnPct(item.totalReturn, 2)}</span>
+                <span>回撤 {formatReturnPct(item.maxDrawdown, 2)}</span>
               </div>
             </div>
           ))}
@@ -732,7 +845,7 @@ function LaunchFlowPage({
 }) {
   const fallbackSourceFiles = SOURCE_FILES.map((name) => ({ name }));
   const [sourceFiles, setSourceFiles] = useState<SourceFile[]>(fallbackSourceFiles);
-  const [inputMode, setInputMode] = useState<"natural_language" | "manual_code">("natural_language");
+  const [inputMode, setInputMode] = useState<"natural_language" | "manual_code" | "local_code">("natural_language");
   const [selectedFile, setSelectedFile] = useState(SOURCE_FILES[0] || "");
   const [sourceText, setSourceText] = useState("");
   const [savedSourceText, setSavedSourceText] = useState("");
@@ -740,10 +853,13 @@ function LaunchFlowPage({
   const [newSourceFilename, setNewSourceFilename] = useState("");
   const [manualStrategyName, setManualStrategyName] = useState("");
   const [manualStrategyCode, setManualStrategyCode] = useState("");
+  const [localStrategyFiles, setLocalStrategyFiles] = useState<LocalStrategyFile[]>([]);
+  const [selectedLocalPath, setSelectedLocalPath] = useState("");
+  const localFolderInputRef = useRef<HTMLInputElement>(null);
   const [vtSymbolInput, setVtSymbolInput] = useState("511380.SSE");
   const [interval, setInterval] = useState("1m");
   const [startDate, setStartDate] = useState("2023-01-01");
-  const [endDate, setEndDate] = useState("2025-12-31");
+  const [endDate, setEndDate] = useState(() => new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Shanghai" }));
   const [rate, setRate] = useState<number | null>(0.000045);
   const [slippage, setSlippage] = useState<number | null>(0.002);
   const [loadingResearch, setLoadingResearch] = useState(false);
@@ -753,7 +869,11 @@ function LaunchFlowPage({
   const isSourceDirty = !isCreatingSource && Boolean(selectedFile) && sourceText !== savedSourceText;
   const canRunNaturalLanguage = Boolean(selectedFile && sourceText.trim()) && !isCreatingSource && !isSourceDirty;
   const canRunManualCode = Boolean(manualStrategyName.trim() && manualStrategyCode.trim());
-  const canRunSource = inputMode === "manual_code" ? canRunManualCode : canRunNaturalLanguage;
+  const selectedLocalFile = localStrategyFiles.find((file) => file.relativePath === selectedLocalPath);
+  const canRunLocalCode = Boolean(manualStrategyName.trim() && selectedLocalFile?.code.trim());
+  const canRunSource = inputMode === "natural_language"
+    ? canRunNaturalLanguage
+    : inputMode === "local_code" ? canRunLocalCode : canRunManualCode;
   const mountedRef = useRef(true);
 
   useEffect(() => {
@@ -890,6 +1010,33 @@ function LaunchFlowPage({
     }
   }
 
+  async function loadLocalStrategyFile(event: React.ChangeEvent<HTMLInputElement>) {
+    const inputFiles = Array.from(event.target.files || []);
+    const file = inputFiles[0];
+    if (!file || !file.name.toLowerCase().endsWith(".py")) {
+      setLocalStrategyFiles([]);
+      setSelectedLocalPath("");
+      message.warning("请选择 .py 策略文件");
+      event.target.value = "";
+      return;
+    }
+    try {
+      const loaded: LocalStrategyFile[] = [{
+        name: file.name,
+        relativePath: file.name,
+        code: await file.text()
+      }];
+      setLocalStrategyFiles(loaded);
+      setSelectedLocalPath(loaded[0].relativePath);
+      setManualStrategyName(loaded[0].name.replace(/\.py$/i, ""));
+      message.success(`已读取策略文件：${file.name}`);
+    } catch (error) {
+      message.error(`读取本地策略失败：${String(error)}`);
+    } finally {
+      event.target.value = "";
+    }
+  }
+
   async function runResearch() {
     const parsedVtSymbol = parseLaunchVtSymbol(vtSymbolInput);
     if (!parsedVtSymbol) {
@@ -897,16 +1044,17 @@ function LaunchFlowPage({
       return;
     }
     const { symbol, exchange } = parsedVtSymbol;
-    const isManualCodeMode = inputMode === "manual_code";
-    if (isManualCodeMode && !manualStrategyName.trim()) {
+    const isCodeMode = inputMode === "manual_code" || inputMode === "local_code";
+    const strategyCode = inputMode === "local_code" ? selectedLocalFile?.code || "" : manualStrategyCode;
+    if (isCodeMode && !manualStrategyName.trim()) {
       message.warning("请先填写策略名称");
       return;
     }
-    if (isManualCodeMode && !manualStrategyCode.trim()) {
-      message.warning("请先粘贴完整 strategy.py 代码");
+    if (isCodeMode && !strategyCode.trim()) {
+      message.warning(inputMode === "local_code" ? "请先选择包含 .py 策略的本地文件夹" : "请先粘贴完整 strategy.py 代码");
       return;
     }
-    if (!isManualCodeMode && !canRunNaturalLanguage) {
+    if (!isCodeMode && !canRunNaturalLanguage) {
       message.warning("启动前请先保存当前文本");
       return;
     }
@@ -916,20 +1064,20 @@ function LaunchFlowPage({
     const startedAt = new Date().toISOString();
     onWorkflowChange({
       stageKey: "generation",
-      message: isManualCodeMode ? "已开始登记策略代码，正在创建 strategy.py。" : "已开始生成，正在创建 strategy.py。",
+      message: isCodeMode ? "正在登记策略代码并创建 strategy.py。" : "正在根据自然语言生成 strategy.py。",
       startedAt,
       isRunning: true,
       error: null,
       downloadDiagnostics: null
     });
-    if (!isManualCodeMode) onOpenGenerated();
+    if (!isCodeMode) onOpenGenerated();
 
     try {
       let autoDownloaded = false;
       let generationPayload: any = null;
       let strategyId = "";
 
-      if (!isManualCodeMode) {
+      if (!isCodeMode) {
         generationPayload = await generateStrategy(selectedFile);
         onGenerated(generationPayload);
         await refreshTasks();
@@ -968,13 +1116,13 @@ function LaunchFlowPage({
 
       onWorkflowChange({
         stageKey: "backtest",
-        message: isManualCodeMode ? "策略代码已登记，正在运行 baseline 回测。" : "策略已生成，正在运行 baseline 回测。"
+        message: isCodeMode ? "策略代码已登记，正在运行 baseline 回测。" : "策略已生成，正在运行 baseline 回测。"
       });
 
-      const payload = isManualCodeMode
+      const payload = isCodeMode
         ? await createResearchBaselineFromCode({
             strategy_name: manualStrategyName.trim(),
-            strategy_code: manualStrategyCode,
+            strategy_code: strategyCode,
             symbol,
             exchange,
             interval,
@@ -1022,7 +1170,7 @@ function LaunchFlowPage({
         error: null
       });
       message.success(autoDownloaded ? "缺失行情已下载，研究流程已创建" : "研究流程已创建");
-      if (isManualCodeMode) onOpenOptimize();
+      if (isCodeMode) onOpenOptimize();
     } catch (error) {
       setLaunchError({ error: String(error) });
       onWorkflowChange({
@@ -1063,6 +1211,7 @@ function LaunchFlowPage({
               <div className="field-actions">
                 <button className={`mini-button ${inputMode === "natural_language" ? "is-active" : ""}`} type="button" onClick={() => setInputMode("natural_language")}>{zh.naturalLanguageMode}</button>
                 <button className={`mini-button ${inputMode === "manual_code" ? "is-active" : ""}`} type="button" onClick={() => setInputMode("manual_code")}>{zh.manualCodeMode}</button>
+                <button className={`mini-button ${inputMode === "local_code" ? "is-active" : ""}`} type="button" onClick={() => setInputMode("local_code")}>{zh.localCodeMode}</button>
               </div>
             </section>
 
@@ -1129,6 +1278,43 @@ function LaunchFlowPage({
               </>
             )}
 
+            {inputMode === "local_code" && (
+              <>
+                <section className="field span-2">
+                  <div className="field-head">
+                    <span>本地策略文件</span>
+                    <span className="meta-inline">直接选择一个 .py 策略文件</span>
+                  </div>
+                  <input
+                    ref={localFolderInputRef}
+                    type="file"
+                    accept=".py,text/x-python"
+                    onChange={loadLocalStrategyFile}
+                    style={{ display: "none" }}
+                  />
+                  <div className="inline-input-row">
+                    <Button onClick={() => localFolderInputRef.current?.click()}>选择 .py 文件</Button>
+                    <span className="meta-inline">
+                      {selectedLocalFile ? `已选择：${selectedLocalFile.name}` : "尚未选择策略文件"}
+                    </span>
+                  </div>
+                </section>
+                <label className="field span-2">
+                  <span>{zh.strategyNameInput}</span>
+                  <Input value={manualStrategyName} onChange={(event) => setManualStrategyName(event.target.value)} placeholder="选择文件后自动使用文件名" />
+                </label>
+                {selectedLocalFile && (
+                  <section className="field span-2">
+                    <div className="field-head">
+                      <span>代码预览</span>
+                      <span className="meta-inline">{selectedLocalFile.relativePath}</span>
+                    </div>
+                    <Input.TextArea rows={12} value={selectedLocalFile.code} readOnly />
+                  </section>
+                )}
+              </>
+            )}
+
             <section className="pipeline-config-strip span-2">
               <div className="field-head pipeline-config-head">
                 <span>{zh.backtestConfig}</span>
@@ -1166,6 +1352,90 @@ function LaunchFlowPage({
   );
 }
 
+type CurveControlItem = {
+  key: string;
+  label: string;
+  type: "strategy" | "benchmark";
+  value?: number | null;
+  detail?: string;
+};
+
+function CurveControls({
+  items,
+  visibleKeys,
+  startDate,
+  endDate,
+  bounds,
+  onToggle,
+  onSelectAll,
+  onClear,
+  onStartDateChange,
+  onEndDateChange,
+  onShortcut
+}: {
+  items: CurveControlItem[];
+  visibleKeys: string[];
+  startDate: string;
+  endDate: string;
+  bounds: { min: string; max: string };
+  onToggle: (key: string) => void;
+  onSelectAll: () => void;
+  onClear: () => void;
+  onStartDateChange: (value: string) => void;
+  onEndDateChange: (value: string) => void;
+  onShortcut: (range: "3m" | "6m" | "1y" | "all") => void;
+}) {
+  return (
+    <div className="curve-toolbar">
+      <div className="curve-toolbar-meta">
+        <span>已显示 {visibleKeys.length} / {items.length} 条</span>
+        <button type="button" className="curve-toolbar-button" onClick={onSelectAll}>全选</button>
+        <button type="button" className="curve-toolbar-button" onClick={onClear}>清空</button>
+      </div>
+      <div className="curve-pill-row">
+        {items.map((item, index) => {
+          const active = visibleKeys.includes(item.key);
+          const previewSeries: NormalizedCurveSeries = {
+            key: item.key,
+            label: item.label,
+            type: item.type,
+            points: [],
+            drawdownPoints: [],
+            totalReturn: item.value ?? 0,
+            maxDrawdown: 0
+          };
+          const color = curveSeriesColor(previewSeries, index);
+          return (
+            <button type="button" key={item.key} className={`curve-pill ${active ? "is-active" : ""}`} onClick={() => onToggle(item.key)} aria-pressed={active}>
+              <span className={`curve-swatch ${item.type === "benchmark" ? "is-dashed" : ""}`} style={item.type === "benchmark" ? { borderLeftColor: color } : { background: color }} />
+              <span className="curve-pill-copy">
+                <strong>{item.label}</strong>
+                <small>{item.detail || formatReturnPct(item.value, 2)}</small>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+      <div className="curve-date-bar">
+        <label className="curve-date-field">
+          <span>开始</span>
+          <Input type="date" value={startDate} min={bounds.min || undefined} max={endDate || bounds.max || undefined} onChange={(event) => onStartDateChange(event.target.value)} />
+        </label>
+        <label className="curve-date-field">
+          <span>结束</span>
+          <Input type="date" value={endDate} min={startDate || bounds.min || undefined} max={bounds.max || undefined} onChange={(event) => onEndDateChange(event.target.value)} />
+        </label>
+        <div className="curve-shortcuts">
+          <button type="button" className="curve-shortcut-button" onClick={() => onShortcut("3m")}>近3月</button>
+          <button type="button" className="curve-shortcut-button" onClick={() => onShortcut("6m")}>近6月</button>
+          <button type="button" className="curve-shortcut-button" onClick={() => onShortcut("1y")}>近1年</button>
+          <button type="button" className="curve-shortcut-button" onClick={() => onShortcut("all")}>全部</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function StrategyGenerationPage({
   lastGenerated,
   lastResearch,
@@ -1185,6 +1455,9 @@ function StrategyGenerationPage({
   const [selectedRunId, setSelectedRunId] = useState("");
   const [selectedRunDetail, setSelectedRunDetail] = useState<any>(null);
   const [curveRows, setCurveRows] = useState<any[]>([]);
+  const [visibleCurveKeys, setVisibleCurveKeys] = useState<string[]>(["baseline", "buy_hold"]);
+  const [curveStartDate, setCurveStartDate] = useState("");
+  const [curveEndDate, setCurveEndDate] = useState("");
   const latestTask = tasks[0];
   const workflowRunId = lastResearch?.baseline?.run?.run_id || "";
   const generationPayload = lastResearch?.generation || lastGenerated;
@@ -1202,7 +1475,19 @@ function StrategyGenerationPage({
     selectedRunDetail?.baseline_trades_count
     ?? (Array.isArray(lastResearch?.backtest?.trades) ? lastResearch.backtest.trades.length : NaN)
   );
-  const normalizedSummary = useMemo(() => curveSummary(curveRows), [curveRows]);
+  const curveDateBounds = useMemo(() => curveDateBoundsForRows(curveRows), [curveRows]);
+  const filteredCurveRows = useMemo(() => clampDateRange(curveRows, curveStartDate, curveEndDate), [curveEndDate, curveRows, curveStartDate]);
+  const normalizedSummary = useMemo(() => curveSummary(filteredCurveRows), [filteredCurveRows]);
+  const curveControlItems = useMemo<CurveControlItem[]>(() => [
+    { key: "baseline", label: "Baseline", type: "strategy", value: normalizedSummary.strategy?.totalReturn },
+    { key: "buy_hold", label: "Buy & Hold", type: "benchmark", value: normalizedSummary.buyHold?.totalReturn }
+  ], [normalizedSummary]);
+
+  function applyGenerationCurveShortcut(range: "3m" | "6m" | "1y" | "all") {
+    const next = shortcutDateRange(curveDateBounds, range);
+    setCurveStartDate(next.start);
+    setCurveEndDate(next.end);
+  }
   const researchError = workflowUi.error || (lastResearch?.error ? lastResearch : null);
   const researchMissingRanges = extractMissingRanges(researchError?.backtest);
   const downloadMissingRanges = extractMissingRanges(workflowUi.downloadDiagnostics);
@@ -1392,7 +1677,22 @@ function StrategyGenerationPage({
               <p>展示 fixed size = 1 下，按当日 net_pnl / 昨收计算并逐日累加后的收益走势。</p>
             </div>
           </div>
-          <div className="library-curve-panel unified-curve-panel"><CurveChart rows={curveRows} height={420} /></div>
+          <CurveControls
+            items={curveControlItems}
+            visibleKeys={visibleCurveKeys}
+            startDate={curveStartDate}
+            endDate={curveEndDate}
+            bounds={curveDateBounds}
+            onToggle={(key) => setVisibleCurveKeys((current) => current.includes(key) ? current.filter((item) => item !== key) : [...current, key])}
+            onSelectAll={() => setVisibleCurveKeys(curveControlItems.map((item) => item.key))}
+            onClear={() => setVisibleCurveKeys([])}
+            onStartDateChange={setCurveStartDate}
+            onEndDateChange={setCurveEndDate}
+            onShortcut={applyGenerationCurveShortcut}
+          />
+          {visibleCurveKeys.length > 0
+            ? <div className="library-curve-panel unified-curve-panel"><MultiVariantCurveChart curves={{ baseline: filteredCurveRows }} visibleKeys={visibleCurveKeys} labels={{ baseline: "Baseline" }} showLegend={false} height={420} /></div>
+            : <div className="empty-state">请选择至少一条曲线。</div>}
         </section>
       )}
 
@@ -1410,7 +1710,7 @@ function StrategyGenerationPage({
             <div className="library-metric-card positive"><span>策略累计收益</span><strong>{normalizedSummary.strategy ? formatReturnPct(normalizedSummary.strategy.totalReturn, 2) : "-"}</strong></div>
             <div className="library-metric-card"><span>buy & hold</span><strong>{normalizedSummary.buyHold ? formatReturnPct(normalizedSummary.buyHold.totalReturn, 2) : "-"}</strong></div>
             <div className={`library-metric-card ${Number(normalizedSummary.excess) >= 0 ? "positive" : "negative"}`}><span>超额收益</span><strong>{normalizedSummary.excess === null ? "-" : formatReturnPct(normalizedSummary.excess, 2)}</strong></div>
-            <div className="library-metric-card negative"><span>{zh.drawdown}</span><strong>{formatPercent(drawdownMetricValue(selectedMetrics))}</strong></div>
+            <div className="library-metric-card negative"><span>{zh.drawdown}</span><strong>{normalizedSummary.strategy ? formatReturnPct(normalizedSummary.strategy.maxDrawdown, 2) : "-"}</strong></div>
             <div className="library-metric-card"><span>交易次数</span><strong>{Number.isFinite(tradeCount) ? String(tradeCount) : "-"}</strong></div>
             <div className="library-metric-card"><span>运行版本</span><strong>{selectedRunId || "-"}</strong></div>
             <div className="library-metric-card"><span>文本来源</span><strong>{selectedStrategy.source_filename || selectedStrategy.strategy_id || "-"}</strong></div>
@@ -1611,10 +1911,9 @@ function ParameterOptimizationPage({
       .flatMap((rows) => rows.map((row) => normalizeDateKey(rowDate(row))))
       .filter(Boolean)
       .sort();
-    return {
-      min: dates[0] || "",
-      max: dates[dates.length - 1] || ""
-    };
+    const today = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Shanghai" });
+    const dataMax = dates[dates.length - 1] || "";
+    return { min: dates[0] || "", max: dataMax > today ? dataMax : today };
   }, [variantCurves]);
   const filteredVariantCurves = useMemo(
     () => Object.fromEntries(Object.entries(variantCurves).map(([name, rows]) => [name, clampDateRange(rows, curveStartDate, curveEndDate)])),
@@ -1747,7 +2046,7 @@ function ParameterOptimizationPage({
     { title: "超额收益", dataIndex: "excess_return", width: 120, render: (value) => formatReturnPct(value, 2) },
     { title: zh.sharpe, dataIndex: "sharpe", width: 110, render: (value) => formatNumber(value, 2) },
     { title: "交易数", dataIndex: "trade_count", width: 110, render: (value) => Number.isFinite(Number(value)) ? String(value) : "-" },
-    { title: "最大回撤", dataIndex: "max_drawdown", width: 120, render: (value) => formatPercent(value, 2) }
+    { title: "最大回撤", dataIndex: "max_drawdown", width: 120, render: (value) => formatReturnPct(value, 2) }
   ];
 
   const performanceRows = useMemo(() => {
@@ -1773,7 +2072,7 @@ function ParameterOptimizationPage({
         excess_return: summary.excess,
         sharpe: metrics.sharpe ?? metrics.sharpe_ratio,
         trade_count: tradeCount,
-        max_drawdown: drawdownMetricValue(metrics)
+        max_drawdown: summary.strategy?.maxDrawdown
       };
     });
   }, [baselineMetrics, curveVariantNames, optimizationMatchesRun, optimizationResult, runDetail, runId, variantCurves]);
@@ -1927,44 +2226,19 @@ function ParameterOptimizationPage({
             <p>`manual_grid` 只展示最新一条同名结果，界面布局对齐 test1，先看曲线，再看表现。</p>
           </div>
         </div>
-        <div className="curve-toolbar">
-          <div className="curve-toolbar-meta">
-            <span>显示前 {visibleCurveKeys.length} 条</span>
-            <button type="button" className="curve-toolbar-button" onClick={() => setVisibleCurveKeys(curveSelectorItems.map((item) => item.key))}>全选</button>
-            <button type="button" className="curve-toolbar-button" onClick={() => setVisibleCurveKeys([])}>清空</button>
-          </div>
-          <div className="curve-pill-row">
-            {curveSelectorItems.map((item, index) => {
-              const active = visibleCurveKeys.includes(item.key);
-              const previewSeries = { key: item.key, label: item.label, type: item.type, points: [], totalReturn: item.value ?? 0 } as NormalizedCurveSeries;
-              return (
-                <button type="button" key={item.key} className={`curve-pill ${active ? "is-active" : ""}`} onClick={() => toggleCurveVisibility(item.key)}>
-                  <span className={`curve-swatch ${item.type === "benchmark" ? "is-dashed" : ""}`} style={item.type === "benchmark" ? { borderLeftColor: curveSeriesColor(previewSeries, index) } : { background: curveSeriesColor(previewSeries, index) }} />
-                  <span className="curve-pill-copy">
-                    <strong>{item.label}</strong>
-                    <small>{formatReturnPct(item.value, 2)}</small>
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-          <div className="curve-date-bar">
-            <label className="curve-date-field">
-              <span>开始</span>
-              <Input type="date" value={curveStartDate} min={curveDateBounds.min || undefined} max={curveEndDate || curveDateBounds.max || undefined} onChange={(event) => setCurveStartDate(event.target.value)} />
-            </label>
-            <label className="curve-date-field">
-              <span>结束</span>
-              <Input type="date" value={curveEndDate} min={curveStartDate || curveDateBounds.min || undefined} max={curveDateBounds.max || undefined} onChange={(event) => setCurveEndDate(event.target.value)} />
-            </label>
-            <div className="curve-shortcuts">
-              <button type="button" className="curve-shortcut-button" onClick={() => applyCurveShortcut("3m")}>近3月</button>
-              <button type="button" className="curve-shortcut-button" onClick={() => applyCurveShortcut("6m")}>近6月</button>
-              <button type="button" className="curve-shortcut-button" onClick={() => applyCurveShortcut("1y")}>近1年</button>
-              <button type="button" className="curve-shortcut-button is-active" onClick={() => applyCurveShortcut("all")}>全部</button>
-            </div>
-          </div>
-        </div>
+        <CurveControls
+          items={curveSelectorItems}
+          visibleKeys={visibleCurveKeys}
+          startDate={curveStartDate}
+          endDate={curveEndDate}
+          bounds={curveDateBounds}
+          onToggle={toggleCurveVisibility}
+          onSelectAll={() => setVisibleCurveKeys(curveSelectorItems.map((item) => item.key))}
+          onClear={() => setVisibleCurveKeys([])}
+          onStartDateChange={setCurveStartDate}
+          onEndDateChange={setCurveEndDate}
+          onShortcut={applyCurveShortcut}
+        />
         {visibleCurveKeys.length > 0 && curveVariantNames.length > 0 ? (
           <div className="library-curve-panel unified-curve-panel"><MultiVariantCurveChart curves={filteredVariantCurves} visibleKeys={visibleCurveKeys} showLegend={false} height={420} /></div>
         ) : (
@@ -2094,6 +2368,11 @@ function PoolPage({
   const [comparison, setComparison] = useState<any>({ items: [], benchmark: { curve: [] }, diagnostics: [] });
   const [loading, setLoading] = useState(false);
   const [rerunning, setRerunning] = useState(false);
+  const [rerunProgress, setRerunProgress] = useState(0);
+  const [rerunMessage, setRerunMessage] = useState("");
+  const [showBenchmark, setShowBenchmark] = useState(true);
+  const [curveStartDate, setCurveStartDate] = useState("");
+  const [curveEndDate, setCurveEndDate] = useState("");
 
   function itemTags(item: any): string[] {
     try {
@@ -2194,16 +2473,37 @@ function PoolPage({
       return;
     }
     setRerunning(true);
+    setRerunProgress(0.02);
+    setRerunMessage("正在创建重跑任务");
+    const startedAt = Date.now();
+    const progressTimer = window.setInterval(() => {
+      listTasks()
+        .then((payload) => {
+          const task = (payload.tasks || []).find((item: any) => {
+            if (item.task_type !== "pool_rebuild") return false;
+            const createdAt = new Date(String(item.created_at || "")).getTime();
+            return !Number.isFinite(createdAt) || createdAt >= startedAt - 5000;
+          });
+          if (!task) return;
+          setRerunProgress(Math.max(0.02, Math.min(1, Number(task.progress || 0))));
+          setRerunMessage(String(task.message || "正在重跑策略"));
+        })
+        .catch(() => undefined);
+    }, 700);
     try {
       const today = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Shanghai" });
       const payload = await rerunPool(selectedIds, today);
       setComparison(payload);
+      setRerunProgress(1);
+      setRerunMessage("策略池重跑完成");
       await refreshTasks();
       const rerunEnd = String(payload?.rerun_end || "").trim();
       message.success(rerunEnd ? `已重跑到 ${formatDate(rerunEnd)}` : "已完成重跑");
     } catch (error) {
+      setRerunMessage(`重跑失败：${String(error)}`);
       message.error(String(error));
     } finally {
+      window.clearInterval(progressTimer);
       setRerunning(false);
     }
   }
@@ -2244,8 +2544,32 @@ function PoolPage({
 
   const compareItems = comparison?.items || [];
   const compareCurves = useMemo(() => Object.fromEntries(compareItems.map((item: any) => [item.pool_item_id, item.curve || []])), [compareItems]);
+  const poolCurveDateBounds = useMemo(
+    () => curveDateBoundsForRows(Object.values(compareCurves).flatMap((rows: any) => rows)),
+    [compareCurves]
+  );
+  const filteredCompareCurves = useMemo(
+    () => Object.fromEntries(Object.entries(compareCurves).map(([key, rows]) => [key, clampDateRange(rows as any[], curveStartDate, curveEndDate)])),
+    [compareCurves, curveEndDate, curveStartDate]
+  );
   const compareLabels = useMemo(() => Object.fromEntries(compareItems.map((item: any) => [item.pool_item_id, compareItemLabel(item)])), [compareItems]);
-  const selectedCurveKeys = useMemo(() => selectedIds.map((id) => `variant:${id}`), [selectedIds]);
+  const poolVisibleKeys = useMemo(() => [...selectedIds, ...(showBenchmark ? ["buy_hold"] : [])], [selectedIds, showBenchmark]);
+  const poolCurveControlItems = useMemo<CurveControlItem[]>(() => [
+    ...candidateItems.map((item) => ({
+      key: String(item.pool_item_id),
+      label: poolItemLabel(item),
+      type: "strategy" as const,
+      value: curveSummary(item?.curve || []).strategy?.totalReturn,
+      detail: `${item.vt_symbol || "-"} · ${formatReturnPct(curveSummary(item?.curve || []).strategy?.totalReturn, 2)}`
+    })),
+    { key: "buy_hold", label: "Buy & Hold", type: "benchmark" as const, value: curveSummary(candidateItems[0]?.curve || []).buyHold?.totalReturn }
+  ], [candidateItems]);
+
+  function applyPoolCurveShortcut(range: "3m" | "6m" | "1y" | "all") {
+    const next = shortcutDateRange(poolCurveDateBounds, range);
+    setCurveStartDate(next.start);
+    setCurveEndDate(next.end);
+  }
   const comparisonColumns: ColumnsType<any> = useMemo(
     () => [
       {
@@ -2262,7 +2586,7 @@ function PoolPage({
       { title: "收益", render: (_, record) => formatPercent(metricValue(record.metrics, "total_return", "annual_return")) },
       { title: "年化", render: (_, record) => formatPercent(metricValue(record.metrics, "annual_return", "total_return")) },
       { title: zh.sharpe, render: (_, record) => formatNumber(metricValue(record.metrics, "sharpe", "sharpe_ratio")) },
-      { title: "最大回撤", render: (_, record) => formatPercent(drawdownMetricValue(record.metrics)) },
+      { title: "最大回撤", render: (_, record) => formatReturnPct(curveSummary(record?.curve || []).strategy?.maxDrawdown) },
       { title: "buy & hold", render: (_, record) => formatReturnPct(curveSummary(record?.curve || []).buyHold?.totalReturn) },
       { title: "超额收益", render: (_, record) => formatReturnPct(excessReturn(record)) }
     ],
@@ -2270,6 +2594,7 @@ function PoolPage({
   );
 
   const metrics = detail?.result?.metrics || detail?.result || {};
+  const detailCurveSummary = curveSummary(detail?.daily_results?.data || []);
   const params = detail?.config?.parameters || detail?.manifest?.parameters || detail?.result?.params || {};
   const trades = detail?.trades?.data || [];
   const tradeColumns = (detail?.trades?.columns || Object.keys(trades[0] || {})).slice(0, 8).map((column: string) => ({ title: column, dataIndex: column }));
@@ -2327,41 +2652,34 @@ function PoolPage({
               ? `当前对比结果已重跑到 ${formatDate(comparison.rerun_end)}。`
               : "当前展示的是已保存的策略池快照曲线。"}
           </span>
-        </div>
-        <div className="curve-toolbar">
-          <div className="curve-toolbar-meta">
-            <span>显示前 {candidateItems.length} 条</span>
-            <button type="button" className="curve-toolbar-button" onClick={() => setSelectedIds(candidateItems.map((item) => String(item.pool_item_id)))}>全选</button>
-            <button type="button" className="curve-toolbar-button" onClick={() => setSelectedIds([])}>清空</button>
-          </div>
-        </div>
-        <div className="curve-pill-row strategy-pool-check-grid">
-          {candidateItems.length ? candidateItems.map((item, index) => {
-            const id = String(item.pool_item_id);
-            const active = selectedIds.includes(id);
-            const swatchColor = curveColorForKey(`variant:${id}`, compareItemLabel(item), "strategy", selectedCurveKeys, index);
-            return (
-              <button
-                type="button"
-                key={id}
-                className={`curve-pill strategy-pool-pill ${active ? "is-active" : ""}`}
-                onClick={() => togglePoolItem(id)}
-                aria-pressed={active}
-              >
-                <span className="curve-swatch" style={{ background: swatchColor }} />
-                <span className="curve-pill-copy">
-                  <strong>{poolItemLabel(item)}</strong>
-                  <small>{item.vt_symbol || "-"} | {formatPercent(item.annual_return)} | 夏普 {formatNumber(item.sharpe)}</small>
-                </span>
-              </button>
-            );
-          }) : <div className="empty-state strategy-pool-empty">当前筛选条件下没有匹配的策略池条目。</div>}
+          {(rerunning || rerunProgress > 0) && (
+            <div className={`pool-rerun-progress ${rerunning ? "is-running" : "is-complete"}`}>
+              <div className="pool-rerun-progress-head">
+                <strong>{rerunMessage || "正在准备重跑"}</strong>
+                <span>{Math.round(rerunProgress * 100)}%</span>
+              </div>
+              <div className="pool-rerun-progress-track"><span style={{ width: `${Math.round(rerunProgress * 100)}%` }} /></div>
+            </div>
+          )}
         </div>
       </section>
 
       <section className="band library-shell">
         <div className="library-section-head"><div><h3>累计收益对比</h3><p>已选择 {selectedIds.length} 个策略，展示其按昨收归一并逐日累加后的收益曲线。</p></div><span className={statusClass(compareItems.length ? "completed" : "pending")}>{compareItems.length ? "ready" : "empty"}</span></div>
-        {compareItems.length ? <div className="library-curve-panel unified-curve-panel"><MultiVariantCurveChart curves={compareCurves} visibleKeys={[...selectedIds, "buy_hold"]} labels={compareLabels} height={420} /></div> : <div className="empty-state">请至少选择一个策略。</div>}
+        <CurveControls
+          items={poolCurveControlItems}
+          visibleKeys={poolVisibleKeys}
+          startDate={curveStartDate}
+          endDate={curveEndDate}
+          bounds={poolCurveDateBounds}
+          onToggle={(key) => key === "buy_hold" ? setShowBenchmark((current) => !current) : togglePoolItem(key)}
+          onSelectAll={() => { setSelectedIds(candidateItems.map((item) => String(item.pool_item_id))); setShowBenchmark(true); }}
+          onClear={() => { setSelectedIds([]); setShowBenchmark(false); }}
+          onStartDateChange={setCurveStartDate}
+          onEndDateChange={setCurveEndDate}
+          onShortcut={applyPoolCurveShortcut}
+        />
+        {compareItems.length ? <div className="library-curve-panel unified-curve-panel"><MultiVariantCurveChart curves={filteredCompareCurves} visibleKeys={poolVisibleKeys} labels={compareLabels} showLegend={false} height={420} /></div> : <div className="empty-state">请至少选择一个策略。</div>}
         {(comparison?.diagnostics || []).length > 0 && <div className="diagnostic-list">{comparison.diagnostics.map((item: any, index: number) => <Tag color="orange" key={`${item.message}-${index}`}>{item.message}</Tag>)}</div>}
       </section>
 
@@ -2378,7 +2696,7 @@ function PoolPage({
           <div className="library-metric-grid">
             <div className="library-metric-card"><span>{zh.sharpe}</span><strong>{formatNumber(detail.pool_item?.sharpe ?? metrics.sharpe ?? metrics.sharpe_ratio)}</strong></div>
             <div className="library-metric-card positive"><span>{zh.return}</span><strong>{formatPercent(detail.pool_item?.annual_return ?? metrics.annual_return ?? metrics.total_return)}</strong></div>
-            <div className="library-metric-card negative"><span>{zh.drawdown}</span><strong>{formatPercent(drawdownMetricValue(metrics) ?? detail.pool_item?.max_drawdown)}</strong></div>
+            <div className="library-metric-card negative"><span>{zh.drawdown}</span><strong>{detailCurveSummary.strategy ? formatReturnPct(detailCurveSummary.strategy.maxDrawdown, 2) : "-"}</strong></div>
             <div className="library-metric-card"><span>卡玛比率</span><strong>{formatNumber(detail.pool_item?.calmar ?? metrics.calmar)}</strong></div>
           </div>
           <div className="detail-grid">

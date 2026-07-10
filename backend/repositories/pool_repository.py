@@ -88,6 +88,32 @@ def get_pool_item(pool_item_id: str) -> dict[str, Any] | None:
     return dict(row) if row is not None else None
 
 
+def update_pool_item_metrics(
+    pool_item_id: str,
+    *,
+    annual_return: float | None,
+    max_drawdown: float | None,
+    sharpe: float | None,
+    calmar: float | None,
+) -> dict[str, Any]:
+    with get_app_db_connection() as connection:
+        cursor = connection.execute(
+            """
+            UPDATE pool_items
+            SET annual_return = ?, max_drawdown = ?, sharpe = ?, calmar = ?
+            WHERE pool_item_id = ?
+            """,
+            (annual_return, max_drawdown, sharpe, calmar, str(pool_item_id)),
+        )
+        connection.commit()
+        if cursor.rowcount == 0:
+            raise KeyError(f"Pool item not found: {pool_item_id}")
+    item = get_pool_item(pool_item_id)
+    if item is None:
+        raise KeyError(f"Pool item not found: {pool_item_id}")
+    return item
+
+
 def list_pool_items(
     keyword: str | None = None,
     vt_symbol: str | None = None,

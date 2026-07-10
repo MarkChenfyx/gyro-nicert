@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from data_manager import market_repository
@@ -37,7 +37,10 @@ def _covers_requested_range(
     if _is_date_only(start_date) and _is_date_only(end_date):
         if observed_start is None or observed_end is None:
             return False
-        return observed_start <= requested_end and observed_end >= requested_start
+        boundary_tolerance = timedelta(days=10)
+        start_covered = observed_start.date() <= (requested_start + boundary_tolerance).date()
+        end_covered = observed_end.date() >= (requested_end - boundary_tolerance).date()
+        return start_covered and end_covered
     return local_start <= requested_start and local_end >= requested_end
 
 

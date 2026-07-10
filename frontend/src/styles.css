@@ -1130,6 +1130,47 @@ textarea {
   font-size: 12px;
 }
 
+.pool-rerun-progress {
+  display: grid;
+  flex: 1 0 100%;
+  gap: 7px;
+  padding-top: 2px;
+}
+
+.pool-rerun-progress-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  color: #334155;
+  font-size: 12px;
+}
+
+.pool-rerun-progress-head strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pool-rerun-progress-track {
+  height: 7px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e2e8f0;
+}
+
+.pool-rerun-progress-track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #2563eb, #0d9488);
+  transition: width 260ms ease;
+}
+
+.pool-rerun-progress.is-complete .pool-rerun-progress-track span {
+  background: #16a34a;
+}
+
 .strategy-pool-check-grid {
   max-height: 260px;
   overflow: auto;
@@ -1222,19 +1263,22 @@ textarea {
 }
 
 .curve-pill-row {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .curve-pill {
   display: flex;
   align-items: center;
-  gap: 10px;
-  min-height: 46px;
-  padding: 8px 12px;
+  flex: 0 1 auto;
+  gap: 8px;
+  min-width: 0;
+  max-width: 280px;
+  min-height: 38px;
+  padding: 5px 10px;
   border: 1px solid rgba(203, 213, 225, 0.95);
-  border-radius: 16px;
+  border-radius: 10px;
   background: rgba(255, 255, 255, 0.94);
   text-align: left;
   cursor: pointer;
@@ -1255,7 +1299,7 @@ textarea {
 
 .curve-pill-copy strong {
   color: #0f172a;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 800;
   white-space: nowrap;
   overflow: hidden;
@@ -1264,7 +1308,7 @@ textarea {
 
 .curve-pill-copy small {
   color: #64748b;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 700;
 }
 
@@ -1308,7 +1352,29 @@ textarea {
 
 .curve-chart-shell {
   display: grid;
-  gap: 12px;
+  gap: 10px;
+}
+
+.curve-chart-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0 2px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.curve-chart-heading > div {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.curve-chart-heading strong {
+  color: #0f172a;
+  font-size: 14px;
+  font-weight: 750;
 }
 
 .curve-canvas {
@@ -1317,26 +1383,20 @@ textarea {
 }
 
 .curve-legend {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .curve-series-card {
-  display: grid;
-  gap: 6px;
-  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 38px;
+  padding: 7px 10px;
   border: 1px solid rgba(203, 213, 225, 0.9);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.78);
-}
-
-.curve-series-card.positive {
-  background: rgba(240, 253, 250, 0.72);
-}
-
-.curve-series-card.negative {
-  background: rgba(254, 242, 242, 0.72);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.92);
 }
 
 .curve-series-head {
@@ -1356,13 +1416,16 @@ textarea {
 }
 
 .curve-series-metrics {
+  display: flex;
+  gap: 8px;
   color: #64748b;
   font-size: 12px;
+  white-space: nowrap;
 }
 
 .curve-swatch {
   width: 8px;
-  height: 24px;
+  height: 20px;
   flex: 0 0 8px;
   border-radius: 999px;
   background: #17b8b1;
@@ -1371,13 +1434,13 @@ textarea {
 .curve-swatch.is-dashed {
   width: 0;
   background: transparent;
-  border-left: 2px dashed #eab308;
+  border-left: 2px dashed #64748b;
   border-radius: 0;
 }
 
 .curve-pill .curve-swatch {
-  height: 26px;
-  flex-basis: 8px;
+  height: 20px;
+  flex-basis: 6px;
 }
 
 .code-block,

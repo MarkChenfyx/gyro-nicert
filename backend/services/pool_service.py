@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 import csv
 import json
 
@@ -30,6 +30,78 @@ def _read_csv(path: Path) -> dict[str, Any]:
         rows = [dict(row) for row in reader]
         columns = list(reader.fieldnames or [])
     return {"columns": columns, "data": rows}
+
+
+def _write_json_atomic(path: Path, payload: Any) -> None:
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    temporary.replace(path)
+
+
+def _write_csv_atomic(path: Path, rows: list[dict[str, Any]]) -> None:
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    fieldnames: list[str] = []
+    for row in rows:
+        for key in row:
+            if str(key) not in fieldnames:
+                fieldnames.append(str(key))
+    with temporary.open("w", encoding="utf-8", newline="") as handle:
+        if fieldnames:
+            writer = csv.DictWriter(handle, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows({field: row.get(field, "") for field in fieldnames} for row in rows)
+    temporary.replace(path)
+
+
+def _persist_rerun_snapshot(
+    detail: dict[str, Any],
+    *,
+    rerun_end: str,
+    backtest_result: dict[str, Any],
+    curve: list[dict[str, Any]],
+    trades: list[dict[str, Any]],
+) -> None:
+    item = dict(detail.get("pool_item") or {})
+    pool_item_id = _text(item.get("pool_item_id"))
+    pool_path = Path(_text(item.get("pool_path") or detail.get("pool_path")))
+    if not pool_item_id or not pool_path.exists():
+        raise FileNotFoundError(f"pool snapshot unavailable: {pool_item_id or '-'}")
+
+    result_payload = dict(backtest_result)
+    result_payload.pop("daily_results", None)
+    result_payload.pop("trades", None)
+    config = dict(detail.get("config") or {})
+    config.update({"end_date": rerun_end, "last_rerun_at": now_beijing().isoformat(), "last_rerun_end": rerun_end})
+    manifest = dict(detail.get("manifest") or {})
+    manifest.update({"pool_last_rerun_at": now_beijing().isoformat(), "pool_last_rerun_end": rerun_end})
+
+    result_path = pool_path / "result.json"
+    daily_path = pool_path / "daily_results.csv"
+    trades_path = pool_path / "trades.csv"
+    config_path = pool_path / "config.json"
+    manifest_path = pool_path / "manifest.json"
+    _write_json_atomic(result_path, result_payload)
+    _write_csv_atomic(daily_path, curve)
+    _write_csv_atomic(trades_path, trades)
+    _write_json_atomic(config_path, config)
+    _write_json_atomic(manifest_path, manifest)
+
+    metrics = dict(backtest_result.get("metrics") or {})
+    pool_repository.update_pool_item_metrics(
+        pool_item_id,
+        annual_return=_metric(metrics, "annual_return"),
+        max_drawdown=_metric(metrics, "max_drawdown_pct", "max_ddpercent", "max_drawdown"),
+        sharpe=_metric(metrics, "sharpe", "sharpe_ratio"),
+        calmar=_metric(metrics, "calmar", "return_drawdown_ratio"),
+    )
+    for artifact_type, path in (
+        (ArtifactType.RESULT.value, result_path),
+        (ArtifactType.DAILY_RESULTS.value, daily_path),
+        (ArtifactType.TRADES.value, trades_path),
+        (ArtifactType.CONFIG.value, config_path),
+        (ArtifactType.MANIFEST.value, manifest_path),
+    ):
+        _artifact(pool_item_id, artifact_type, path)
 
 
 def _artifact(owner_id: str, artifact_type: str, path: Path | None) -> None:
@@ -195,7 +267,11 @@ def _compare_payload_from_parts(detail: dict[str, Any], *, metrics: dict[str, An
     }
 
 
-def _rerun_payload(detail: dict[str, Any], end_date: str | None = None) -> dict[str, Any]:
+def _rerun_payload(
+    detail: dict[str, Any],
+    end_date: str | None = None,
+    progress_callback: Callable[[float, str], None] | None = None,
+) -> dict[str, Any]:
     item = dict(detail.get("pool_item") or {})
     config = dict(detail.get("config") or {})
     manifest = dict(detail.get("manifest") or {})
@@ -221,6 +297,8 @@ def _rerun_payload(detail: dict[str, Any], end_date: str | None = None) -> dict[
         start_date=rerun_start,
         end_date=rerun_end,
     )
+    if progress_callback:
+        progress_callback(0.12, f"正在检查 {vt_symbol} 行情覆盖")
     if requested_coverage.get("status") != "covered":
         missing_ranges = list(requested_coverage.get("missing_ranges") or [])
         if not missing_ranges:
@@ -230,6 +308,8 @@ def _rerun_payload(detail: dict[str, Any], end_date: str | None = None) -> dict[
             download_end = _date_only(missing.get("end_date"), rerun_end)
             if not download_start or not download_end or download_start > download_end:
                 continue
+            if progress_callback:
+                progress_callback(0.28, f"正在下载 {vt_symbol} 行情 {download_start} → {download_end}")
             download_result = download_service.download_bars(
                 symbol,
                 exchange,
@@ -252,6 +332,8 @@ def _rerun_payload(detail: dict[str, Any], end_date: str | None = None) -> dict[
     if not class_name:
         raise ValueError(f"class_name missing for pool item: {item.get('pool_item_id')}")
 
+    if progress_callback:
+        progress_callback(0.52, f"行情已就绪，正在回测 {vt_symbol}")
     backtest_result = run_backtest(
         strategy_code=strategy_code,
         class_name=class_name,
@@ -274,9 +356,20 @@ def _rerun_payload(detail: dict[str, Any], end_date: str | None = None) -> dict[
     metrics = dict(backtest_result.get("metrics") or {})
     curve = list(backtest_result.get("daily_results") or [])
     trades_rows = list(backtest_result.get("trades") or [])
+    if progress_callback:
+        progress_callback(0.86, f"正在保存 {vt_symbol} 最新回测快照")
+    _persist_rerun_snapshot(
+        detail,
+        rerun_end=rerun_end,
+        backtest_result=backtest_result,
+        curve=curve,
+        trades=trades_rows,
+    )
     payload = _compare_payload_from_parts(detail, metrics=metrics, curve=curve, trades_rows=trades_rows)
     payload["rerun_end"] = rerun_end
     payload["rerun_start"] = rerun_start
+    if progress_callback:
+        progress_callback(0.92, f"{vt_symbol} 回测完成，正在整理结果")
     return payload
 
 
@@ -429,11 +522,12 @@ def rerun_pool_items_to_latest(pool_item_ids: list[str] | None, *, end_date: str
         }
 
     task = task_service.create_task(TaskType.POOL_REBUILD.value, message="Pool rerun queued")
-    task = task_service.mark_running(task["task_id"], message="Rerunning selected pool items")
+    task = task_service.mark_running(task["task_id"], message="正在准备策略池重跑")
     diagnostics: list[dict[str, Any]] = []
     items: list[dict[str, Any]] = []
 
-    for pool_item_id in requested_ids:
+    total_items = len(requested_ids)
+    for item_index, pool_item_id in enumerate(requested_ids):
         try:
             detail = get_pool_item_detail(pool_item_id)
         except FileNotFoundError:
@@ -441,7 +535,13 @@ def rerun_pool_items_to_latest(pool_item_ids: list[str] | None, *, end_date: str
             continue
 
         try:
-            items.append(_rerun_payload(detail, end_date=requested_end_date))
+            item_start = 0.05 + (item_index / total_items) * 0.85
+            item_span = 0.85 / total_items
+
+            def report_item_progress(phase: float, message: str) -> None:
+                task_service.mark_progress(task["task_id"], item_start + item_span * phase, message=message)
+
+            items.append(_rerun_payload(detail, end_date=requested_end_date, progress_callback=report_item_progress))
         except Exception as exc:
             diagnostics.append({"level": "warning", "message": f"pool rerun failed: {pool_item_id} | {exc}", "pool_item_id": pool_item_id})
 
@@ -455,7 +555,8 @@ def rerun_pool_items_to_latest(pool_item_ids: list[str] | None, *, end_date: str
         diagnostics.append(benchmark_diagnostic)
 
     if items:
-        task = task_service.mark_completed(task["task_id"], message="Pool rerun completed")
+        task_service.mark_progress(task["task_id"], 0.96, message="正在汇总曲线与指标")
+        task = task_service.mark_completed(task["task_id"], message="策略池重跑完成")
     else:
         task = task_service.mark_failed(task["task_id"], error="No selected pool items reran successfully", message="Pool rerun failed")
 

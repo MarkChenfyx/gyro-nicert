@@ -1,5 +1,4 @@
 from backtesting.run import _metric_aliases
-from strategy_optimization.legacy_parameter_optimizer import _score
 from strategy_optimization.optimizers.common import score_metrics
 
 
@@ -23,9 +22,3 @@ def test_score_metrics_uses_drawdown_percent_instead_of_cash_value():
     metrics = {"max_drawdown": -1234.5, "max_ddpercent": -6.78}
 
     assert score_metrics(metrics, "drawdown") == -6.78
-
-
-def test_legacy_optimizer_score_uses_drawdown_percent_instead_of_cash_value():
-    metrics = {"max_drawdown": -1234.5, "max_ddpercent": -6.78}
-
-    assert _score(metrics, "drawdown") == -6.78

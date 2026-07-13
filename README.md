@@ -1,181 +1,209 @@
 # gyro_nicert
 
-Phase 1 builds the foundation for a maintainable Quant Research Workbench. This stage only defines the project skeleton, storage contract, SQLite schema, and minimal repository/service tests.
+本地量化研究工作台。它将策略代码生成、市场数据、vn.py CTA 回测、参数优化与策略池放在同一条工作流中。
 
-## Current Structure
+当前版本面向本地单用户研究：浏览器前端只通过 FastAPI 调用后端；行情和业务索引使用 SQLite；真实回测从本地行情库读取，不会在回测过程中访问 RQData。
 
-- `frontend/`: reserved for a future React app.
-- `backend/`: domain enums, path management, repositories, and services.
-- `strategy_generation/`: converts natural-language strategy descriptions into strategy code.
-- `backtesting/`: boundary for backtest engines; Phase 3.5 provides only mock/not-implemented behavior.
-- `strategy_optimization/`: boundary for parameter optimizers; Phase 3.5 provides only mock/not-implemented behavior.
-- `data_manager/`: database connection helpers for app and market SQLite databases.
-- `strategies/`: generated, validated, and template strategy code folders.
-- `storage/runtime/`: temporary run artifacts that may be cleaned.
-- `storage/pool/`: long-lived strategy snapshots that must not depend on runtime files.
-- `scripts/`: operational scripts such as database initialization.
-- `tests/`: storage and task service tests.
+## 已实现能力
 
-## Initialize Databases
+- 自然语言策略生成：保存策略描述文本、调用兼容 OpenAI 的模型服务，生成 vn.py CTA `strategy.py`。
+- 本地策略上传：在工作台直接选择单个 `.py` 文件，读取代码后登记、回测并进入参数优化。
+- 直接粘贴策略代码：粘贴完整 `strategy.py`，后端登记策略后运行 baseline 回测。
+- 数据管理：检查本地行情覆盖范围，按需通过 RQData 下载并写入 SQLite。
+- 真实回测：使用 `vnpy_ctastrategy.BacktestingEngine` 与本地 SQLite K 线数据运行回测。
+- 参数优化：支持自动优化和手动网格搜索，保存优化变体、曲线与成交记录。
+- 策略池：将 run/variant 快照长期保存，支持查看、比较与重跑。
+- 任务与产物：记录策略、任务、run、variant、曲线、成交和池快照的索引关系。
 
-```bash
+## 技术结构
+
+```text
+frontend/                 React + Vite + Ant Design + ECharts
+backend/                  FastAPI、API 路由、服务、仓储与领域模型
+backtesting/              本地行情适配与 vn.py CTA 回测边界
+strategy_generation/      自然语言到 vn.py 策略代码的生成边界
+strategy_optimization/    参数清单、自动优化与手动网格优化
+data_manager/             RQData 下载、本地行情 SQLite 与覆盖范围查询
+strategies/               策略生成、校验和模板目录
+storage/db/               app.sqlite 与 market_data.sqlite
+storage/runtime/          临时 run 产物
+storage/pool/             长期策略池快照
+scripts/                  运维脚本，例如初始化数据库
+tests/                    自动化测试
+```
+
+## 环境要求
+
+- Python 3.11+
+- Node.js 18+
+- npm
+- 可选：vn.py CTA 及其运行依赖（真实回测需要）
+- 可选：RQData 凭据和 `rqdatac`（自动下载行情需要）
+- 可选：兼容 OpenAI 的模型 API Key（自然语言生成需要）
+
+安装 Python 基础依赖：
+
+```powershell
+pip install -e .
+```
+
+真实回测环境还需要安装与你的 vn.py 部署匹配的 `vnpy` 与 `vnpy_ctastrategy`。若使用 RQData 下载行情，还需要安装 `rqdatac`。
+
+## 配置
+
+复制环境变量示例：
+
+```powershell
+Copy-Item .env.example .env
+```
+
+`.env` 支持以下配置：
+
+- `GYRO_LLM_API_KEY`、`GYRO_LLM_BASE_URL`、`GYRO_LLM_MODEL`：自然语言策略生成。
+- `GYRO_RQDATA_USERNAME`、`GYRO_RQDATA_PASSWORD`：RQData 行情下载。
+- `GYRO_VT_SETTING_PATH`：可选的 vn.py `vt_setting.json` 路径。
+
+RQData 凭据查找顺序：
+
+1. `GYRO_RQDATA_USERNAME` / `GYRO_RQDATA_PASSWORD`
+2. `RQDATA_USERNAME` / `RQDATA_PASSWORD`
+3. `GYRO_VT_SETTING_PATH`
+4. 项目或用户目录的 `.vntrader/vt_setting.json`
+
+不要提交 `.env`、RQData 密码或模型 API Key。
+
+## 启动
+
+在项目根目录初始化数据库：
+
+```powershell
 python scripts/init_db.py
 ```
 
-This creates:
+启动后端：
 
-- `storage/db/app.sqlite`
-- `storage/db/market_data.sqlite`
-
-The script is idempotent and uses `CREATE TABLE IF NOT EXISTS`, so rerunning it will not destroy existing data.
-
-## Run Tests
-
-```bash
-pytest tests/test_storage_contract.py tests/test_task_service.py
+```powershell
+python -m uvicorn backend.main:app --reload
 ```
 
-## Start Backend API
+- 健康检查：<http://127.0.0.1:8000/api/health>
+- API 文档：<http://127.0.0.1:8000/docs>
 
-```bash
-uvicorn backend.main:app --reload
-```
+另开一个终端启动前端：
 
-The OpenAPI docs are available at:
-
-- `http://127.0.0.1:8000/docs`
-
-## Start Frontend
-
-```bash
+```powershell
 cd frontend
 npm install
 npm run dev
 ```
 
-Set `VITE_API_BASE_URL` when the backend is not running on `http://127.0.0.1:8000`.
+默认前端地址通常为 <http://localhost:5173>。后端不在 `http://127.0.0.1:8000` 时，设置 `VITE_API_BASE_URL`。
 
-## Runtime vs Pool
+## 工作台使用流程
 
-`storage/runtime` stores temporary run outputs such as `manifest.json`, `input.json`, `config.json`, `strategy.py`, and variant results.
+### 1. 选择策略来源
 
-`storage/pool` stores accepted strategy snapshots. A pool snapshot copies the required runtime artifacts into its own folder so it remains usable after runtime cleanup.
+启动配置提供三种方式：
 
-## Not Included Yet
+1. **自然语言生成**：选择或新建策略描述文本，生成 vn.py CTA 策略代码。
+2. **直接粘贴策略代码**：填写策略名称并粘贴完整 `strategy.py`。
+3. **从本地上传策略代码**：直接选择单个 `.py` 文件，平台读取、预览并登记其代码。
 
-This phase does not implement React, FastAPI routes, real RQData integration, full strategy generation, backtesting, or optimization business flows.
+本地上传和粘贴代码复用相同的后端流程：策略登记 → baseline 回测 → 参数优化页面。
 
-## Phase 2
+### 2. 配置回测
 
-Phase 2 connects the Phase 1 storage contract to SQLite indexes.
+填写：
 
-Repository layer:
+- 标的与交易所，例如 `511380.SSE`
+- 输入周期，例如 `1m`
+- 回测起止日期
+- 手续费率、滑点、资金、合约大小和最小价格变动
 
-- `strategy_repository`: stores generated strategy metadata.
-- `run_repository`: stores run metadata and status.
-- `variant_repository`: stores variant result paths.
-- `pool_repository`: stores long-lived pool item indexes and search filters.
-- `artifact_repository`: stores important file references and hashes.
+对于策略内部用 `BarGenerator` 将 1 分钟 K 线聚合为 60 分钟 K 线的策略，工作台输入周期应选择 **`1m`**，不要选择 `60m` 或 `1h`。
 
-Service layer:
+### 3. 行情覆盖与真实回测
 
-- `strategy_service`: registers already-generated strategy code.
-- `run_service`: creates a simulated baseline run and records task/run/variant/artifact rows.
-- `pool_service`: promotes a variant into a complete pool snapshot.
-- `query_service`: reads run details, variant CSV results, trades, and pool curves.
+提交前端请求时，工作台会检查所选标的、周期和日期范围的本地行情覆盖情况。缺失或不完整时，前端会尝试调用数据下载接口补齐行情；真实回测只读取 `storage/db/market_data.sqlite` 中的数据。
 
-`artifact_service` remains responsible for filesystem writes and complete pool snapshots. Repositories are responsible for SQLite persistence. Services orchestrate those two layers without writing SQL directly.
+`mode="real"` 为默认模式。`mode="mock"` 仅用于离线测试或明确的模拟回退。
 
-SQLite is the only supported database for v1. There is no MySQL, ORM, SQLAlchemy, or SQLModel in this phase.
+### 4. 查看结果与优化
 
-Currently supported test chain:
+回测完成后可以查看：
 
-- Register strategy.
-- Create baseline run.
-- Save baseline variant.
-- Query run detail.
-- Read variant curve and trades.
-- Add variant to pool.
-- Read pool item detail after deleting runtime artifacts.
+- 策略累计收益与 Buy & Hold 对比
+- 曲线最大回撤
+- 夏普、交易数与其他 vn.py 指标
+- 日度结果、成交记录和策略代码
+- 可优化参数及自动/手动网格优化结果
 
-Still not fully implemented:
+### 5. 加入策略池
 
-- Production-grade parameter optimization API and frontend workflow.
-- Full strategy-pool multi-variant comparison workflow.
+接受某个 baseline 或优化变体后，可将其加入策略池。池快照会复制策略代码、配置、结果、曲线和成交记录，因此运行目录清理后仍可查看或重跑。
 
-## Phase 3 And 3.5
+## 曲线与最大回撤口径
 
-Phase 3 added a minimal strategy generation boundary. Phase 3.5 clarifies the core capability modules:
+工作台的策略曲线使用单位仓位累计收益口径：
 
-- `strategy_generation/`: input natural language, output `strategy_code`; it does not backtest, optimize, enter the pool, or write DB rows.
-- `backtesting/`: input `strategy_code`, symbol, parameters, and config; output metrics, daily results, and trades; it does not generate strategies, optimize, or enter the pool.
-- `strategy_optimization/`: input strategy code, parameter space, and backtest config; output recommended parameters, candidates, and grid summary; it optimizes parameters only and does not modify strategy code.
-- `backend/services/`: orchestrates workflows, tasks, DB rows, artifacts, runs, and pool snapshots.
-
-Backend services depend on strategy generation only through:
-
-```python
-generate_strategy_from_text(source_text: str, options: dict | None = None) -> dict
+```text
+C(t) = Σ(日 net_pnl / 昨日 close_price) × 100
+DD(t) = C(t) - max(C(0...t))
+最大回撤 = min(DD(t))
 ```
 
-The default strategy generator is the API-backed generator. The old generator remains outside the main path.
+曲线、曲线最大回撤、优化表现表和策略池比较使用这一口径。它与 vn.py 基于账户资金 `balance` 计算的账户回撤是不同概念，页面不会将两者混为同一展示指标。
 
-`backtesting.run_backtest(...)` supports deterministic mock mode and real vn.py CTA backtesting from local SQLite market data. `strategy_optimization.optimize_parameters(...)` keeps mock mode for tests and now has a legacy-style adapter for manual grid parameter search; it does not write storage, create runs, or modify strategy code.
+为了使不同策略可比，本地上传和直接粘贴的策略在登记时会检查 `fixed_size`：不是 `1` 时平台会自动将实际回测代码标准化为 `fixed_size = 1`，并在页面提示；原始上传文本仍作为来源记录保存。
 
-New services:
+## API 概览
 
-- `strategy_generation_service`: creates a strategy generation task, calls the natural-language boundary, registers generated code, writes `generation_report.json`, and records artifacts.
-- `research_workflow_service`: optional orchestration for tests and demos; it calls strategy generation, then uses the existing run service with mock baseline results.
+主要 API：
 
-Automatic tests remain offline. They do not require real model keys, RQData, vn.py, FastAPI, React, `test1`, or old outputs.
+| 目的 | API |
+| --- | --- |
+| 健康检查 | `GET /api/health` |
+| 自然语言源文件 | `GET/POST /api/natural-language/sources` |
+| 生成策略 | `POST /api/strategies/generate` |
+| 从策略 ID 创建 baseline | `POST /api/research/baseline` |
+| 从直接代码创建 baseline | `POST /api/research/baseline-from-code` |
+| 行情覆盖、下载、标的 | `/api/data/coverage`、`/api/data/download`、`/api/data/symbols` |
+| run、曲线、成交 | `/api/runs` |
+| 参数优化 | `/api/optimization/methods`、`/api/optimization/search-space`、`/api/optimization/suggest-space`、`/api/optimization/run` |
+| 策略池 | `/api/pool` |
+| 任务 | `/api/tasks` |
 
-## Current API And Frontend
+完整请求与响应结构以运行中的 <http://127.0.0.1:8000/docs> 为准。
 
-The FastAPI API and React frontend are now the formal integration surfaces. The frontend calls only API endpoints; it does not read storage or SQLite.
+## 数据与存储
 
-Current API workflows:
+- `storage/db/app.sqlite`：策略、任务、run、variant、策略池和产物索引。
+- `storage/db/market_data.sqlite`：本地 K 线、覆盖范围和下载任务。
+- `storage/runtime/runs/<run_id>/`：临时运行产物，包括 `strategy.py`、`config.json`、`result.json`、曲线与成交 CSV。
+- `storage/pool/strategies/<pool_item_id>/`：长期池快照。
 
-- Generate strategy code.
-- Create a research run through the temporary mock baseline fallback.
-- View run details, curves, and trades.
-- Add a variant to the strategy pool.
-- View pool items and task history.
+`scripts/init_db.py` 使用 `CREATE TABLE IF NOT EXISTS`，可重复运行，不会删除已有表。
 
-The mock baseline is a temporary fallback only. The next backend step is replacing `/api/research/create` internals with a real backtest service call while keeping the API contract stable.
+## 测试与构建
 
-## Phase 5A Data Layer
+后端测试：
 
-The data layer now exposes formal RQData-oriented market data APIs:
+```powershell
+python -m pytest -q
+```
 
-- `GET /api/data/coverage`
-- `POST /api/data/download`
-- `GET /api/data/symbols`
+前端构建：
 
-Implementation boundaries:
+```powershell
+cd frontend
+npm run build
+```
 
-- `data_manager/rqdata_client.py`: initializes and queries RQData.
-- `data_manager/market_repository.py`: stores bars, coverage, and download task rows in `storage/db/market_data.sqlite`.
-- `data_manager/coverage_service.py`: reports local data coverage and missing ranges.
-- `data_manager/download_service.py`: downloads bars through a data client and writes them to SQLite.
-- `backend/api/data_api.py`: HTTP layer only; it calls data services and does not read/write SQLite directly.
+## 当前限制与注意事项
 
-RQData credentials are resolved at runtime in this order:
-
-1. `GYRO_RQDATA_USERNAME` and `GYRO_RQDATA_PASSWORD`
-2. `RQDATA_USERNAME` and `RQDATA_PASSWORD`
-3. `GYRO_VT_SETTING_PATH`
-4. local vn.py style `.vntrader/vt_setting.json`
-
-Automatic tests use fake clients and do not consume RQData quota. The current data layer writes bars into a generic `bars` table and keeps `data_coverage` updated. Phase 5B connects real vn.py backtesting to this local market database while preserving the existing run/variant artifact contract.
-
-## Phase 5B Real Backtesting
-
-`backtesting.run_backtest(...)` now supports real vn.py CTA backtesting with local SQLite market data:
-
-- `mode="real"` reads bars only from `storage/db/market_data.sqlite`.
-- Strategy code remains a pure vn.py CTA `strategy.py`; it must define a class inheriting `vnpy_ctastrategy.CtaTemplate`.
-- Backtests do not call RQData and do not auto-download missing data.
-- Missing or partial local coverage returns a failed backtest result with `missing_ranges` and a suggestion to call `POST /api/data/download`.
-- `mode="mock"` remains available for deterministic tests and explicit fallback.
-
-`POST /api/research/create` defaults to real backtesting. Use `mode="mock"` in the request body when you need the old temporary fallback.
+- 本项目面向本地研究工作流，不是多用户生产交易系统。
+- 真实回测依赖本地行情完整性；没有本地数据时应先下载行情。
+- 自然语言生成需要可用模型服务；自动化测试不依赖真实模型、RQData 或网络。
+- 上传和粘贴的策略代码会在后端回测环境加载。只应使用你信任的策略文件。
+- 策略代码应定义一个继承 `vnpy_ctastrategy.CtaTemplate` 的公开策略类，并实现平台所需回调。
+- README 描述的是当前工作台行为；历史阶段性实现细节以 Git 提交记录为准。

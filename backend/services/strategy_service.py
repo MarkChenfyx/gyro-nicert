@@ -53,6 +53,72 @@ def extract_class_name_from_code(code: str) -> str:
     raise ValueError("代码里没有解析到可用的策略类名，请确认粘贴的是完整的 vnpy_ctastrategy 策略类。")
 
 
+def _source_offset(lines: list[str], lineno: int, column: int) -> int:
+    return sum(len(line) for line in lines[: max(0, lineno - 1)]) + column
+
+
+def _fixed_size_assignment(class_node: ast.ClassDef) -> ast.AST | None:
+    for node in class_node.body:
+        if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == "fixed_size" for target in node.targets):
+            return node
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.target.id == "fixed_size":
+            return node
+    return None
+
+
+def normalize_fixed_size(code: str) -> tuple[str, bool, str]:
+    """Return executable strategy code with the platform unit position enforced."""
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code, False, ""
+
+    strategy_class = next(
+        (node for node in tree.body if isinstance(node, ast.ClassDef) and not node.name.startswith("_")),
+        None,
+    )
+    if strategy_class is None:
+        return code, False, ""
+
+    assignment = _fixed_size_assignment(strategy_class)
+    lines = code.splitlines(keepends=True)
+    if assignment is not None:
+        value = getattr(assignment, "value", None)
+        if value is None or not hasattr(value, "lineno") or not hasattr(value, "end_lineno"):
+            return code, False, ""
+        start = _source_offset(lines, value.lineno, value.col_offset)
+        end = _source_offset(lines, value.end_lineno, value.end_col_offset)
+        current_value = code[start:end].strip()
+        if current_value == "1":
+            return code, False, "fixed_size is already normalized to 1"
+        return (
+            f"{code[:start]}1{code[end:]}",
+            True,
+            f"fixed_size was {current_value or 'unset'} and was normalized to 1 for unit-position research",
+        )
+
+    first_body = strategy_class.body[0] if strategy_class.body else None
+    docstring = (
+        first_body
+        if isinstance(first_body, ast.Expr) and isinstance(getattr(first_body, "value", None), ast.Constant)
+        and isinstance(first_body.value.value, str)
+        else None
+    )
+    anchor_line = (
+        (getattr(docstring, "end_lineno", None) + 1)
+        if getattr(docstring, "end_lineno", None)
+        else getattr(first_body, "lineno", None) or strategy_class.lineno + 1
+    )
+    indent = " " * ((getattr(first_body, "col_offset", strategy_class.col_offset + 4)) or strategy_class.col_offset + 4)
+    insert_at = _source_offset(lines, anchor_line, 0)
+    addition = f"{indent}fixed_size = 1\n"
+    return (
+        f"{code[:insert_at]}{addition}{code[insert_at:]}",
+        True,
+        "fixed_size was missing and was added as 1 for unit-position research",
+    )
+
+
 def _register_strategy(
     *,
     strategy_name: str,
@@ -133,15 +199,22 @@ def register_manual_strategy(
     resolved_code = str(code or "")
     if not resolved_code.strip():
         raise ValueError("strategy.py 代码不能为空。")
-    class_name = extract_class_name_from_code(resolved_code)
+    normalized_code, fixed_size_normalized, fixed_size_message = normalize_fixed_size(resolved_code)
+    class_name = extract_class_name_from_code(normalized_code)
     strategy_family = _fallback_family(resolved_name)
     source_filename = f"{strategy_family}.py"
-    return _register_strategy(
+    strategy = _register_strategy(
         strategy_name=resolved_name,
         source_text=resolved_code,
-        code=resolved_code,
+        code=normalized_code,
         source_filename=source_filename,
         source_type="manual_code",
         strategy_family=strategy_family,
         class_name=class_name,
     )
+    return {
+        **strategy,
+        "fixed_size": 1,
+        "fixed_size_normalized": fixed_size_normalized,
+        "fixed_size_message": fixed_size_message,
+    }

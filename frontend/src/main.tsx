@@ -1,10 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import ReactDOM from "react-dom/client";
-import { Button, Checkbox, ConfigProvider, Input, InputNumber, Select, Table, Tag, message } from "antd";
+import { Button, Checkbox, ConfigProvider, Drawer, Input, InputNumber, Select, Table, Tag, message } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import * as echarts from "echarts";
 import {
   addToPool,
+  archiveTerminalTasks,
   comparePool,
   createNaturalLanguageSource,
   createResearchBaseline,
@@ -15,6 +16,7 @@ import {
   getNaturalLanguageSource,
   getOptimizationMethods,
   getOptimizationSearchSpace,
+  suggestOptimizationSearchSpace,
   getPoolItem,
   getVariantCurve,
   getRun,
@@ -32,6 +34,103 @@ type PageKey = "launch" | "generate" | "optimize" | "pool";
 const PAGE_STORAGE_KEY = "gyro_nicert.active_page";
 const OPTIMIZE_DRAFT_STORAGE_KEY = "gyro_nicert.optimize_draft";
 const BENCHMARK_CURVE_COLOR = "#64748b";
+
+type TaskStatusValue = "queued" | "running" | "completed" | "failed" | "cancelled";
+type TaskView = "all" | "active" | "failed" | "completed" | "archived";
+
+type WorkbenchTask = {
+  task_id: string;
+  task_type: string;
+  status: TaskStatusValue | string;
+  progress: number;
+  message?: string;
+  error?: string;
+  related_strategy_id?: string;
+  related_run_id?: string;
+  related_pool_item_id?: string;
+  source_filename?: string;
+  archived_at?: string;
+  created_at: string;
+  updated_at: string;
+};
+
+const TASK_TYPE_LABELS: Record<string, string> = {
+  strategy_generation: "策略生成",
+  backtest: "基线回测",
+  optimization: "参数优化",
+  data_download: "行情下载",
+  pool_add: "加入策略池",
+  pool_rebuild: "策略池重跑"
+};
+
+const TASK_STATUS_LABELS: Record<string, string> = {
+  queued: "排队中",
+  running: "运行中",
+  completed: "已完成",
+  failed: "失败",
+  cancelled: "已取消",
+  ready: "就绪"
+};
+
+function taskTypeLabel(taskType?: string) {
+  return TASK_TYPE_LABELS[String(taskType || "")] || String(taskType || "未知任务");
+}
+
+function taskDisplayLabel(task: WorkbenchTask) {
+  const relatedSourceName = String(task.source_filename || "").trim();
+  if (relatedSourceName && task.task_type === "backtest") return `${relatedSourceName} · 基线回测`;
+  if (relatedSourceName && task.task_type === "strategy_generation") return `${relatedSourceName} · 策略生成`;
+  if (task.task_type !== "strategy_generation") return taskTypeLabel(task.task_type);
+  const message = String(task.message || "");
+  const separator = message.indexOf(" · ");
+  const sourceName = separator > 0 ? message.slice(0, separator).trim() : "";
+  return sourceName ? `${sourceName} · 策略生成` : taskTypeLabel(task.task_type);
+}
+
+function taskSummary(task: WorkbenchTask) {
+  const status = String(task.status || "").toLowerCase();
+  if (status === "failed") return task.error || task.message || task.task_id;
+  if (["running", "queued"].includes(status)) return task.message || task.task_id;
+  return "任务已完成";
+}
+
+function taskStatusLabel(status?: string) {
+  return TASK_STATUS_LABELS[String(status || "").toLowerCase()] || String(status || "未知");
+}
+
+function taskProgress(task?: WorkbenchTask | null) {
+  return Math.max(0, Math.min(100, Number(task?.progress || 0) * 100));
+}
+
+function taskTargetPage(task: WorkbenchTask): PageKey {
+  if (task.related_pool_item_id || task.task_type === "pool_add" || task.task_type === "pool_rebuild") return "pool";
+  if (task.task_type === "optimization") return "optimize";
+  if (task.related_run_id && task.status !== "failed") return "generate";
+  return "launch";
+}
+
+function elapsedLabel(task: WorkbenchTask) {
+  const start = new Date(task.created_at).getTime();
+  const end = ["running", "queued"].includes(String(task.status)) ? Date.now() : new Date(task.updated_at).getTime();
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return "-";
+  const seconds = Math.max(0, Math.round((end - start) / 1000));
+  if (seconds < 60) return `${seconds} 秒`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} 分 ${seconds % 60} 秒`;
+  return `${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分`;
+}
+
+function taskDateGroup(task: WorkbenchTask) {
+  const value = new Date(task.created_at);
+  if (Number.isNaN(value.getTime())) return "更早";
+  const now = new Date();
+  const dateKey = value.toLocaleDateString("en-CA", { timeZone: "Asia/Shanghai" });
+  const todayKey = now.toLocaleDateString("en-CA", { timeZone: "Asia/Shanghai" });
+  const yesterday = new Date(now.getTime() - 86400000).toLocaleDateString("en-CA", { timeZone: "Asia/Shanghai" });
+  if (dateKey === todayKey) return "今天";
+  if (dateKey === yesterday) return "昨天";
+  return "更早";
+}
 
 function isPageKey(value: string): value is PageKey {
   return value === "launch" || value === "generate" || value === "optimize" || value === "pool";
@@ -114,11 +213,6 @@ const zh = {
   trades: "成交记录",
   code: "策略代码"
 };
-
-const PIPELINE_STAGES = [
-  { key: "generation", title: zh.strategyCodeGeneration, note: "\u6839\u636e\u81ea\u7136\u8bed\u8a00\u8f93\u5165\u751f\u6210 vn.py CTA strategy.py\uff0c\u5e76\u767b\u8bb0\u7b56\u7565\u4ee3\u7801\u7248\u672c\u3002" },
-  { key: "backtest", title: zh.baselineBacktest, note: "\u4f7f\u7528\u672c\u5730 SQLite \u884c\u60c5\u6570\u636e\u8fd0\u884c\u771f\u5b9e baseline \u56de\u6d4b\uff0c\u751f\u6210 run\u3001curve \u548c trades\u3002" }
-];
 
 const SOURCE_FILES = [
   "opening_range_breakout_intraday.txt",
@@ -736,18 +830,86 @@ function Sidebar({
   page,
   onPageChange,
   tasks,
-  onRefreshTasks
+  onRefreshTasks,
+  taskConnectionError
 }: {
   page: PageKey;
   onPageChange: (page: PageKey) => void;
-  tasks: any[];
+  tasks: WorkbenchTask[];
   onRefreshTasks: () => Promise<void>;
+  taskConnectionError: boolean;
 }) {
-  const [hiddenTasks, setHiddenTasks] = useState(false);
-  const visibleTasks = hiddenTasks ? [] : tasks.slice(0, 6);
-  const latest = tasks[0];
-  const activeTask = tasks.find((task) => String(task.status || "").toLowerCase() === "running") || latest;
-  const activeProgress = Math.max(0, Math.min(100, Number(activeTask?.progress || 0) * 100));
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [drawerTasks, setDrawerTasks] = useState<WorkbenchTask[]>([]);
+  const [taskFilter, setTaskFilter] = useState<TaskView>("all");
+  const [selectedTask, setSelectedTask] = useState<WorkbenchTask | null>(null);
+  const [loadingDrawer, setLoadingDrawer] = useState(false);
+  const visibleTasks = tasks.slice(0, 3);
+  const runningTask = tasks.find((task) => String(task.status).toLowerCase() === "running");
+  const queuedTask = tasks.find((task) => String(task.status).toLowerCase() === "queued");
+  const recentFailure = tasks.find((task) => {
+    if (String(task.status).toLowerCase() !== "failed") return false;
+    const updatedAt = new Date(task.updated_at).getTime();
+    return Number.isFinite(updatedAt) && Date.now() - updatedAt <= 86400000;
+  });
+  const activeTask = runningTask || queuedTask || null;
+  const counts = {
+    running: tasks.filter((task) => task.status === "running").length,
+    queued: tasks.filter((task) => task.status === "queued").length,
+    failed: tasks.filter((task) => task.status === "failed").length
+  };
+
+  async function loadDrawerTasks(filter: TaskView = taskFilter) {
+    setLoadingDrawer(true);
+    try {
+      const view = filter === "archived" ? "archived" : "all";
+      const payload = await listTasks({ view, limit: 300 });
+      const rows = (payload.tasks || []) as WorkbenchTask[];
+      const filtered = filter === "active"
+        ? rows.filter((task) => ["running", "queued"].includes(String(task.status)) && !task.archived_at)
+        : filter === "failed"
+          ? rows.filter((task) => task.status === "failed" && !task.archived_at)
+          : filter === "completed"
+            ? rows.filter((task) => ["completed", "cancelled"].includes(String(task.status)) && !task.archived_at)
+            : filter === "archived"
+              ? rows.filter((task) => Boolean(task.archived_at))
+              : rows.filter((task) => !task.archived_at);
+      setDrawerTasks(filtered);
+      setSelectedTask((current) => filtered.find((task) => task.task_id === current?.task_id) || filtered[0] || null);
+    } catch (error) {
+      message.error(String(error));
+    } finally {
+      setLoadingDrawer(false);
+    }
+  }
+
+  function openTaskDrawer(task?: WorkbenchTask) {
+    setSelectedTask(task || null);
+    setDrawerOpen(true);
+    void loadDrawerTasks(taskFilter);
+  }
+
+  async function archiveEndedTasks() {
+    try {
+      const payload = await archiveTerminalTasks();
+      await onRefreshTasks();
+      await loadDrawerTasks(taskFilter);
+      message.success(`已归档 ${Number(payload.archived_count || 0)} 条结束任务`);
+    } catch (error) {
+      message.error(String(error));
+    }
+  }
+
+  function navigateFromTask(task: WorkbenchTask) {
+    onPageChange(taskTargetPage(task));
+    setDrawerOpen(false);
+  }
+
+  const groupedTasks = ["今天", "昨天", "更早"].map((label) => ({
+    label,
+    tasks: drawerTasks.filter((task) => taskDateGroup(task) === label)
+  })).filter((group) => group.tasks.length);
+
   return (
     <aside className="sidebar">
       <div className="brand-block">
@@ -777,19 +939,37 @@ function Sidebar({
           </button>
         </div>
         <div className="status-card-shell">
-          <span className={statusClass(activeTask?.status)}>{activeTask?.status || "ready"}</span>
-          <strong className="status-main">{activeTask?.task_type || zh.waiting}</strong>
-          {activeTask ? (
+          {taskConnectionError ? (
             <>
-              <div className="mini-progress status-progress">
-                <span style={{ width: `${activeProgress}%` }} />
-              </div>
-              <span className="status-sub">{Math.round(activeProgress)}% · {activeTask.message || activeTask.task_id}</span>
-              <span className="status-sub">{formatDate(activeTask.updated_at)}</span>
+              <span className="status-pill status-failed">连接异常</span>
+              <strong className="status-main">无法获取工作台状态</strong>
+              <span className="status-sub">请检查后端服务后刷新。</span>
+            </>
+          ) : activeTask ? (
+            <>
+              <span className={statusClass(activeTask.status)}>{taskStatusLabel(activeTask.status)}</span>
+              <strong className="status-main">{taskDisplayLabel(activeTask)}</strong>
+              <div className="mini-progress status-progress"><span style={{ width: `${taskProgress(activeTask)}%` }} /></div>
+              <span className="status-sub">{Math.round(taskProgress(activeTask))}% · {activeTask.message || activeTask.task_id}</span>
+              <span className="status-sub">已运行 {elapsedLabel(activeTask)} · {formatDate(activeTask.updated_at)}</span>
+            </>
+          ) : recentFailure ? (
+            <>
+              <span className="status-pill status-failed">最近任务失败</span>
+              <strong className="status-main">{taskDisplayLabel(recentFailure)}</strong>
+              <span className="status-sub">{recentFailure.error || recentFailure.message || recentFailure.task_id}</span>
+              <button className="mini-button status-detail-button" type="button" onClick={() => openTaskDrawer(recentFailure)}>查看失败详情</button>
             </>
           ) : (
-            <span className="status-sub">接口已就绪</span>
+            <>
+              <span className="status-pill status-ready">就绪</span>
+              <strong className="status-main">工作台空闲</strong>
+              <span className="status-sub">接口已就绪，当前没有活动任务。</span>
+            </>
           )}
+          <div className="task-count-row">
+            <span>运行 {counts.running}</span><span>排队 {counts.queued}</span><span className={counts.failed ? "is-danger" : ""}>失败 {counts.failed}</span>
+          </div>
         </div>
       </section>
 
@@ -797,25 +977,24 @@ function Sidebar({
         <div className="section-head">
           <h2>{zh.recentTasks}</h2>
           <div className="jobs-head-actions">
-            <span>{visibleTasks.length}</span>
-            <button className="mini-button" type="button" onClick={() => setHiddenTasks(true)}>
-              {zh.clearAll}
-            </button>
+            <span>{tasks.length}</span>
+            <button className="mini-button" type="button" onClick={() => openTaskDrawer()}>查看全部</button>
           </div>
         </div>
         <div className="jobs-rail">
           {visibleTasks.length ? (
             visibleTasks.map((task) => (
-              <div className="rail-job" key={task.task_id}>
+              <button className="rail-job task-row-button" type="button" key={task.task_id} onClick={() => openTaskDrawer(task)}>
                 <div className="rail-job-head">
-                  <strong>{task.task_type}</strong>
-                  <span className={statusClass(task.status)}>{task.status}</span>
+                  <strong>{taskDisplayLabel(task)}</strong>
+                  <span className={statusClass(task.status)}>{taskStatusLabel(task.status)}</span>
                 </div>
                 <div className="mini-progress">
-                  <span style={{ width: `${Math.max(0, Math.min(100, Number(task.progress || 0) * 100))}%` }} />
+                  <span style={{ width: `${taskProgress(task)}%` }} />
                 </div>
-                <span className="rail-job-meta">{task.message || task.task_id}</span>
-              </div>
+                <span className="rail-job-meta">{taskSummary(task)}</span>
+                <span className="rail-job-time">{formatDate(task.updated_at)}</span>
+              </button>
             ))
           ) : (
             <div className="rail-job muted-card">
@@ -824,6 +1003,68 @@ function Sidebar({
           )}
         </div>
       </section>
+
+      <Drawer
+        title="任务中心"
+        placement="right"
+        width={720}
+        open={drawerOpen}
+        onClose={() => setDrawerOpen(false)}
+        extra={<Button size="small" onClick={archiveEndedTasks}>归档已结束</Button>}
+      >
+        <div className="task-drawer-layout" aria-busy={loadingDrawer}>
+          <div className="task-filter-row">
+            {([
+              ["all", "全部"], ["active", "进行中"], ["failed", "失败"], ["completed", "已完成"], ["archived", "已归档"]
+            ] as Array<[TaskView, string]>).map(([key, label]) => (
+              <button
+                type="button"
+                key={key}
+                className={`mini-button ${taskFilter === key ? "is-active" : ""}`}
+                onClick={() => { setTaskFilter(key); void loadDrawerTasks(key); }}
+              >{label}</button>
+            ))}
+          </div>
+          <div className="task-drawer-body">
+            <div className="task-history-list">
+              {groupedTasks.length ? groupedTasks.map((group) => (
+                <section className="task-history-group" key={group.label}>
+                  <h3>{group.label}</h3>
+                  {group.tasks.map((task) => (
+                    <button type="button" className={`task-history-item ${selectedTask?.task_id === task.task_id ? "is-active" : ""}`} key={task.task_id} onClick={() => setSelectedTask(task)}>
+                      <span><strong>{taskDisplayLabel(task)}</strong><small>{formatDate(task.created_at)}</small></span>
+                      <span className={statusClass(task.status)}>{taskStatusLabel(task.status)}</span>
+                    </button>
+                  ))}
+                </section>
+              )) : <div className="empty-state">当前筛选下没有任务。</div>}
+            </div>
+            <div className="task-detail-panel">
+              {selectedTask ? (
+                <>
+                  <div className="task-detail-head"><div><span className="summary-label">任务详情</span><h3>{taskDisplayLabel(selectedTask)}</h3></div><span className={statusClass(selectedTask.status)}>{taskStatusLabel(selectedTask.status)}</span></div>
+                  <div className="mini-progress"><span style={{ width: `${taskProgress(selectedTask)}%` }} /></div>
+                  <dl className="task-detail-grid">
+                    <div><dt>进度</dt><dd>{Math.round(taskProgress(selectedTask))}%</dd></div>
+                    <div><dt>耗时</dt><dd>{elapsedLabel(selectedTask)}</dd></div>
+                    <div><dt>创建时间</dt><dd>{formatDate(selectedTask.created_at)}</dd></div>
+                    <div><dt>更新时间</dt><dd>{formatDate(selectedTask.updated_at)}</dd></div>
+                    {(["running", "queued", "failed"].includes(String(selectedTask.status)) || selectedTask.error) && <div className="span-2"><dt>{selectedTask.error ? "错误信息" : "当前阶段"}</dt><dd>{selectedTask.error || selectedTask.message || "-"}</dd></div>}
+                    {selectedTask.related_run_id && <div className="span-2"><dt>关联 Run</dt><dd>{selectedTask.related_run_id}</dd></div>}
+                    {selectedTask.related_strategy_id && <div className="span-2"><dt>关联策略</dt><dd>{selectedTask.related_strategy_id}</dd></div>}
+                    {selectedTask.related_pool_item_id && <div className="span-2"><dt>关联策略池</dt><dd>{selectedTask.related_pool_item_id}</dd></div>}
+                  </dl>
+                  {(selectedTask.status === "failed" || selectedTask.related_run_id || selectedTask.related_pool_item_id) && (
+                    <Button type="primary" onClick={() => navigateFromTask(selectedTask)}>
+                      {selectedTask.status === "failed" ? "返回对应页面重新配置" : "查看关联结果"}
+                    </Button>
+                  )}
+                </>
+              ) : <div className="empty-state">请选择一个任务查看详情。</div>}
+            </div>
+          </div>
+        </div>
+      </Drawer>
     </aside>
   );
 }
@@ -832,14 +1073,12 @@ function LaunchFlowPage({
   onResearchCreated,
   onGenerated,
   onOpenGenerated,
-  onOpenOptimize,
   onWorkflowChange,
   refreshTasks
 }: {
   onResearchCreated: (payload: any) => void;
   onGenerated: (payload: any) => void;
   onOpenGenerated: () => void;
-  onOpenOptimize: () => void;
   onWorkflowChange: (patch: Partial<WorkflowUiState>) => void;
   refreshTasks: () => Promise<void>;
 }) {
@@ -1070,7 +1309,7 @@ function LaunchFlowPage({
       error: null,
       downloadDiagnostics: null
     });
-    if (!isCodeMode) onOpenGenerated();
+    onOpenGenerated();
 
     try {
       let autoDownloaded = false;
@@ -1148,6 +1387,9 @@ function LaunchFlowPage({
           };
 
       if (payload?.generation) onGenerated(payload.generation);
+      if (isCodeMode && payload?.generation?.strategy?.fixed_size_normalized) {
+        message.info("检测到策略 fixed_size 不为 1，平台已自动标准化为 fixed_size = 1。");
+      }
       onResearchCreated(payload);
       await refreshTasks();
 
@@ -1170,7 +1412,6 @@ function LaunchFlowPage({
         error: null
       });
       message.success(autoDownloaded ? "缺失行情已下载，研究流程已创建" : "研究流程已创建");
-      if (isCodeMode) onOpenOptimize();
     } catch (error) {
       setLaunchError({ error: String(error) });
       onWorkflowChange({
@@ -1495,33 +1736,55 @@ function StrategyGenerationPage({
   const generationDone = Boolean(generationPayload?.strategy);
   const baselineDone = Boolean(workflowRunId);
   const baselineFailed = Boolean(researchError);
-  const pipelineStages = PIPELINE_STAGES.map((stage) => {
-    if (stage.key === "generation") {
-      const status = generationDone ? "completed" : (workflowUi.isRunning && workflowUi.stageKey === "generation" ? "running" : "pending");
-      const note = workflowUi.stageKey === "generation" && workflowUi.isRunning
-        ? "已经进入策略生成阶段，正在创建 strategy.py。"
-        : stage.note;
-      return { ...stage, status, note };
-    }
+  const workflowStartMs = new Date(workflowUi.startedAt || "").getTime();
+  const flowTasks = tasks
+    .filter((task: any) => {
+      const createdAt = new Date(String(task.created_at || "")).getTime();
+      return !Number.isFinite(workflowStartMs) || (Number.isFinite(createdAt) && createdAt >= workflowStartMs - 5000);
+    })
+    .sort((a: any, b: any) => new Date(String(b.updated_at || "")).getTime() - new Date(String(a.updated_at || "")).getTime());
+  const stageTaskType = workflowUi.stageKey === "generation"
+    ? "strategy_generation"
+    : workflowUi.stageKey === "download"
+      ? "data_download"
+      : workflowUi.stageKey === "backtest" ? "backtest" : "";
+  const stageTask = flowTasks.find((task: any) => task.task_type === stageTaskType);
+  const stageTaskProgress = taskProgress(stageTask);
+  const workflowProgress = baselineFailed
+    ? Math.max(0, stageTaskProgress / 100)
+    : baselineDone
+      ? 1
+      : workflowUi.stageKey === "generation"
+        ? 0.05 + stageTaskProgress * 0.35 / 100
+        : workflowUi.stageKey === "download"
+          ? 0.4 + stageTaskProgress * 0.2 / 100
+          : workflowUi.stageKey === "backtest"
+            ? 0.65 + stageTaskProgress * 0.35 / 100
+            : generationDone ? 0.4 : 0;
+  const [displayWorkflowProgress, setDisplayWorkflowProgress] = useState(0);
 
-    const status = baselineDone
-      ? "completed"
-      : (baselineFailed ? "failed" : (workflowUi.isRunning && ["download", "backtest"].includes(workflowUi.stageKey) ? "running" : "pending"));
-    let note = stage.note;
-    if (workflowUi.stageKey === "download" && workflowUi.isRunning) {
-      note = "检测到缺失行情，系统正在自动下载。";
-    } else if (workflowUi.stageKey === "backtest" && workflowUi.isRunning) {
-      note = "行情数据已就绪，正在运行基线回测。";
-    } else if (baselineDone && workflowUi.downloadDiagnostics?.success) {
-      note = "缺失行情已自动补齐，基线回测已完成。";
+  useEffect(() => {
+    if (!workflowUi.startedAt) {
+      setDisplayWorkflowProgress(0);
+      return;
     }
-    return { ...stage, status, note };
-  });
-  const completedStageCount = pipelineStages.filter((stage) => stage.status === "completed").length;
-  const progressBase = pipelineStages.length > 0 ? completedStageCount / pipelineStages.length : 0;
-  const workflowProgress = workflowUi.isRunning && completedStageCount < pipelineStages.length
-    ? Math.min(0.95, progressBase + 0.25)
-    : progressBase;
+    const timer = window.setInterval(() => {
+      setDisplayWorkflowProgress((current) => {
+        const target = Math.max(0, Math.min(1, workflowProgress));
+        const distance = target - current;
+        if (Math.abs(distance) < 0.003) return target;
+        const step = Math.max(0.0025, Math.min(0.025, Math.abs(distance) * 0.14));
+        return Math.max(0, Math.min(1, current + Math.sign(distance) * step));
+      });
+    }, 50);
+    return () => window.clearInterval(timer);
+  }, [workflowProgress, workflowUi.startedAt]);
+
+  useEffect(() => {
+    if (workflowUi.startedAt && !workflowUi.isRunning && !generationDone && !baselineDone) {
+      setDisplayWorkflowProgress(0);
+    }
+  }, [baselineDone, generationDone, workflowUi.isRunning, workflowUi.startedAt]);
   const stageLabel = workflowUi.stageKey === "generation"
     ? "策略生成"
     : workflowUi.stageKey === "download"
@@ -1529,7 +1792,7 @@ function StrategyGenerationPage({
       : workflowUi.stageKey === "backtest"
         ? "基线回测"
         : (latestTask?.task_type || zh.waiting);
-  const statusLabel = workflowUi.isRunning ? "running" : (baselineFailed ? "failed" : (latestTask?.status || "pending"));
+  const statusLabel = workflowUi.isRunning ? "running" : (baselineFailed ? "failed" : (baselineDone ? "completed" : "pending"));
   const selectedStatus = selectedRunDetail?.run?.status || (lastResearch?.error ? "failed" : generationPayload?.task?.status || "completed");
   const showDiagnostics = Boolean(generationPayload && (!selectedRunId || selectedRunId === workflowRunId));
 
@@ -1599,32 +1862,17 @@ function StrategyGenerationPage({
           <span className="compact-progress-label">{zh.currentProgress}</span>
           <span className="compact-progress-stage">{stageLabel}</span>
           <div className="progress-track compact-progress-track">
-            <div className="progress-fill" style={{ width: `${Math.round(workflowProgress * 100)}%` }} />
+          <div className="progress-fill" style={{ width: `${Math.round(displayWorkflowProgress * 100)}%` }} />
           </div>
-          <span className="compact-progress-percent">{Math.round(workflowProgress * 100)}%</span>
+          <span className="compact-progress-percent">{Math.round(displayWorkflowProgress * 100)}%</span>
           <span className={statusClass(statusLabel)}>{statusLabel}</span>
         </div>
         <div className="compact-progress-note">{workflowUi.message || latestTask?.message || "当前没有活动任务。"}</div>
         <div className="job-meta compact-job-meta">
           <span>开始时间 {formatDate(workflowUi.startedAt || latestTask?.created_at)}</span>
           <span>{workflowRunId ? `运行 ${workflowRunId}` : "运行待创建"}</span>
-          <span>{completedStageCount} / {pipelineStages.length}</span>
+          <span>{workflowUi.isRunning ? "流程进行中" : baselineDone ? "流程已完成" : "等待启动"}</span>
         </div>
-      </section>
-
-      <section className="stage-grid compact-stage-grid">
-        {pipelineStages.map((stage, index) => (
-          <div className={`stage-card ${stage.status}`} key={stage.title}>
-            <div className="stage-card-head">
-              <div>
-                <p className="stage-index">0{index + 1}</p>
-                <h3>{stage.title}</h3>
-              </div>
-              <span className={statusClass(stage.status)}>{stage.status}</span>
-            </div>
-            <p className="stage-copy">{stage.note}</p>
-          </div>
-        ))}
       </section>
 
       {researchError && (
@@ -1786,6 +2034,8 @@ function ParameterOptimizationPage({
   const [curveEndDate, setCurveEndDate] = useState(String(persistedDraft.curveEndDate || ""));
   const [optimizationResult, setOptimizationResult] = useState<any>(null);
   const [loading, setLoading] = useState(false);
+  const [suggestionLoading, setSuggestionLoading] = useState(false);
+  const [spaceSuggestion, setSpaceSuggestion] = useState<any>(null);
 
   async function refreshRuns(defaultRunId?: string) {
     const payload = await listRuns();
@@ -1824,6 +2074,7 @@ function ParameterOptimizationPage({
     const parameterNames = (space.parameters || []).map((item: any) => String(item.name));
     setRunDetail(detail);
     setSearchSpace(space);
+    setSpaceSuggestion(null);
     setVariantCurves(nextCurves);
     setVisibleCurveKeys(() => {
       if (shouldReuseDraft && Array.isArray(storedDraft.visibleCurveKeys)) {
@@ -1937,13 +2188,15 @@ function ParameterOptimizationPage({
     if (!selectedParams.length) return 0;
     return selectedParams.reduce((product, name) => {
       const spec = ranges[name] || {};
+      const virtual = (spaceSuggestion?.virtual_parameters || []).find((item: any) => item.name === name);
+      if (virtual) return product * Math.max(1, (virtual.choices || []).length);
       const low = Number(spec.low);
       const high = Number(spec.high);
       const step = Number(spec.step);
       if (!Number.isFinite(low) || !Number.isFinite(high) || !Number.isFinite(step) || step <= 0 || high < low) return 0;
       return product * Math.max(1, Math.floor((high - low) / step + 1.0000001));
     }, 1);
-  }, [ranges, selectedParams]);
+  }, [ranges, selectedParams, spaceSuggestion]);
 
   const poolVariantMetrics = useMemo(() => {
     if (poolVariant === "baseline") return baselineMetrics;
@@ -1965,12 +2218,54 @@ function ParameterOptimizationPage({
     setRanges((current) => ({ ...current, [name]: { ...(current[name] || {}), [key]: value } }));
   }
 
+  async function generateSpaceSuggestion() {
+    if (!runId) return;
+    setSuggestionLoading(true);
+    try {
+      const payload = await suggestOptimizationSearchSpace(runId, "baseline");
+      const editableRows = [
+        ...(payload.parameters || []),
+        ...(payload.excluded_parameters || []).filter((item: any) => item.low !== undefined && item.high !== undefined)
+      ];
+      setSpaceSuggestion(payload);
+      setMethod("optuna");
+      setSearchSpace((current: any) => ({ ...current, parameters: editableRows }));
+      setRanges(Object.fromEntries(editableRows.map((item: any) => [item.name, {
+        low: item.low,
+        high: item.high,
+        step: item.step,
+        type: item.type,
+        scale: item.scale || "linear"
+      }])));
+      setSelectedParams([
+        ...(payload.parameters || []).filter((item: any) => item.optimize !== false).map((item: any) => String(item.name)),
+        ...(payload.virtual_parameters || []).filter((item: any) => item.optimize !== false).map((item: any) => String(item.name))
+      ]);
+      if (payload.fallback_used) {
+        message.warning(payload.diagnostics?.[0]?.message || "AI 建议不可用，已恢复静态范围");
+      } else {
+        message.success("AI 优化建议已生成，请确认后再运行");
+      }
+    } catch (error) {
+      message.error(String(error));
+    } finally {
+      setSuggestionLoading(false);
+    }
+  }
+
+  async function restoreStaticSpace() {
+    if (!runId) return;
+    await loadRunContext(runId);
+    setSelectedParams([]);
+    message.success("已恢复平台默认范围");
+  }
+
   async function submitOptimization() {
     if (!runId) {
       message.error("请先选择一个运行版本");
       return;
     }
-    const selected = method === "auto" && selectedParams.length === 0
+    const selected = ["auto", "optuna"].includes(method) && selectedParams.length === 0
       ? (searchSpace?.parameters || []).map((item: any) => item.name)
       : selectedParams;
     if (!selected.length) {
@@ -1985,7 +2280,9 @@ function ParameterOptimizationPage({
         variant_name: "baseline",
         method,
         selected_parameters: selected,
-        parameter_ranges: Object.fromEntries(selected.map((name: string) => [name, ranges[name]])),
+        parameter_ranges: Object.fromEntries(selected.filter((name: string) => ranges[name]).map((name: string) => [name, ranges[name]])),
+        constraints: spaceSuggestion?.constraints || [],
+        virtual_parameters: spaceSuggestion?.virtual_parameters || [],
         objective,
         max_trials: 200
       });
@@ -2031,7 +2328,7 @@ function ParameterOptimizationPage({
         />
       )
     },
-    { title: zh.paramName, dataIndex: "name", render: (value, record) => <div className="param-name-cell"><strong>{value}</strong><span>{record.role}</span></div> },
+    { title: zh.paramName, dataIndex: "name", render: (value, record) => <div className="param-name-cell"><strong>{value}</strong><span>{record.category || record.role}</span>{record.reason && <small>{record.reason}</small>}</div> },
     { title: zh.currentValue, dataIndex: "current", render: (value) => String(value) },
     { title: "下限", dataIndex: "low", render: (_, record) => <InputNumber value={ranges[record.name]?.low} step="any" onChange={(value) => updateRange(record.name, "low", value)} /> },
     { title: "上限", dataIndex: "high", render: (_, record) => <InputNumber value={ranges[record.name]?.high} step="any" onChange={(value) => updateRange(record.name, "high", value)} /> },
@@ -2259,8 +2556,8 @@ function ParameterOptimizationPage({
       <section className="band library-shell">
         <div className="library-section-head optimization-mode-head">
           <div>
-            <h3>{method === "auto" ? "自动优化" : "手动网格"}</h3>
-            <p>{method === "auto" ? "在选定参数范围内自动搜索最优组合。" : "在选定参数范围内做手动网格比较。"}</p>
+            <h3>{method === "optuna" ? "Optuna 智能优化" : method === "auto" ? "自动优化" : "手动网格"}</h3>
+            <p>{method === "optuna" ? "使用 TPE 在限定试验次数内搜索更有希望的参数组合。" : method === "auto" ? "在选定参数范围内自动搜索最优组合。" : "在选定参数范围内做手动网格比较。"}</p>
           </div>
           <div className="optimization-mode-inline">
             <span>优化模式</span>
@@ -2274,10 +2571,10 @@ function ParameterOptimizationPage({
                 { value: "excess_return", label: "超额收益" }
               ]}
             />
-            <span className="status-pill status-running">网格 {totalGridCount}</span>
+            <span className="status-pill status-running">{method === "optuna" ? "Trials 200" : `网格 ${totalGridCount}`}</span>
           </div>
         </div>
-        {method === "auto" && (
+        {["auto", "optuna"].includes(method) && (
           <div className="detail-grid optimizer-preview">
             {(searchSpace?.parameters || []).map((item: any) => (
               <div key={item.name}>
@@ -2291,9 +2588,25 @@ function ParameterOptimizationPage({
         <div className="parameter-frame">
           <Table rowKey="name" columns={parameterColumns} dataSource={searchSpace?.parameters || []} pagination={false} className="workbench-table parameter-table" />
         </div>
+        {(spaceSuggestion?.virtual_parameters || []).length > 0 && (
+          <div className="detail-grid optimizer-preview">
+            {(spaceSuggestion.virtual_parameters || []).map((item: any) => (
+              <div key={item.name}>
+                <Checkbox
+                  checked={selectedParams.includes(item.name)}
+                  onChange={(event) => setSelectedParams((current) => event.target.checked ? [...current, item.name] : current.filter((name) => name !== item.name))}
+                >{item.name}</Checkbox>
+                <div className="meta-inline">{(item.choices || []).join(" / ")}</div>
+                <div className="meta-inline">{item.reason}</div>
+              </div>
+            ))}
+          </div>
+        )}
         <div className="action-row">
+          <Button loading={suggestionLoading} disabled={!runId} onClick={generateSpaceSuggestion}>AI 生成优化建议</Button>
+          <Button disabled={!runId || suggestionLoading} onClick={restoreStaticSpace}>恢复默认建议</Button>
           <Button type="primary" loading={loading} disabled={!runId || (method === "manual_grid" && !selectedParams.length)} onClick={submitOptimization}>
-            {method === "auto" ? "运行自动优化" : "运行手动比较"}
+            {method === "optuna" ? "运行 Optuna 优化" : method === "auto" ? "运行自动优化" : "运行手动比较"}
           </Button>
         </div>
         {manualGridNeedsRerun && (
@@ -2714,7 +3027,8 @@ function PoolPage({
 
 function App() {
   const [page, setPage] = useState<PageKey>(() => loadInitialPage());
-  const [tasks, setTasks] = useState<any[]>([]);
+  const [tasks, setTasks] = useState<WorkbenchTask[]>([]);
+  const [taskConnectionError, setTaskConnectionError] = useState(false);
   const [poolItems, setPoolItems] = useState<any[]>([]);
   const [lastResearch, setLastResearch] = useState<any>(null);
   const [lastGenerated, setLastGenerated] = useState<any>(null);
@@ -2728,8 +3042,14 @@ function App() {
   });
 
   async function refreshTasks() {
-    const payload = await listTasks();
-    setTasks(payload.tasks || []);
+    try {
+      const payload = await listTasks({ view: "recent", limit: 100 });
+      setTasks(payload.tasks || []);
+      setTaskConnectionError(false);
+    } catch (error) {
+      setTaskConnectionError(true);
+      throw error;
+    }
   }
 
   async function refreshPool() {
@@ -2742,6 +3062,42 @@ function App() {
     refreshPool().catch((error) => message.error(String(error)));
   }, []);
 
+  const hasActiveTasks = tasks.some((task) => ["running", "queued"].includes(String(task.status).toLowerCase()));
+
+  useEffect(() => {
+    let disposed = false;
+    let timer: number | undefined;
+    const delay = hasActiveTasks ? 1000 : 10000;
+
+    const schedule = () => {
+      if (disposed || document.hidden) return;
+      timer = window.setTimeout(async () => {
+        try {
+          await refreshTasks();
+        } catch {
+          // The status card exposes connection failures without repeated toast noise.
+        }
+        schedule();
+      }, delay);
+    };
+
+    const handleVisibility = () => {
+      if (timer) window.clearTimeout(timer);
+      if (!document.hidden) {
+        void refreshTasks().catch(() => undefined);
+        schedule();
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleVisibility);
+    schedule();
+    return () => {
+      disposed = true;
+      if (timer) window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
+  }, [hasActiveTasks]);
+
   useEffect(() => {
     window.localStorage.setItem(PAGE_STORAGE_KEY, page);
   }, [page]);
@@ -2749,7 +3105,7 @@ function App() {
   return (
     <ConfigProvider theme={{ token: { colorPrimary: "#17b8b1", borderRadius: 8, fontFamily: "-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" } }}>
       <div className="shell">
-        <Sidebar page={page} onPageChange={setPage} tasks={tasks} onRefreshTasks={refreshTasks} />
+        <Sidebar page={page} onPageChange={setPage} tasks={tasks} onRefreshTasks={refreshTasks} taskConnectionError={taskConnectionError} />
         <main className="workspace">
           {page === "launch" && (
             <LaunchFlowPage
@@ -2762,7 +3118,6 @@ function App() {
                 setLastResearch(null);
               }}
               onOpenGenerated={() => setPage("generate")}
-              onOpenOptimize={() => setPage("optimize")}
               onWorkflowChange={(patch) => setWorkflowUi((current) => ({ ...current, ...patch }))}
               refreshTasks={refreshTasks}
             />

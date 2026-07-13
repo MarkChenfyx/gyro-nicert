@@ -98,7 +98,11 @@ def build_parameter_inventory(
     report_params, spec_parameters = params_from_generation_report(report)
     declared = extract_declared_parameters_from_code(strategy_code)
     class_defaults = extract_class_defaults_from_code(strategy_code)
-    names = list(dict.fromkeys([*declared, *report_params.keys(), *class_defaults.keys()]))
+    # A strategy class also contains runtime state such as ma_value, entry_price
+    # and last_signal. Class attributes alone therefore do not make a parameter
+    # tunable: only the vn.py ``parameters`` declaration and generation report
+    # are authoritative parameter sources.
+    names = list(dict.fromkeys([*declared, *report_params.keys()]))
     visible: list[dict[str, Any]] = []
     hidden: list[dict[str, Any]] = []
     diagnostics: list[dict[str, str]] = []

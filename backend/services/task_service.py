@@ -66,5 +66,9 @@ def get_task(task_id: str) -> dict[str, Any] | None:
     return task_repository.get_task(task_id)
 
 
-def list_tasks(limit: int = 100) -> list[dict[str, Any]]:
-    return task_repository.list_tasks(limit=limit)
+def list_tasks(limit: int = 100, *, view: str = "recent", status: str | None = None) -> list[dict[str, Any]]:
+    return task_repository.list_tasks(limit=limit, view=view, status=status)
+
+
+def archive_terminal_tasks() -> int:
+    return task_repository.archive_terminal_tasks()

@@ -27,10 +27,11 @@ def _validate_generation_result(result: dict[str, Any]) -> None:
 
 
 def generate_and_register_strategy(source_filename: str, options: dict[str, Any] | None = None) -> dict[str, Any]:
-    task = task_service.create_task(TaskType.STRATEGY_GENERATION.value, message="Strategy generation queued")
+    task_label = f"{source_filename} · 策略生成"
+    task = task_service.create_task(TaskType.STRATEGY_GENERATION.value, message=task_label)
     generation_result: dict[str, Any] = {}
     try:
-        task = task_service.mark_running(task["task_id"], message="Generating strategy code")
+        task = task_service.mark_running(task["task_id"], message=f"{source_filename} · 正在生成策略代码")
         source_payload = natural_language_source_service.read_source_file(source_filename)
         source_text = str(source_payload.get("text") or "")
         generation_result = generate_strategy_from_text(source_text, options=options)
@@ -52,7 +53,7 @@ def generate_and_register_strategy(source_filename: str, options: dict[str, Any]
             path=str(report_path),
             sha256=compute_sha256(report_path),
         )
-        task = task_service.mark_completed(task["task_id"], message="Strategy generation completed")
+        task = task_service.mark_completed(task["task_id"], message=f"{source_filename} · 策略生成完成")
         return {
             "task": task,
             "strategy": strategy,
@@ -61,7 +62,7 @@ def generate_and_register_strategy(source_filename: str, options: dict[str, Any]
             "generation_report_artifact": report_artifact,
         }
     except Exception as exc:
-        failed_task = task_service.mark_failed(task["task_id"], error=str(exc), message="Strategy generation failed")
+        failed_task = task_service.mark_failed(task["task_id"], error=str(exc), message=f"{source_filename} · 策略生成失败")
         return {
             "task": failed_task,
             "strategy": None,

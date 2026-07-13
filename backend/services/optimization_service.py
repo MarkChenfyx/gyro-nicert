@@ -11,6 +11,8 @@ from backend.services import artifact_service, task_service
 from strategy_optimization import optimize_parameters
 from strategy_optimization.optimizers.registry import list_methods, resolve_method, variant_for_method
 from strategy_optimization.search_space import build_parameter_inventory, read_json_file
+from strategy_optimization.range_generation import suggest_search_space
+from strategy_optimization.range_generation.validator import DENYLIST, TIME_RE
 
 
 def _register_artifact(owner_type: str, owner_id: str, artifact_type: str, path: str | Path | None) -> dict[str, Any] | None:
@@ -102,6 +104,30 @@ def get_search_space(run_id: str, variant_name: str = "baseline") -> dict[str, A
     }
 
 
+def suggest_optimization_space(
+    run_id: str,
+    variant_name: str = "baseline",
+    *,
+    options: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    context = _run_context(run_id)
+    config = dict(context["config"])
+    suggestion = suggest_search_space(
+        strategy_code=str(context["strategy_code"]),
+        inventory=dict(context["inventory"]),
+        context={
+            "vt_symbol": context["vt_symbol"],
+            "interval": config.get("interval"),
+            "start_date": config.get("start_date"),
+            "end_date": config.get("end_date"),
+            "rate": config.get("rate"),
+            "slippage": config.get("slippage"),
+        },
+        options=options,
+    )
+    return {"run_id": run_id, "variant_name": variant_name, **suggestion}
+
+
 def _validate_selected_parameters(search_space: dict[str, Any], selected: list[str], parameter_ranges: dict[str, Any]) -> None:
     visible = {str(item["name"]): item for item in search_space.get("parameters") or []}
     hidden = {str(item["name"]): item for item in search_space.get("hidden_parameters") or []}
@@ -113,6 +139,32 @@ def _validate_selected_parameters(search_space: dict[str, Any], selected: list[s
     missing = [name for name in selected if name not in parameter_ranges]
     if missing:
         raise ValueError(f"Missing parameter ranges: {', '.join(missing)}")
+
+
+def _validated_virtual_parameters(search_space: dict[str, Any], items: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    declared = {
+        str(item["name"])
+        for item in [*(search_space.get("parameters") or []), *(search_space.get("hidden_parameters") or [])]
+    }
+    validated: dict[str, dict[str, Any]] = {}
+    for raw in items:
+        item = dict(raw or {})
+        name = str(item.get("name") or "")
+        maps_to = [str(value) for value in item.get("maps_to") or []]
+        choices = list(dict.fromkeys(str(value) for value in item.get("choices") or [] if TIME_RE.match(str(value))))
+        if (
+            not name
+            or len(maps_to) != 2
+            or maps_to[0] not in declared
+            or maps_to[1] not in declared
+            or any(target in DENYLIST for target in maps_to)
+            or not maps_to[0].endswith("_hour")
+            or not maps_to[1].endswith("_minute")
+            or not choices
+        ):
+            raise ValueError(f"Invalid virtual optimization parameter: {name or '<unnamed>'}")
+        validated[name] = {**item, "type": "categorical", "maps_to": maps_to, "choices": choices}
+    return validated
 
 
 def _result_payload(optimization: dict[str, Any], selected_variant: str, artifact_paths: dict[str, str]) -> dict[str, Any]:
@@ -145,6 +197,8 @@ def run_optimization(
     method: str = "manual_grid",
     selected_parameters: list[str] | None = None,
     parameter_ranges: dict[str, Any] | None = None,
+    constraints: list[dict[str, Any]] | None = None,
+    virtual_parameters: list[dict[str, Any]] | None = None,
     objective: str = "sharpe",
     max_trials: int = 200,
 ) -> dict[str, Any]:
@@ -152,13 +206,18 @@ def run_optimization(
     ranges = dict(parameter_ranges or {})
     search_space = get_search_space(run_id, variant_name)
     resolved_method = resolve_method({"method": method}, {})
-    if resolved_method == "auto" and not selected:
+    if resolved_method in {"auto", "optuna"} and not selected:
         selected = [str(item["name"]) for item in search_space.get("parameters") or [] if item.get("tunable")]
         ranges = {
             name: next(item for item in search_space.get("parameters") or [] if str(item["name"]) == name)
             for name in selected
         }
-    _validate_selected_parameters(search_space, selected, ranges)
+    virtual_by_name = _validated_virtual_parameters(search_space, list(virtual_parameters or []))
+    real_selected = [name for name in selected if name not in virtual_by_name]
+    _validate_selected_parameters(search_space, real_selected, ranges) if real_selected else None
+    unknown_virtual = [name for name in selected if name not in ranges and name not in virtual_by_name]
+    if unknown_virtual:
+        raise ValueError(f"Unknown optimization parameters: {', '.join(unknown_virtual)}")
 
     context = _run_context(run_id)
     config = {**dict(context["config"]), "mode": dict(context["config"]).get("mode") or "real", "max_trials": max_trials}
@@ -188,6 +247,8 @@ def run_optimization(
                 "selected_parameters": selected,
                 "max_trials": max_trials,
                 "progress_callback": progress_callback,
+                "constraints": list(constraints or []),
+                "virtual_parameters": list(virtual_by_name.values()),
             },
         )
         if not optimization.get("success"):

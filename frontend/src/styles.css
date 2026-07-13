@@ -231,6 +231,12 @@ textarea {
   cursor: pointer;
 }
 
+.mini-button.is-active {
+  border-color: rgba(23, 184, 177, 0.5);
+  background: rgba(23, 184, 177, 0.09);
+  color: #0f766e;
+}
+
 .status-card-shell,
 .rail-job,
 .viewer-summary-card,
@@ -257,6 +263,35 @@ textarea {
   margin: 2px 0;
 }
 
+.status-ready {
+  background: #ecfdf3;
+  border-color: #abefc6;
+  color: #067647;
+}
+
+.status-detail-button {
+  justify-self: start;
+}
+
+.task-count-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+  color: #667085;
+  font-size: 11px;
+}
+
+.task-count-row span {
+  text-align: center;
+}
+
+.task-count-row .is-danger {
+  color: #b42318;
+  font-weight: 700;
+}
+
 .jobs-head-actions {
   display: inline-flex;
   align-items: center;
@@ -274,6 +309,159 @@ textarea {
   display: grid;
   gap: 10px;
   padding: 12px 14px;
+}
+
+.task-row-button {
+  width: 100%;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.task-row-button:hover {
+  border-color: #b7c2d0;
+  box-shadow: 0 4px 12px rgba(16, 24, 40, 0.08);
+}
+
+.rail-job-time {
+  color: #98a2b3;
+  font-size: 11px;
+}
+
+.task-drawer-layout {
+  display: grid;
+  gap: 18px;
+}
+
+.task-filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.task-drawer-body {
+  display: grid;
+  grid-template-columns: minmax(230px, 0.85fr) minmax(320px, 1.15fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.task-history-list {
+  display: grid;
+  gap: 16px;
+  max-height: calc(100vh - 180px);
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.task-history-group {
+  display: grid;
+  gap: 7px;
+}
+
+.task-history-group h3 {
+  margin: 0;
+  color: #667085;
+  font-size: 12px;
+}
+
+.task-history-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: #344054;
+  text-align: left;
+  cursor: pointer;
+}
+
+.task-history-item.is-active {
+  border-color: rgba(23, 184, 177, 0.55);
+  background: rgba(23, 184, 177, 0.06);
+}
+
+.task-history-item > span:first-child {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.task-history-item small {
+  color: #98a2b3;
+}
+
+.task-detail-panel {
+  display: grid;
+  gap: 18px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+}
+
+.task-detail-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.task-detail-head h3 {
+  margin: 5px 0 0;
+}
+
+.task-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin: 0;
+}
+
+.task-detail-grid div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.task-detail-grid .span-2 {
+  grid-column: 1 / -1;
+}
+
+.task-detail-grid dt {
+  color: #98a2b3;
+  font-size: 11px;
+}
+
+.task-detail-grid dd {
+  margin: 0;
+  color: #344054;
+  overflow-wrap: anywhere;
+}
+
+.task-error-detail {
+  padding: 10px;
+  border-radius: 8px;
+  background: #fef3f2;
+}
+
+.task-error-detail dd {
+  color: #b42318;
+}
+
+@media (max-width: 760px) {
+  .task-drawer-body {
+    grid-template-columns: 1fr;
+  }
+
+  .task-history-list {
+    max-height: 36vh;
+  }
 }
 
 .rail-job-head {
@@ -341,9 +529,9 @@ textarea {
 
 .hero-metrics {
   display: grid;
-  grid-template-columns: repeat(2, minmax(120px, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
-  min-width: 280px;
+  min-width: 360px;
 }
 
 .metric-tile {
@@ -456,8 +644,8 @@ textarea {
 }
 
 .source-checklist {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
   max-height: 220px;
   overflow: auto;
@@ -471,8 +659,7 @@ textarea {
   display: grid;
   gap: 2px;
   min-width: 0;
-  flex: 1 1 260px;
-  max-width: 100%;
+  width: 100%;
   margin: 0;
   padding: 8px 12px;
   border: 1px solid rgba(148, 163, 184, 0.14);
@@ -1514,8 +1701,8 @@ textarea {
     min-width: 0;
   }
 
-  .source-strip {
-    flex-basis: 100%;
+  .source-checklist {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .compact-progress-row,
@@ -1524,6 +1711,12 @@ textarea {
   }
 
   .curve-date-bar {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .source-checklist {
     grid-template-columns: 1fr;
   }
 }

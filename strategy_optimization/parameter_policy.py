@@ -16,6 +16,7 @@ HIDDEN_EXACT_NAMES = {
     "symbol",
     "exchange",
     "interval",
+    "bar_window",
 }
 
 HIDDEN_NAME_TOKENS = {
@@ -28,6 +29,9 @@ HIDDEN_NAME_TOKENS = {
     "close_hour",
     "close_minute",
     "account",
+    "bar_window",
+    "bar_interval",
+    "timeframe",
 }
 
 SAFETY_SWITCH_TOKENS = {
@@ -52,9 +56,28 @@ BOOLEAN_TOKENS = {
     "flag",
 }
 
+TIME_FIELD_SUFFIXES = ("_hour", "_minute", "_second")
+TIME_FIELD_TOKENS = {
+    "daily_start",
+    "daily_end",
+    "session_start",
+    "session_end",
+    "trading_start",
+    "trading_end",
+}
+
 
 def normalize_parameter_name(name: str) -> str:
     return str(name or "").strip().lower()
+
+
+def is_market_session_parameter(name: str) -> bool:
+    normalized = normalize_parameter_name(name)
+    return (
+        normalized.endswith(TIME_FIELD_SUFFIXES)
+        or any(token in normalized for token in HIDDEN_NAME_TOKENS)
+        or any(token in normalized for token in TIME_FIELD_TOKENS)
+    )
 
 
 def infer_parameter_role(name: str, value: Any = None) -> str:
@@ -65,7 +88,7 @@ def infer_parameter_role(name: str, value: Any = None) -> str:
         if normalized in {"fixed_size", "position_pct"} or any(token in normalized for token in ["position", "size", "qty"]):
             return "position_sizing"
         return "system_fixed"
-    if any(token in normalized for token in HIDDEN_NAME_TOKENS):
+    if is_market_session_parameter(normalized):
         return "market_session"
     if any(token in normalized for token in SAFETY_SWITCH_TOKENS):
         return "safety_switch"
@@ -91,7 +114,7 @@ def hidden_reason(name: str, value: Any = None) -> str | None:
         return role
     if normalized.endswith("_id") or normalized.endswith("_path"):
         return role
-    if any(token in normalized for token in HIDDEN_NAME_TOKENS):
+    if is_market_session_parameter(normalized):
         return role
     if role in {"position_sizing", "market_session", "system_fixed", "account_binding", "safety_switch"}:
         return role

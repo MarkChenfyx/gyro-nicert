@@ -183,8 +183,19 @@ export function rerunPool(poolItemIds: string[], endDate?: string) {
   });
 }
 
-export function listTasks() {
-  return request<any>("/api/tasks");
+export function listTasks(options: { view?: "active" | "recent" | "archived" | "all"; status?: string; limit?: number } = {}) {
+  const params = new URLSearchParams();
+  params.set("view", options.view || "recent");
+  params.set("limit", String(options.limit || 100));
+  if (options.status) params.set("status", options.status);
+  return request<any>(`/api/tasks?${params.toString()}`);
+}
+
+export function archiveTerminalTasks() {
+  return request<any>("/api/tasks/archive", {
+    method: "POST",
+    body: JSON.stringify({ scope: "terminal" })
+  });
 }
 
 export function getOptimizationMethods() {
@@ -193,6 +204,13 @@ export function getOptimizationMethods() {
 
 export function getOptimizationSearchSpace(runId: string, variantName = "baseline") {
   return request<any>("/api/optimization/search-space", {
+    method: "POST",
+    body: JSON.stringify({ run_id: runId, variant_name: variantName })
+  });
+}
+
+export function suggestOptimizationSearchSpace(runId: string, variantName = "baseline") {
+  return request<any>("/api/optimization/suggest-space", {
     method: "POST",
     body: JSON.stringify({ run_id: runId, variant_name: variantName })
   });

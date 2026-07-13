@@ -106,11 +106,23 @@ class OptimizationSearchSpaceRequest(BaseModel):
     variant_name: str = "baseline"
 
 
+class OptimizationSuggestSpaceRequest(BaseModel):
+    run_id: str
+    variant_name: str = "baseline"
+    options: dict[str, Any] | None = None
+
+
 class OptimizationRunRequest(BaseModel):
     run_id: str
     variant_name: str = "baseline"
     method: str = "manual_grid"
     selected_parameters: list[str] = Field(default_factory=list)
     parameter_ranges: dict[str, Any] = Field(default_factory=dict)
+    constraints: list[dict[str, Any]] = Field(default_factory=list)
+    virtual_parameters: list[dict[str, Any]] = Field(default_factory=list)
     objective: str = "sharpe"
     max_trials: int = Field(default=200, ge=1, le=5000)
+
+
+class TaskArchiveRequest(BaseModel):
+    scope: str = "terminal"

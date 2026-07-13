@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     related_strategy_id TEXT,
     related_run_id TEXT,
     related_pool_item_id TEXT,
+    archived_at TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -180,6 +181,10 @@ def initialize_database(path: Path, schema: str, *, reset: bool = False) -> None
     path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(path) as connection:
         connection.executescript(schema if reset else schema.replace(APP_RESET, "").replace(MARKET_RESET, ""))
+        if path.name == "app.sqlite":
+            columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(tasks)").fetchall()}
+            if "archived_at" not in columns:
+                connection.execute("ALTER TABLE tasks ADD COLUMN archived_at TEXT")
         connection.commit()
 
 

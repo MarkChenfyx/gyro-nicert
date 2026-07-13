@@ -5,6 +5,7 @@ from typing import Any
 from strategy_optimization.optimizers.auto import AutoOptimizer
 from strategy_optimization.optimizers.manual_grid import ManualGridOptimizer
 from strategy_optimization.optimizers.mock import MockOptimizer
+from strategy_optimization.optimizers.optuna_tpe import OptunaOptimizer
 
 
 METHODS = {
@@ -21,6 +22,13 @@ METHODS = {
         "description": "由后端优化器自动搜索候选参数，第一版使用确定性候选搜索。",
         "variant_name": "recommended",
         "optimizer": AutoOptimizer,
+    },
+    "optuna": {
+        "method": "optuna",
+        "label": "Optuna 智能优化",
+        "description": "使用 Optuna TPE 在限定次数内搜索参数组合。",
+        "variant_name": "optuna_recommended",
+        "optimizer": OptunaOptimizer,
     },
     "mock": {
         "method": "mock",

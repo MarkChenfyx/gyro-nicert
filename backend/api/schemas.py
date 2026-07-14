@@ -63,6 +63,7 @@ class PoolAddRequest(BaseModel):
     tags: list[str] | None = None
     note: str | None = None
     vt_symbol: str | None = None
+    strategy_name: str | None = None
 
 
 class PoolCompareRequest(BaseModel):
@@ -72,6 +73,7 @@ class PoolCompareRequest(BaseModel):
 class PoolRerunRequest(BaseModel):
     pool_item_ids: list[str] = Field(default_factory=list)
     end_date: str | None = None
+    start_mode: str | None = None
 
 
 class PoolListQuery(BaseModel):

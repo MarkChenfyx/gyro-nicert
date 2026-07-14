@@ -8,8 +8,8 @@ import types
 from backtesting import local_data_provider
 from data_manager import coverage_service
 
-ENGINE_NAME = "vnpy_cta_backtesting_engine"
-ENGINE_VERSION = "phase5b_real_v1"
+ENGINE_NAME = "teacher_cta_backtesting_engine"
+ENGINE_VERSION = "teacher_backtesting_v1_local_sqlite"
 
 
 def _diagnostic(level: str, message: str) -> dict[str, str]:
@@ -88,6 +88,22 @@ def _vnpy_interval(interval: str):
     if normalized == "1h":
         return Interval.HOUR
     raise ValueError(f"Unsupported interval: {interval}")
+
+
+def _teacher_bar_loader(symbol: str, exchange: Any, interval: Any, start: datetime, end: datetime) -> list[Any]:
+    """Bridge the teacher engine's loader contract to the workbench SQLite provider."""
+    exchange_value = getattr(exchange, "value", str(exchange))
+    interval_value = getattr(interval, "value", str(interval))
+    return local_data_provider.load_bar_data(
+        f"{symbol}.{exchange_value}",
+        _interval_value(interval_value),
+        start,
+        end,
+    )
+
+
+def _unsupported_tick_loader(*_: Any) -> list[Any]:
+    raise ValueError("本地行情库尚未配置 Tick 数据，当前只能使用 BAR 模式回测")
 
 
 def _load_strategy_class(strategy_code: str, class_name: str):
@@ -175,7 +191,13 @@ def _real_backtest(
     parameters: dict[str, Any],
     config: dict[str, Any],
 ) -> dict[str, Any]:
-    from vnpy_ctastrategy.backtesting import BacktestingEngine
+    from vnpy_ctastrategy.base import BacktestingMode
+
+    from backtesting.teacher_engine import BacktestingEngine
+
+    data_mode = str(config.get("data_mode") or config.get("backtesting_mode") or "bar").strip().lower()
+    if data_mode not in {"bar", "kline", "k_line"}:
+        return _failure("本地行情库尚未配置 Tick 数据，当前只能使用 BAR 模式回测")
 
     interval = _interval_value(str(config.get("interval") or "1m"))
     coverage = coverage_service.get_data_coverage(
@@ -226,6 +248,10 @@ def _real_backtest(
 
     strategy_class = _load_strategy_class(strategy_code, class_name)
     engine = BacktestingEngine()
+    engine.set_data_loaders(
+        bar_loader=_teacher_bar_loader,
+        tick_loader=_unsupported_tick_loader,
+    )
     engine.set_parameters(
         vt_symbol=vt_symbol,
         interval=_vnpy_interval(interval),
@@ -236,6 +262,8 @@ def _real_backtest(
         size=float(config.get("size", 1)),
         pricetick=float(config.get("pricetick", 0.001)),
         capital=int(float(config.get("capital", 100000))),
+        mode=BacktestingMode.BAR,
+        risk_free=float(config.get("risk_free", 0)),
         annual_days=int(config.get("annual_days", 240)),
     )
     engine.add_strategy(strategy_class, dict(parameters or {}))
@@ -252,8 +280,9 @@ def _real_backtest(
         "trades": trades,
         "logs": list(getattr(engine, "logs", []) or []),
         "diagnostics": [
-            _diagnostic("info", f"real vn.py CTA backtest completed with {len(bars)} local bars"),
-            _diagnostic("info", "market data loaded from local SQLite bars table"),
+            _diagnostic("info", f"老师版 CTA 回测引擎已完成 {len(bars)} 根本地 K 线回放"),
+            _diagnostic("info", "撮合与逐日盈亏使用老师版 backtesting 逻辑"),
+            _diagnostic("info", "行情由工作台本地 SQLite bars 表提供，不读取 vn.py 全局数据库"),
         ],
         "engine_name": ENGINE_NAME,
         "engine_version": ENGINE_VERSION,

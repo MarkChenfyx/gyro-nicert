@@ -70,7 +70,12 @@ def _persist_rerun_snapshot(
     result_payload = dict(backtest_result)
     result_payload.pop("daily_results", None)
     result_payload.pop("trades", None)
+    resolved_params = _params_from_detail(detail)
+    if resolved_params:
+        result_payload["params"] = resolved_params
     config = dict(detail.get("config") or {})
+    if resolved_params:
+        config["parameters"] = resolved_params
     config.update({"end_date": rerun_end, "last_rerun_at": now_beijing().isoformat(), "last_rerun_end": rerun_end})
     manifest = dict(detail.get("manifest") or {})
     manifest.update({"pool_last_rerun_at": now_beijing().isoformat(), "pool_last_rerun_end": rerun_end})
@@ -163,6 +168,7 @@ def _params_from_detail(detail: dict[str, Any]) -> dict[str, Any]:
     for candidate in (
         config.get("parameters"),
         manifest.get("parameters"),
+        result.get("recommended", {}).get("parameters") if isinstance(result.get("recommended"), dict) else None,
         result.get("params"),
         result.get("parameters"),
     ):
@@ -241,6 +247,7 @@ def _compare_item(detail: dict[str, Any]) -> dict[str, Any]:
         "notes": detail.get("notes") or "",
         "curve": curve,
         "trades_preview": trades_rows[:20],
+        "trade_count": len(trades_rows),
     }
 
 
@@ -264,12 +271,14 @@ def _compare_payload_from_parts(detail: dict[str, Any], *, metrics: dict[str, An
         "notes": detail.get("notes") or "",
         "curve": curve,
         "trades_preview": trades_rows[:20],
+        "trade_count": len(trades_rows),
     }
 
 
 def _rerun_payload(
     detail: dict[str, Any],
     end_date: str | None = None,
+    start_mode: str | None = None,
     progress_callback: Callable[[float, str], None] | None = None,
 ) -> dict[str, Any]:
     item = dict(detail.get("pool_item") or {})
@@ -284,11 +293,13 @@ def _rerun_payload(
     symbol, exchange = split_vt_symbol(vt_symbol)
     interval = _text(config.get("interval"), "1m")
     rerun_end = _date_only(end_date, now_beijing().date().isoformat())
-    rerun_start = _date_only(config.get("start_date"))
+    normalized_start_mode = _text(start_mode, "saved") or "saved"
+    local_coverage = coverage_service.get_data_coverage(symbol, exchange, interval)
+    if normalized_start_mode == "auto_earliest":
+        rerun_start = _date_only(local_coverage.get("local_start")) or _date_only(config.get("start_date"))
+    else:
+        rerun_start = _date_only(config.get("start_date")) or _date_only(local_coverage.get("local_start"))
     if not rerun_start:
-        local_coverage = coverage_service.get_data_coverage(symbol, exchange, interval)
-        rerun_start = _date_only(local_coverage.get("local_start"))
-    if not rerun_start or not rerun_end:
         raise ValueError(f"local market data unavailable for {vt_symbol} {interval}")
     requested_coverage = coverage_service.get_data_coverage(
         symbol,
@@ -379,6 +390,7 @@ def add_variant_to_pool(
     tags: list[str] | None = None,
     note: str | None = None,
     vt_symbol: str | None = None,
+    strategy_name: str | None = None,
 ) -> dict[str, Any]:
     run = run_repository.get_run(run_id)
     if run is None:
@@ -393,7 +405,7 @@ def add_variant_to_pool(
     result = _read_json(pool_path / "result.json")
     metrics = dict(result.get("metrics") or result)
     strategy = strategy_repository.get_strategy(str(run["strategy_id"])) or {}
-    strategy_name = str(strategy.get("strategy_name") or run.get("strategy_id") or "")
+    resolved_strategy_name = _text(strategy_name) or str(strategy.get("strategy_name") or run.get("strategy_id") or "")
 
     pool_item = pool_repository.create_pool_item(
         pool_item_id=pool_item_id,
@@ -401,7 +413,7 @@ def add_variant_to_pool(
         source_run_id=run_id,
         source_variant_id=str(variant["variant_id"]),
         pool_path=str(pool_path),
-        strategy_name=strategy_name,
+        strategy_name=resolved_strategy_name,
         strategy_family=str(strategy.get("strategy_family") or ""),
         strategy_version=str(strategy.get("strategy_version") or ""),
         vt_symbol=vt_symbol,
@@ -509,7 +521,7 @@ def compare_pool_items(pool_item_ids: list[str] | None) -> dict[str, Any]:
     }
 
 
-def rerun_pool_items_to_latest(pool_item_ids: list[str] | None, *, end_date: str | None = None) -> dict[str, Any]:
+def rerun_pool_items_to_latest(pool_item_ids: list[str] | None, *, end_date: str | None = None, start_mode: str | None = None) -> dict[str, Any]:
     requested_ids = [_text(item) for item in pool_item_ids or [] if _text(item)]
     requested_end_date = _date_only(end_date, now_beijing().date().isoformat())
     if not requested_ids:
@@ -545,7 +557,7 @@ def rerun_pool_items_to_latest(pool_item_ids: list[str] | None, *, end_date: str
             def report_item_progress(phase: float, message: str) -> None:
                 task_service.mark_progress(task["task_id"], item_start + item_span * phase, message=message)
 
-            items.append(_rerun_payload(detail, end_date=requested_end_date, progress_callback=report_item_progress))
+            items.append(_rerun_payload(detail, end_date=requested_end_date, start_mode=start_mode, progress_callback=report_item_progress))
         except Exception as exc:
             diagnostics.append({"level": "warning", "message": f"pool rerun failed: {pool_item_id} | {exc}", "pool_item_id": pool_item_id})
 
@@ -577,3 +589,19 @@ def rerun_pool_items_to_latest(pool_item_ids: list[str] | None, *, end_date: str
         "diagnostics": diagnostics,
         "rerun_end": requested_end_date or _text(items[0].get("rerun_end") if items else ""),
     }
+
+
+def remove_pool_item(pool_item_id: str) -> dict[str, Any]:
+    import shutil
+
+    item = pool_repository.get_pool_item(pool_item_id)
+    if item is None:
+        raise FileNotFoundError(f"Pool item not found: {pool_item_id}")
+    pool_path = Path(str(item.get("pool_path") or ""))
+    artifact_repository.delete_artifacts_by_owner("pool_item", pool_item_id)
+    if pool_path.exists() and pool_path.is_dir():
+        shutil.rmtree(pool_path, ignore_errors=True)
+    deleted = pool_repository.delete_pool_item(pool_item_id)
+    if not deleted:
+        raise RuntimeError(f"Failed to delete pool item: {pool_item_id}")
+    return {"deleted": True, "pool_item_id": pool_item_id}

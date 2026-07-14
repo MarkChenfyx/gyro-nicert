@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import ReactDOM from "react-dom/client";
-import { Button, Checkbox, ConfigProvider, Drawer, Input, InputNumber, Progress, Select, Table, Tag, message } from "antd";
+import { Button, Checkbox, ConfigProvider, Drawer, Input, InputNumber, Modal, Progress, Select, Table, Tag, message } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import * as echarts from "echarts";
 import {
@@ -24,6 +24,7 @@ import {
   listNaturalLanguageSources,
   listPool,
   listTasks,
+  removeFromPool,
   rerunPool,
   runOptimization,
   updateNaturalLanguageSource
@@ -33,7 +34,7 @@ import "./styles.css";
 type PageKey = "launch" | "generate" | "optimize" | "pool";
 const PAGE_STORAGE_KEY = "gyro_nicert.active_page";
 const OPTIMIZE_DRAFT_STORAGE_KEY = "gyro_nicert.optimize_draft";
-const BENCHMARK_CURVE_COLOR = "#64748b";
+const BENCHMARK_CURVE_COLOR = "#475569";
 
 type TaskStatusValue = "queued" | "running" | "completed" | "failed" | "cancelled";
 type TaskView = "all" | "active" | "failed" | "completed" | "archived";
@@ -555,25 +556,23 @@ function variantDisplayLabel(variantName: string) {
 function curveSeriesColor(item: NormalizedCurveSeries, index = 0) {
   if (item.type === "benchmark") return BENCHMARK_CURVE_COLOR;
   const token = String(item.key || "").toLowerCase().replace(/^variant:/, "");
-  if (token === "baseline" || token === "strategy") return "#4f6df5";
-  if (token === "manual_grid") return "#de4b39";
+  if (token === "baseline" || token === "strategy") return "#2563eb";
+  if (token === "manual_grid") return "#f97316";
   const palette = [
-    "#0f766e",
-    "#7c3aed",
-    "#0284c7",
-    "#ea580c",
-    "#16a34a",
-    "#db2777",
-    "#4f46e5",
-    "#ca8a04",
-    "#0d9488",
-    "#9333ea",
     "#dc2626",
-    "#2563eb"
+    "#7c3aed",
+    "#0891b2",
+    "#16a34a",
+    "#ca8a04",
+    "#0f766e",
+    "#9333ea",
+    "#0ea5e9",
+    "#84cc16",
+    "#c2410c",
+    "#4f46e5",
+    "#14b8a6"
   ];
-  const stableKey = String(item.key || item.label || index).replace(/^variant:/, "");
-  const hash = Array.from(stableKey).reduce((value, character) => ((value * 31) + character.charCodeAt(0)) >>> 0, 0);
-  return palette[hash % palette.length];
+  return palette[index % palette.length];
 }
 
 function curveColorForKey(
@@ -583,14 +582,15 @@ function curveColorForKey(
   orderedKeys: string[] = [],
   fallbackIndex = 0
 ) {
-  const orderedIndex = orderedKeys.indexOf(key);
+  const normalizedKey = String(key || "").replace(/^variant:/, "");
+  const orderedIndex = orderedKeys.findIndex((candidate) => String(candidate || "").replace(/^variant:/, "") === normalizedKey);
   return curveSeriesColor(
     { key, label, type, points: [], drawdownPoints: [], totalReturn: 0, maxDrawdown: 0 },
     orderedIndex >= 0 ? orderedIndex : fallbackIndex
   );
 }
 
-function buildCumulativeChartOption(series: NormalizedCurveSeries[], dates: string[]) {
+function buildCumulativeChartOption(series: NormalizedCurveSeries[], dates: string[], orderedKeys: string[] = []) {
   const yValues = series.flatMap((item) => item.points.map((point) => point.value)).filter((value) => Number.isFinite(value));
   const rawMin = yValues.length ? Math.min(...yValues, 0) : 0;
   const rawMax = yValues.length ? Math.max(...yValues, 0) : 0;
@@ -648,7 +648,7 @@ function buildCumulativeChartOption(series: NormalizedCurveSeries[], dates: stri
     ],
     series: [
       ...series.map((item, index) => ({
-      color: curveSeriesColor(item, index),
+      color: curveColorForKey(item.key, item.label, item.type, orderedKeys, index),
       name: item.label,
       type: "line",
       xAxisIndex: 0,
@@ -657,7 +657,7 @@ function buildCumulativeChartOption(series: NormalizedCurveSeries[], dates: stri
       showSymbol: false,
       emphasis: { focus: "series" },
       lineStyle: {
-        color: curveSeriesColor(item, index),
+        color: curveColorForKey(item.key, item.label, item.type, orderedKeys, index),
         width: item.type === "benchmark" ? 2 : 3,
         type: item.type === "benchmark" ? "dashed" : "solid"
       },
@@ -680,7 +680,7 @@ function buildCumulativeChartOption(series: NormalizedCurveSeries[], dates: stri
         yAxisIndex: 1,
         showSymbol: false,
         smooth: false,
-        lineStyle: { color: curveSeriesColor(item, index), width: 1.5, opacity: 0.7 },
+        lineStyle: { color: curveColorForKey(item.key, item.label, item.type, orderedKeys, index), width: 1.5, opacity: 0.7 },
         areaStyle: { color: "rgba(220,38,38,0.14)" },
         data: dates.map((date) => {
           const point = item.drawdownPoints.find((entry) => entry.date === date);
@@ -778,6 +778,7 @@ function MultiVariantCurveChart({
   visibleKeys,
   labels = {},
   benchmark = null,
+  orderedKeys = [],
   height = 340,
   showLegend = true
 }: {
@@ -785,6 +786,7 @@ function MultiVariantCurveChart({
   visibleKeys: string[];
   labels?: Record<string, string>;
   benchmark?: NormalizedCurveSeries | null;
+  orderedKeys?: string[];
   height?: number;
   showLegend?: boolean;
 }) {
@@ -803,14 +805,14 @@ function MultiVariantCurveChart({
   useEffect(() => {
     if (!ref.current) return;
     const chart = echarts.init(ref.current);
-    chart.setOption(buildCumulativeChartOption(series, dates), true);
+    chart.setOption(buildCumulativeChartOption(series, dates, orderedKeys), true);
     const resize = () => chart.resize();
     window.addEventListener("resize", resize);
     return () => {
       window.removeEventListener("resize", resize);
       chart.dispose();
     };
-  }, [dates, series]);
+  }, [dates, orderedKeys, series]);
 
   return (
     <div className="curve-chart-shell">
@@ -824,7 +826,7 @@ function MultiVariantCurveChart({
           {series.map((item, index) => (
             <div className={`curve-series-card ${item.totalReturn >= 0 ? "positive" : "negative"}`} key={item.key}>
               <div className="curve-series-head">
-                <span className={`curve-swatch ${item.type === "benchmark" ? "is-dashed" : ""}`} style={item.type === "benchmark" ? { borderLeftColor: curveSeriesColor(item, index) } : { background: curveSeriesColor(item, index) }} />
+                <span className={`curve-swatch ${item.type === "benchmark" ? "is-dashed" : ""}`} style={item.type === "benchmark" ? { borderLeftColor: curveColorForKey(item.key, item.label, item.type, orderedKeys, index) } : { background: curveColorForKey(item.key, item.label, item.type, orderedKeys, index) }} />
                 <strong>{item.label}</strong>
               </div>
               <div className="curve-series-metrics">
@@ -857,20 +859,7 @@ function Sidebar({
   const [taskFilter, setTaskFilter] = useState<TaskView>("all");
   const [selectedTask, setSelectedTask] = useState<WorkbenchTask | null>(null);
   const [loadingDrawer, setLoadingDrawer] = useState(false);
-  const visibleTasks = tasks.slice(0, 3);
-  const runningTask = tasks.find((task) => String(task.status).toLowerCase() === "running");
-  const queuedTask = tasks.find((task) => String(task.status).toLowerCase() === "queued");
-  const recentFailure = tasks.find((task) => {
-    if (String(task.status).toLowerCase() !== "failed") return false;
-    const updatedAt = new Date(task.updated_at).getTime();
-    return Number.isFinite(updatedAt) && Date.now() - updatedAt <= 86400000;
-  });
-  const activeTask = runningTask || queuedTask || null;
-  const counts = {
-    running: tasks.filter((task) => task.status === "running").length,
-    queued: tasks.filter((task) => task.status === "queued").length,
-    failed: tasks.filter((task) => task.status === "failed").length
-  };
+  const visibleTasks = tasks.slice(0, 5);
 
   async function loadDrawerTasks(filter: TaskView = taskFilter) {
     setLoadingDrawer(true);
@@ -942,48 +931,6 @@ function Sidebar({
             {label}
           </button>
         ))}
-      </section>
-
-      <section className="sidebar-section status-section">
-        <div className="section-head status-head">
-          <h2>{zh.status}</h2>
-          <button className="mini-button" type="button" onClick={() => onRefreshTasks().catch((error) => message.error(String(error)))}>
-            {zh.refresh}
-          </button>
-        </div>
-        <div className="status-card-shell">
-          {taskConnectionError ? (
-            <>
-              <span className="status-pill status-failed">连接异常</span>
-              <strong className="status-main">无法获取工作台状态</strong>
-              <span className="status-sub">请检查后端服务后刷新。</span>
-            </>
-          ) : activeTask ? (
-            <>
-              <span className={statusClass(activeTask.status)}>{taskStatusLabel(activeTask.status)}</span>
-              <strong className="status-main">{taskDisplayLabel(activeTask)}</strong>
-              <div className="mini-progress status-progress"><span style={{ width: `${taskProgress(activeTask)}%` }} /></div>
-              <span className="status-sub">{Math.round(taskProgress(activeTask))}% · {activeTask.message || activeTask.task_id}</span>
-              <span className="status-sub">已运行 {elapsedLabel(activeTask)} · {formatDate(activeTask.updated_at)}</span>
-            </>
-          ) : recentFailure ? (
-            <>
-              <span className="status-pill status-failed">最近任务失败</span>
-              <strong className="status-main">{taskDisplayLabel(recentFailure)}</strong>
-              <span className="status-sub">{recentFailure.error || recentFailure.message || recentFailure.task_id}</span>
-              <button className="mini-button status-detail-button" type="button" onClick={() => openTaskDrawer(recentFailure)}>查看失败详情</button>
-            </>
-          ) : (
-            <>
-              <span className="status-pill status-ready">就绪</span>
-              <strong className="status-main">工作台空闲</strong>
-              <span className="status-sub">接口已就绪，当前没有活动任务。</span>
-            </>
-          )}
-          <div className="task-count-row">
-            <span>运行 {counts.running}</span><span>排队 {counts.queued}</span><span className={counts.failed ? "is-danger" : ""}>失败 {counts.failed}</span>
-          </div>
-        </div>
       </section>
 
       <section className="sidebar-section jobs-section">
@@ -1110,8 +1057,8 @@ function LaunchFlowPage({
   const localFolderInputRef = useRef<HTMLInputElement>(null);
   const [vtSymbolInput, setVtSymbolInput] = useState("511380.SSE");
   const [interval, setInterval] = useState("1m");
-  const [startDate, setStartDate] = useState("2023-01-01");
-  const [endDate, setEndDate] = useState(() => new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Shanghai" }));
+  const [startDate, setStartDate] = useState("2025-01-02");
+  const [endDate, setEndDate] = useState("2026-06-25");
   const [rate, setRate] = useState<number | null>(0.000045);
   const [slippage, setSlippage] = useState<number | null>(0.002);
   const [loadingResearch, setLoadingResearch] = useState(false);
@@ -2050,6 +1997,7 @@ function ParameterOptimizationPage({
   const [suggestionLoading, setSuggestionLoading] = useState(false);
   const [suggestionProgress, setSuggestionProgress] = useState(0);
   const [spaceSuggestion, setSpaceSuggestion] = useState<any>(null);
+  const [poolStrategyName, setPoolStrategyName] = useState("");
 
   useEffect(() => {
     if (!suggestionLoading) return;
@@ -2070,7 +2018,7 @@ function ParameterOptimizationPage({
     if (preferred && preferred !== runId) setRunId(preferred);
   }
 
-  async function loadRunContext(nextRunId: string) {
+  async function loadRunContext(nextRunId: string, useCachedSuggestion = true, reuseDraftParams = true) {
     if (!nextRunId) return;
     const [detail, space] = await Promise.all([
       getRun(nextRunId),
@@ -2093,10 +2041,21 @@ function ParameterOptimizationPage({
     const defaultPoolVariant = availableVariants.find((name: string) => name !== "baseline") || "baseline";
     const storedDraft = loadOptimizeDraft();
     const shouldReuseDraft = String(storedDraft.runId || "") === nextRunId;
-    const parameterNames = (space.parameters || []).map((item: any) => String(item.name));
+    const shouldReuseDraftParams = shouldReuseDraft && reuseDraftParams;
+    const cachedSuggestion = useCachedSuggestion && space.cached_suggestion ? space.cached_suggestion : null;
+    const editableRows = cachedSuggestion
+      ? [
+          ...(cachedSuggestion.parameters || []),
+          ...(cachedSuggestion.excluded_parameters || []).filter((item: any) => item.low !== undefined && item.high !== undefined)
+        ]
+      : (space.parameters || []);
+    const effectiveSpace = { ...space, parameters: editableRows };
+    const parameterNames = editableRows.map((item: any) => String(item.name));
+    const virtualNames = (cachedSuggestion?.virtual_parameters || []).map((item: any) => String(item.name));
+    const selectableNames = [...parameterNames, ...virtualNames];
     setRunDetail(detail);
-    setSearchSpace(space);
-    setSpaceSuggestion(null);
+    setSearchSpace(effectiveSpace);
+    setSpaceSuggestion(cachedSuggestion);
     setVariantCurves(nextCurves);
     setVisibleCurveKeys(() => {
       if (shouldReuseDraft && Array.isArray(storedDraft.visibleCurveKeys)) {
@@ -2111,10 +2070,10 @@ function ParameterOptimizationPage({
       return availableVariants.includes(preferred) ? preferred : defaultPoolVariant;
     });
     const nextRanges: Record<string, any> = {};
-    for (const item of space.parameters || []) {
+    for (const item of editableRows) {
       nextRanges[item.name] = { low: item.low, high: item.high, step: item.step, type: item.type };
     }
-    if (shouldReuseDraft && storedDraft.ranges && typeof storedDraft.ranges === "object") {
+    if (shouldReuseDraftParams && storedDraft.ranges && typeof storedDraft.ranges === "object") {
       for (const name of parameterNames) {
         if (storedDraft.ranges[name] && typeof storedDraft.ranges[name] === "object") {
           nextRanges[name] = { ...nextRanges[name], ...storedDraft.ranges[name] };
@@ -2122,7 +2081,16 @@ function ParameterOptimizationPage({
       }
     }
     setRanges(nextRanges);
-    setSelectedParams(shouldReuseDraft && Array.isArray(storedDraft.selectedParams) ? storedDraft.selectedParams.map(String).filter((name: string) => parameterNames.includes(name)) : []);
+    setSelectedParams(
+      shouldReuseDraftParams && Array.isArray(storedDraft.selectedParams)
+        ? storedDraft.selectedParams.map(String).filter((name: string) => selectableNames.includes(name))
+        : cachedSuggestion
+          ? [
+              ...(cachedSuggestion.parameters || []).filter((item: any) => item.optimize !== false).map((item: any) => String(item.name)),
+              ...(cachedSuggestion.virtual_parameters || []).filter((item: any) => item.optimize !== false).map((item: any) => String(item.name))
+            ]
+          : []
+    );
     if (!shouldReuseDraft) {
       setCurveStartDate("");
       setCurveEndDate("");
@@ -2170,6 +2138,9 @@ function ParameterOptimizationPage({
   }, [runId]);
 
   const currentRun = runs.find((item) => item.run_id === runId);
+  useEffect(() => {
+    setPoolStrategyName(String(currentRun?.strategy_name || runDetail?.strategy?.strategy_name || ""));
+  }, [currentRun?.strategy_name, runDetail?.strategy?.strategy_name]);
   const optimizationRunId = String(optimizationResult?.run?.run_id || "");
   const optimizationObjective = String(optimizationResult?.objective || optimizationResult?.optimization?.objective || "");
   const optimizationMatchesRun = Boolean(optimizationResult) && optimizationRunId === runId;
@@ -2245,13 +2216,12 @@ function ParameterOptimizationPage({
     setSuggestionProgress(6);
     setSuggestionLoading(true);
     try {
-      const payload = await suggestOptimizationSearchSpace(runId, "baseline");
+      const payload = await suggestOptimizationSearchSpace(runId, "baseline", true);
       const editableRows = [
         ...(payload.parameters || []),
         ...(payload.excluded_parameters || []).filter((item: any) => item.low !== undefined && item.high !== undefined)
       ];
       setSpaceSuggestion(payload);
-      setMethod("optuna");
       setSearchSpace((current: any) => ({ ...current, parameters: editableRows }));
       setRanges(Object.fromEntries(editableRows.map((item: any) => [item.name, {
         low: item.low,
@@ -2281,8 +2251,7 @@ function ParameterOptimizationPage({
 
   async function restoreStaticSpace() {
     if (!runId) return;
-    await loadRunContext(runId);
-    setSelectedParams([]);
+    await loadRunContext(runId, false, false);
     message.success("已恢复平台默认范围");
   }
 
@@ -2332,7 +2301,7 @@ function ParameterOptimizationPage({
   async function addSelectedVariantToPool() {
     if (!runId) return;
     try {
-      await addToPool(runId, poolVariant, currentRun?.vt_symbol);
+      await addToPool(runId, poolVariant, currentRun?.vt_symbol, poolStrategyName.trim() || undefined);
       await refreshPool();
       message.success("已加入策略池");
       onOpenPool();
@@ -2563,7 +2532,9 @@ function ParameterOptimizationPage({
           onShortcut={applyCurveShortcut}
         />
         {visibleCurveKeys.length > 0 && curveVariantNames.length > 0 ? (
-          <div className="library-curve-panel unified-curve-panel"><MultiVariantCurveChart curves={filteredVariantCurves} visibleKeys={visibleCurveKeys} showLegend={false} height={420} /></div>
+          <div className="library-curve-panel unified-curve-panel"><MultiVariantCurveChart curves={filteredVariantCurves} visibleKeys={visibleCurveKeys} orderedKeys={curveSelectorItems.map((item) => item.key)} showLegend={false} height={420} /></div>
+        ) : curveVariantNames.length > 0 ? (
+          <div className="empty-state">当前没有展示的曲线，可在上方重新勾选。</div>
         ) : (
           <div className="empty-state">当前运行版本没有可展示的曲线。</div>
         )}
@@ -2605,7 +2576,13 @@ function ParameterOptimizationPage({
                 ]}
               />
             </label>
-            <span className="status-pill status-running">{method === "optuna" ? "Trials 200" : `网格 ${totalGridCount}`}</span>
+            <span className="status-pill status-running">
+              {method === "optuna"
+                ? totalGridCount > 0 && totalGridCount <= 200
+                  ? `全量 ${totalGridCount} 组`
+                  : "TPE 200 Trials"
+                : `网格 ${totalGridCount}`}
+            </span>
           </div>
         </div>
         {suggestionProgress > 0 && (
@@ -2683,6 +2660,10 @@ function ParameterOptimizationPage({
                 }))}
             />
           </div>
+          <div className="viewer-summary-card">
+            <span className="summary-label">入池名称</span>
+            <Input value={poolStrategyName} onChange={(event) => setPoolStrategyName(event.target.value)} placeholder="用于策略池展示的名称" />
+          </div>
           <div className="viewer-summary-card"><span className="summary-label">版本 Sharpe</span><strong>{formatNumber(poolVariantMetrics.sharpe ?? poolVariantMetrics.sharpe_ratio)}</strong></div>
           <div className="viewer-summary-card"><span className="summary-label">版本交易数</span><strong>{Number.isFinite(Number(poolVariantTradeCount)) ? String(poolVariantTradeCount) : "-"}</strong></div>
           <div className="viewer-summary-card"><span className="summary-label">优化器</span><strong>{optimizationResult?.optimization?.optimizer_name || "-"}</strong></div>
@@ -2706,6 +2687,8 @@ function PoolPage({
   const [selectedSymbol, setSelectedSymbol] = useState("");
   const [searchText, setSearchText] = useState("");
   const [selectionMode, setSelectionMode] = useState("all");
+  const [poolSortKey, setPoolSortKey] = useState<"created_at" | "total_return" | "sharpe" | "trade_count" | "max_drawdown">("created_at");
+  const [poolSortOrder, setPoolSortOrder] = useState<"asc" | "desc">("desc");
   const [selectedDetailId, setSelectedDetailId] = useState("");
   const [detail, setDetail] = useState<any>(null);
   const [comparison, setComparison] = useState<any>({ items: [], benchmark: { curve: [] }, diagnostics: [] });
@@ -2713,9 +2696,11 @@ function PoolPage({
   const [rerunning, setRerunning] = useState(false);
   const [rerunProgress, setRerunProgress] = useState(0);
   const [rerunMessage, setRerunMessage] = useState("");
+  const [poolRerunStartMode, setPoolRerunStartMode] = useState("auto_earliest");
   const [showBenchmark, setShowBenchmark] = useState(true);
   const [curveStartDate, setCurveStartDate] = useState("");
   const [curveEndDate, setCurveEndDate] = useState("");
+  const [poolSelectionInitialized, setPoolSelectionInitialized] = useState(false);
 
   function itemTags(item: any): string[] {
     try {
@@ -2751,6 +2736,41 @@ function PoolPage({
     return strategy - benchmark;
   }
 
+  function strategyCurveMetrics(item: any) {
+    const summary = curveSummary(item?.curve || []);
+    return {
+      totalReturn: summary.strategy?.totalReturn ?? null,
+      maxDrawdown: summary.strategy?.maxDrawdown ?? null,
+      buyHoldReturn: summary.buyHold?.totalReturn ?? null,
+      excessReturn: excessReturn(item),
+      tradeCount: Number(item?.trade_count ?? item?.trades_preview?.length ?? 0),
+      sharpe: metricValue(item?.metrics, "sharpe", "sharpe_ratio"),
+    };
+  }
+
+  function togglePoolSort(nextKey: "total_return" | "sharpe" | "trade_count" | "max_drawdown") {
+    if (poolSortKey === nextKey) {
+      setPoolSortOrder((current) => current === "desc" ? "asc" : "desc");
+      return;
+    }
+    setPoolSortKey(nextKey);
+    setPoolSortOrder("desc");
+  }
+
+  function sortArrow(key: "total_return" | "sharpe" | "trade_count" | "max_drawdown") {
+    if (poolSortKey !== key) return null;
+    return poolSortOrder === "desc" ? "down" : "up";
+  }
+
+  function SortCaret({ state }: { state: "up" | "down" | null }) {
+    return (
+      <span className={`table-sort-caret ${state ? `is-${state}` : ""}`} aria-hidden="true">
+        <span />
+        <span />
+      </span>
+    );
+  }
+
   const symbols = useMemo(() => Array.from(new Set(poolItems.map((item) => String(item.vt_symbol || "")).filter(Boolean))).sort(), [poolItems]);
   const latestCreatedAt = useMemo(() => poolItems.map((item) => String(item.created_at || "")).sort().at(-1), [poolItems]);
   const candidateItems = useMemo(() => {
@@ -2777,7 +2797,10 @@ function PoolPage({
       return records.slice().sort((a, b) => Number(b.sharpe ?? -Infinity) - Number(a.sharpe ?? -Infinity)).slice(0, 5);
     }
     if (mode === "top_excess") {
-      return records.slice().sort((a, b) => Number(b.annual_return ?? -Infinity) - Number(a.annual_return ?? -Infinity)).slice(0, 5);
+      return records
+        .slice()
+        .sort((a, b) => Number(strategyCurveMetrics(b).excessReturn ?? -Infinity) - Number(strategyCurveMetrics(a).excessReturn ?? -Infinity))
+        .slice(0, 5);
     }
     if (mode === "recent") {
       return records.slice().sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || ""))).slice(0, 5);
@@ -2835,7 +2858,7 @@ function PoolPage({
     }, 700);
     try {
       const today = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Shanghai" });
-      const payload = await rerunPool(selectedIds, today);
+      const payload = await rerunPool(selectedIds, today, poolRerunStartMode);
       setComparison(payload);
       setRerunProgress(1);
       setRerunMessage("策略池重跑完成");
@@ -2868,10 +2891,11 @@ function PoolPage({
       setSelectedIds(kept);
       return;
     }
-    if (!kept.length && candidateItems.length) {
+    if (!poolSelectionInitialized && !kept.length && candidateItems.length) {
       setSelectedIds(presetItems(selectionMode, candidateItems).map((item) => String(item.pool_item_id)));
+      setPoolSelectionInitialized(true);
     }
-  }, [candidateItems, selectedIds, selectionMode]);
+  }, [candidateItems, poolSelectionInitialized, selectedIds, selectionMode]);
 
   useEffect(() => {
     if (!selectedIds.length) {
@@ -2885,7 +2909,34 @@ function PoolPage({
       .finally(() => setLoading(false));
   }, [selectedIds]);
 
-  const compareItems = comparison?.items || [];
+  const compareItems = useMemo(() => {
+    const items = [...(comparison?.items || [])];
+    const direction = poolSortOrder === "desc" ? -1 : 1;
+    if (poolSortKey === "created_at") {
+      items.sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")) * direction);
+      return items;
+    }
+    items.sort((a, b) => {
+      const aMetrics = strategyCurveMetrics(a);
+      const bMetrics = strategyCurveMetrics(b);
+      const aValue = poolSortKey === "total_return"
+        ? Number(aMetrics.totalReturn ?? -Infinity)
+        : poolSortKey === "sharpe"
+          ? Number(aMetrics.sharpe ?? -Infinity)
+          : poolSortKey === "max_drawdown"
+            ? Number(aMetrics.maxDrawdown ?? -Infinity)
+            : Number(aMetrics.tradeCount ?? -Infinity);
+      const bValue = poolSortKey === "total_return"
+        ? Number(bMetrics.totalReturn ?? -Infinity)
+        : poolSortKey === "sharpe"
+          ? Number(bMetrics.sharpe ?? -Infinity)
+          : poolSortKey === "max_drawdown"
+            ? Number(bMetrics.maxDrawdown ?? -Infinity)
+            : Number(bMetrics.tradeCount ?? -Infinity);
+      return (aValue - bValue) * direction;
+    });
+    return items;
+  }, [comparison, poolSortKey, poolSortOrder]);
   const compareCurves = useMemo(() => Object.fromEntries(compareItems.map((item: any) => [item.pool_item_id, item.curve || []])), [compareItems]);
   const poolCurveDateBounds = useMemo(
     () => curveDateBoundsForRows(Object.values(compareCurves).flatMap((rows: any) => rows)),
@@ -2897,16 +2948,15 @@ function PoolPage({
   );
   const compareLabels = useMemo(() => Object.fromEntries(compareItems.map((item: any) => [item.pool_item_id, compareItemLabel(item)])), [compareItems]);
   const poolVisibleKeys = useMemo(() => [...selectedIds, ...(showBenchmark ? ["buy_hold"] : [])], [selectedIds, showBenchmark]);
-  const poolCurveControlItems = useMemo<CurveControlItem[]>(() => [
-    ...candidateItems.map((item) => ({
+  const poolCurveControlItems = useMemo<CurveControlItem[]>(() =>
+    candidateItems.map((item) => ({
       key: String(item.pool_item_id),
       label: poolItemLabel(item),
       type: "strategy" as const,
       value: curveSummary(item?.curve || []).strategy?.totalReturn,
       detail: `${item.vt_symbol || "-"} · ${formatReturnPct(curveSummary(item?.curve || []).strategy?.totalReturn, 2)}`
     })),
-    { key: "buy_hold", label: "Buy & Hold", type: "benchmark" as const, value: curveSummary(candidateItems[0]?.curve || []).buyHold?.totalReturn }
-  ], [candidateItems]);
+  [candidateItems]);
 
   function applyPoolCurveShortcut(range: "3m" | "6m" | "1y" | "all") {
     const next = shortcutDateRange(poolCurveDateBounds, range);
@@ -2919,26 +2969,85 @@ function PoolPage({
         title: "策略",
         dataIndex: "strategy_name",
         render: (value, record) => (
-          <button className="link-cell strategy-pool-name-cell" type="button" onClick={() => openItem(record)}>
+          <div className="strategy-pool-name-cell">
             <strong>{strategyLabel(record)}</strong>
             <span>{record.source_run_id || record.pool_item_id}</span>
-          </button>
+          </div>
         )
       },
-      { title: "变体", dataIndex: "variant_name", render: (value) => value || "-" },
-      { title: "收益", render: (_, record) => formatPercent(metricValue(record.metrics, "total_return", "annual_return")) },
-      { title: "年化", render: (_, record) => formatPercent(metricValue(record.metrics, "annual_return", "total_return")) },
-      { title: zh.sharpe, render: (_, record) => formatNumber(metricValue(record.metrics, "sharpe", "sharpe_ratio")) },
-      { title: "最大回撤", render: (_, record) => formatReturnPct(curveSummary(record?.curve || []).strategy?.maxDrawdown) },
-      { title: "buy & hold", render: (_, record) => formatReturnPct(curveSummary(record?.curve || []).buyHold?.totalReturn) },
-      { title: "超额收益", render: (_, record) => formatReturnPct(excessReturn(record)) }
+      {
+        title: (
+          <button type="button" className="table-sort-button" onClick={() => togglePoolSort("total_return")}>
+            累计收益 <SortCaret state={sortArrow("total_return")} />
+          </button>
+        ),
+        render: (_, record) => formatReturnPct(strategyCurveMetrics(record).totalReturn)
+      },
+      {
+        title: (
+          <button type="button" className="table-sort-button" onClick={() => togglePoolSort("trade_count")}>
+            交易数 <SortCaret state={sortArrow("trade_count")} />
+          </button>
+        ),
+        render: (_, record) => formatNumber(strategyCurveMetrics(record).tradeCount, 0)
+      },
+      {
+        title: (
+          <button type="button" className="table-sort-button" onClick={() => togglePoolSort("sharpe")}>
+            {zh.sharpe} <SortCaret state={sortArrow("sharpe")} />
+          </button>
+        ),
+        render: (_, record) => formatNumber(metricValue(record.metrics, "sharpe", "sharpe_ratio"))
+      },
+      {
+        title: (
+          <button type="button" className="table-sort-button" onClick={() => togglePoolSort("max_drawdown")}>
+            最大回撤 <SortCaret state={sortArrow("max_drawdown")} />
+          </button>
+        ),
+        render: (_, record) => formatReturnPct(strategyCurveMetrics(record).maxDrawdown)
+      },
+      { title: "超额收益", render: (_, record) => formatReturnPct(strategyCurveMetrics(record).excessReturn) },
+      {
+        title: "操作",
+        render: (_, record) => (
+          <div className="strategy-pool-action-stack">
+            <Button size="small" danger onClick={() => handleDeletePoolItem(String(record.pool_item_id))}>移除</Button>
+            <Button size="small" onClick={() => openItem(record)}>查看</Button>
+          </div>
+        )
+      }
     ],
-    [comparison]
+    [comparison, poolSortKey, poolSortOrder]
   );
+
+  async function handleDeletePoolItem(poolItemId: string) {
+    Modal.confirm({
+      title: "确认移除",
+      content: `确定要将 ${poolItemId} 从策略池中移除吗？此操作不可撤销，相关的快照文件也会被删除。`,
+      okText: "确认移除",
+      okType: "danger",
+      cancelText: "取消",
+      onOk: async () => {
+        try {
+          await removeFromPool(poolItemId);
+          message.success(`已从策略池移除 ${poolItemId}`);
+          setSelectedIds((current) => current.filter((id) => id !== poolItemId));
+          if (selectedDetailId === poolItemId) setDetail(null);
+          await refreshPool();
+          await refreshTasks();
+        } catch (error) {
+          message.error(String(error));
+        }
+      }
+    });
+  }
 
   const metrics = detail?.result?.metrics || detail?.result || {};
   const detailCurveSummary = curveSummary(detail?.daily_results?.data || []);
-  const params = detail?.config?.parameters || detail?.manifest?.parameters || detail?.result?.params || {};
+  const detailParams = detail?.params || {};
+  const resultParams = detail?.result?.recommended?.parameters || detail?.result?.params || detail?.result?.parameters || {};
+  const params = detail?.config?.parameters || detail?.manifest?.parameters || detailParams || resultParams || {};
   const trades = detail?.trades?.data || [];
   const tradeColumns = (detail?.trades?.columns || Object.keys(trades[0] || {})).slice(0, 8).map((column: string) => ({ title: column, dataIndex: column }));
 
@@ -2989,10 +3098,21 @@ function PoolPage({
           </div>
         </div>
         <div className="strategy-pool-date-action">
+          <label className="field strategy-pool-rerun-mode-field">
+            <span>重跑起点</span>
+            <Select
+              value={poolRerunStartMode}
+              onChange={setPoolRerunStartMode}
+              options={[
+                { value: "auto_earliest", label: "自动最早" },
+                { value: "saved", label: "沿用入池日期" }
+              ]}
+            />
+          </label>
           <Button type="primary" disabled={!selectedIds.length} loading={rerunning} onClick={rerunSelectedToToday}>重跑到今天</Button>
           <span>
             {comparison?.rerun_end
-              ? `当前对比结果已重跑到 ${formatDate(comparison.rerun_end)}。`
+              ? `当前对比结果已重跑到 ${formatDate(comparison.rerun_end)}。${poolRerunStartMode === "auto_earliest" ? "起点使用本地行情最早日期。" : "起点沿用入池时保存的开始日期。"}`
               : "当前展示的是已保存的策略池快照曲线。"}
           </span>
           {(rerunning || rerunProgress > 0) && (
@@ -3011,18 +3131,25 @@ function PoolPage({
         <div className="library-section-head"><div><h3>累计收益对比</h3><p>已选择 {selectedIds.length} 个策略，展示其按昨收归一并逐日累加后的收益曲线。</p></div><span className={statusClass(compareItems.length ? "completed" : "pending")}>{compareItems.length ? "ready" : "empty"}</span></div>
         <CurveControls
           items={poolCurveControlItems}
-          visibleKeys={poolVisibleKeys}
+          visibleKeys={selectedIds}
           startDate={curveStartDate}
           endDate={curveEndDate}
           bounds={poolCurveDateBounds}
-          onToggle={(key) => key === "buy_hold" ? setShowBenchmark((current) => !current) : togglePoolItem(key)}
+          onToggle={togglePoolItem}
           onSelectAll={() => { setSelectedIds(candidateItems.map((item) => String(item.pool_item_id))); setShowBenchmark(true); }}
           onClear={() => { setSelectedIds([]); setShowBenchmark(false); }}
           onStartDateChange={setCurveStartDate}
           onEndDateChange={setCurveEndDate}
           onShortcut={applyPoolCurveShortcut}
         />
-        {compareItems.length ? <div className="library-curve-panel unified-curve-panel"><MultiVariantCurveChart curves={filteredCompareCurves} visibleKeys={poolVisibleKeys} labels={compareLabels} showLegend={false} height={420} /></div> : <div className="empty-state">请至少选择一个策略。</div>}
+        <div className="pool-benchmark-toggle-row">
+          <label className="pool-benchmark-toggle">
+            <input type="checkbox" checked={showBenchmark} onChange={(event) => setShowBenchmark(event.target.checked)} disabled={!selectedIds.length} />
+            <span className="curve-swatch is-dashed" style={{ borderLeftColor: BENCHMARK_CURVE_COLOR }} />
+            <span>显示 Buy & Hold</span>
+          </label>
+        </div>
+        {compareItems.length && poolVisibleKeys.length > 0 ? <div className="library-curve-panel unified-curve-panel"><MultiVariantCurveChart curves={filteredCompareCurves} visibleKeys={poolVisibleKeys} labels={compareLabels} orderedKeys={[...poolCurveControlItems.map((item) => item.key), ...(showBenchmark ? ["buy_hold"] : [])]} showLegend={false} height={420} /></div> : compareItems.length ? <div className="empty-state">当前没有展示的曲线，可在上方重新勾选。</div> : <div className="empty-state">请至少选择一个策略。</div>}
         {(comparison?.diagnostics || []).length > 0 && <div className="diagnostic-list">{comparison.diagnostics.map((item: any, index: number) => <Tag color="orange" key={`${item.message}-${index}`}>{item.message}</Tag>)}</div>}
       </section>
 
@@ -3035,10 +3162,10 @@ function PoolPage({
 
       {detail && (
         <section className="band library-shell">
-          <div className="library-section-head"><div><h3>{strategyLabel(detail.pool_item)}</h3><p>{detail.pool_item?.pool_item_id}</p></div><span className="status-pill status-completed">completed</span></div>
+          <div className="library-section-head"><div><h3>{strategyLabel(detail.pool_item)}</h3><p>{detail.pool_item?.pool_item_id}</p></div><div className="detail-head-actions"><span className="status-pill status-completed">completed</span><Button size="small" danger onClick={() => handleDeletePoolItem(String(detail.pool_item?.pool_item_id))}>从池中移除</Button></div></div>
           <div className="library-metric-grid">
             <div className="library-metric-card"><span>{zh.sharpe}</span><strong>{formatNumber(detail.pool_item?.sharpe ?? metrics.sharpe ?? metrics.sharpe_ratio)}</strong></div>
-            <div className="library-metric-card positive"><span>{zh.return}</span><strong>{formatPercent(detail.pool_item?.annual_return ?? metrics.annual_return ?? metrics.total_return)}</strong></div>
+            <div className="library-metric-card positive"><span>策略累计收益</span><strong>{detailCurveSummary.strategy ? formatReturnPct(detailCurveSummary.strategy.totalReturn, 2) : "-"}</strong></div>
             <div className="library-metric-card negative"><span>{zh.drawdown}</span><strong>{detailCurveSummary.strategy ? formatReturnPct(detailCurveSummary.strategy.maxDrawdown, 2) : "-"}</strong></div>
             <div className="library-metric-card"><span>卡玛比率</span><strong>{formatNumber(detail.pool_item?.calmar ?? metrics.calmar)}</strong></div>
           </div>

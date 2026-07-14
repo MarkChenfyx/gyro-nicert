@@ -10,8 +10,8 @@
 - 本地策略上传：在工作台直接选择单个 `.py` 文件，读取代码后登记、回测并进入参数优化。
 - 直接粘贴策略代码：粘贴完整 `strategy.py`，后端登记策略后运行 baseline 回测。
 - 数据管理：检查本地行情覆盖范围，按需通过 RQData 下载并写入 SQLite。
-- 真实回测：使用 `vnpy_ctastrategy.BacktestingEngine` 与本地 SQLite K 线数据运行回测。
-- 参数优化：支持自动优化和手动网格搜索，保存优化变体、曲线与成交记录。
+- 真实回测：使用项目内适配的老师版 CTA `BacktestingEngine` 与本地 SQLite K 线数据运行回测。
+- 参数优化：支持 Optuna 自适应优化和手动网格搜索，保存优化变体、曲线与成交记录。
 - 策略池：将 run/variant 快照长期保存，支持查看、比较与重跑。
 - 任务与产物：记录策略、任务、run、variant、曲线、成交和池快照的索引关系。
 
@@ -47,7 +47,7 @@ tests/                    自动化测试
 pip install -e .
 ```
 
-真实回测环境还需要安装与你的 vn.py 部署匹配的 `vnpy` 与 `vnpy_ctastrategy`。若使用 RQData 下载行情，还需要安装 `rqdatac`。
+真实回测环境还需要安装与你的 vn.py 部署匹配的 `vnpy` 与 `vnpy_ctastrategy`。工作台实际导入的是 `backtesting/teacher_engine.py`，不会直接使用 site-packages 中的 vn.py CTA 回测引擎。若使用 RQData 下载行情，还需要安装 `rqdatac`。
 
 ## 配置
 
@@ -85,6 +85,8 @@ python scripts/init_db.py
 启动后端：
 
 ```powershell
+cd C:\Users\24084\Desktop\test2\gyro_nicert
+python scripts\init_db.py
 python -m uvicorn backend.main:app --reload
 ```
 
@@ -94,7 +96,7 @@ python -m uvicorn backend.main:app --reload
 另开一个终端启动前端：
 
 ```powershell
-cd frontend
+cd C:\Users\24084\Desktop\test2\gyro_nicert\frontend
 npm install
 npm run dev
 ```
@@ -128,7 +130,9 @@ npm run dev
 
 提交前端请求时，工作台会检查所选标的、周期和日期范围的本地行情覆盖情况。缺失或不完整时，前端会尝试调用数据下载接口补齐行情；真实回测只读取 `storage/db/market_data.sqlite` 中的数据。
 
-`mode="real"` 为默认模式。`mode="mock"` 仅用于离线测试或明确的模拟回退。
+`mode="real"` 为默认模式。真实模式使用老师版引擎的委托撮合、停止单、逐日盈亏和统计逻辑，同时通过适配器从 `storage/db/market_data.sqlite` 读取 K 线，不依赖 vn.py 的全局 MySQL/SQLite 数据库配置。`mode="mock"` 仅用于离线测试或明确的模拟回退。
+
+当前工作台数据层只落库 K 线，因此平台回测默认并仅开放老师引擎的 `BAR` 模式。老师引擎本身保留 `TICK` 撮合能力；在本地 Tick 表、覆盖检查和下载链路接入前，请求 `data_mode="tick"` 会返回明确错误，不会静默改用 K 线。
 
 ### 4. 查看结果与优化
 
@@ -139,6 +143,10 @@ npm run dev
 - 夏普、交易数与其他 vn.py 指标
 - 日度结果、成交记录和策略代码
 - 可优化参数及自动/手动网格优化结果
+
+Optuna 默认最多评估 200 次。若所有已选参数都是离散范围且唯一组合不足 200 组，平台会自动使用 Optuna `GridSampler` 将每个组合只回测一次，不会用重复参数补足 200 次；组合超过 200 组或包含连续分布时使用 TPE 抽样 200 次。
+
+AI 生成的参数范围会按 run 和 baseline 版本缓存，包含参数分类、是否启用、范围、步长、解释、约束、虚拟参数和风险提示。重新进入参数优化页面时会恢复缓存内容；再次点击“AI 生成参数范围”会重新请求并覆盖旧缓存。
 
 ### 5. 加入策略池
 

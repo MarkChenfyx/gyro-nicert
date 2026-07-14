@@ -150,10 +150,10 @@ export function getVariantCurve(runId: string, variantName: string) {
   return request<any>(`/api/runs/${encodeURIComponent(runId)}/variants/${encodeURIComponent(variantName)}/curve`);
 }
 
-export function addToPool(runId: string, variantName = "baseline", vtSymbol?: string) {
+export function addToPool(runId: string, variantName = "baseline", vtSymbol?: string, strategyName?: string) {
   return request<any>("/api/pool/add", {
     method: "POST",
-    body: JSON.stringify({ run_id: runId, variant_name: variantName, vt_symbol: vtSymbol, tags: ["frontend"] })
+    body: JSON.stringify({ run_id: runId, variant_name: variantName, vt_symbol: vtSymbol, strategy_name: strategyName, tags: ["frontend"] })
   });
 }
 
@@ -176,10 +176,16 @@ export function comparePool(poolItemIds: string[]) {
   });
 }
 
-export function rerunPool(poolItemIds: string[], endDate?: string) {
+export function rerunPool(poolItemIds: string[], endDate?: string, startMode?: string) {
   return request<any>("/api/pool/rerun", {
     method: "POST",
-    body: JSON.stringify({ pool_item_ids: poolItemIds, end_date: endDate })
+    body: JSON.stringify({ pool_item_ids: poolItemIds, end_date: endDate, start_mode: startMode })
+  });
+}
+
+export function removeFromPool(poolItemId: string) {
+  return request<any>(`/api/pool/${encodeURIComponent(poolItemId)}`, {
+    method: "DELETE"
   });
 }
 
@@ -209,10 +215,10 @@ export function getOptimizationSearchSpace(runId: string, variantName = "baselin
   });
 }
 
-export function suggestOptimizationSearchSpace(runId: string, variantName = "baseline") {
+export function suggestOptimizationSearchSpace(runId: string, variantName = "baseline", forceRefresh = false) {
   return request<any>("/api/optimization/suggest-space", {
     method: "POST",
-    body: JSON.stringify({ run_id: runId, variant_name: variantName })
+    body: JSON.stringify({ run_id: runId, variant_name: variantName, options: { force_refresh: forceRefresh } })
   });
 }
 

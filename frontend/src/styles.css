@@ -164,6 +164,13 @@ textarea {
   gap: 18px;
 }
 
+.detail-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
 .section-head h2 {
   margin: 0;
   color: #667085;
@@ -1323,6 +1330,61 @@ textarea {
   letter-spacing: 0;
 }
 
+.strategy-pool-action-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start;
+}
+
+.table-sort-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.table-sort-button:hover {
+  color: var(--primary);
+}
+
+.table-sort-caret {
+  display: inline-flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  width: 10px;
+  min-width: 10px;
+}
+
+.table-sort-caret span {
+  display: block;
+  width: 0;
+  height: 0;
+  margin: 0 auto;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  opacity: 0.28;
+}
+
+.table-sort-caret span:first-child {
+  border-bottom: 5px solid currentColor;
+}
+
+.table-sort-caret span:last-child {
+  border-top: 5px solid currentColor;
+}
+
+.table-sort-caret.is-up span:first-child,
+.table-sort-caret.is-down span:last-child {
+  opacity: 0.9;
+}
+
 .strategy-pool-filter-grid {
   display: grid;
   grid-template-columns: minmax(180px, 0.8fr) minmax(240px, 1.3fr) minmax(260px, 1fr);
@@ -1371,6 +1433,10 @@ textarea {
 .strategy-pool-date-action span {
   color: #64748b;
   font-size: 12px;
+}
+
+.strategy-pool-rerun-mode-field {
+  min-width: 180px;
 }
 
 .pool-rerun-progress {
@@ -1509,6 +1575,26 @@ textarea {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.pool-benchmark-toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: -4px;
+}
+
+.pool-benchmark-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.pool-benchmark-toggle input {
+  margin: 0;
 }
 
 .curve-pill {

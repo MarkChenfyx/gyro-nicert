@@ -11,7 +11,7 @@ def test_optuna_is_registered():
     assert isinstance(get_optimizer("optuna"), OptunaOptimizer)
 
 
-def test_optuna_optimizer_uses_backtest_and_reports_progress(monkeypatch):
+def test_optuna_exhausts_small_discrete_space_without_duplicate_trials(monkeypatch):
     progress: list[tuple[int, int, str]] = []
 
     def fake_backtest(**kwargs):
@@ -43,9 +43,13 @@ def test_optuna_optimizer_uses_backtest_and_reports_progress(monkeypatch):
 
     assert result["success"] is True
     assert result["recommended"]["parameters"]["fast_window"] == 3
-    assert len(result["candidates"]) == 6
+    assert len(result["candidates"]) == 3
+    assert result["sampling_mode"] == "exhaustive_grid"
+    assert result["requested_trials"] == 6
+    assert result["executed_trials"] == 3
+    assert result["search_space_size"] == 3
     assert progress[0][0] == 0
-    assert progress[-1][:2] == (6, 6)
+    assert progress[-1][:2] == (3, 3)
 
 
 def test_optuna_maps_virtual_time_parameter_before_backtest(monkeypatch):

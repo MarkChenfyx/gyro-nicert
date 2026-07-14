@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+import hashlib
 import json
+import re
 
 from backend.core.hashing import compute_sha256
 from backend.domain.enums import ArtifactType, TaskStatus, TaskType
@@ -13,6 +15,10 @@ from strategy_optimization.optimizers.registry import list_methods, resolve_meth
 from strategy_optimization.search_space import build_parameter_inventory, read_json_file
 from strategy_optimization.range_generation import suggest_search_space
 from strategy_optimization.range_generation.validator import DENYLIST, TIME_RE
+from common.time_utils import now_beijing
+
+
+SEARCH_SPACE_CACHE_VERSION = 1
 
 
 def _register_artifact(owner_type: str, owner_id: str, artifact_type: str, path: str | Path | None) -> dict[str, Any] | None:
@@ -66,6 +72,59 @@ def _run_context(run_id: str) -> dict[str, Any]:
     }
 
 
+def _suggestion_cache_path(context: dict[str, Any], variant_name: str) -> Path:
+    safe_variant = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(variant_name or "baseline"))
+    return Path(context["run_path"]) / "optimization" / f"{safe_variant}_ai_search_space.json"
+
+
+def _suggestion_cache_key(context: dict[str, Any], variant_name: str) -> str:
+    config = dict(context.get("config") or {})
+    payload = {
+        "version": SEARCH_SPACE_CACHE_VERSION,
+        "variant_name": str(variant_name or "baseline"),
+        "strategy_code": str(context.get("strategy_code") or ""),
+        "inventory": dict(context.get("inventory") or {}),
+        "context": {
+            "vt_symbol": context.get("vt_symbol"),
+            "interval": config.get("interval"),
+            "start_date": config.get("start_date"),
+            "end_date": config.get("end_date"),
+            "rate": config.get("rate"),
+            "slippage": config.get("slippage"),
+        },
+    }
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _read_cached_suggestion(context: dict[str, Any], variant_name: str) -> dict[str, Any] | None:
+    payload = _read_json(_suggestion_cache_path(context, variant_name))
+    if not payload or payload.get("cache_key") != _suggestion_cache_key(context, variant_name):
+        return None
+    suggestion = payload.get("suggestion")
+    if not isinstance(suggestion, dict):
+        return None
+    return {
+        **suggestion,
+        "cached": True,
+        "cached_at": payload.get("cached_at"),
+    }
+
+
+def _write_cached_suggestion(context: dict[str, Any], variant_name: str, suggestion: dict[str, Any]) -> dict[str, Any]:
+    path = _suggestion_cache_path(context, variant_name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    cached_at = now_beijing().isoformat()
+    payload = {
+        "cache_version": SEARCH_SPACE_CACHE_VERSION,
+        "cache_key": _suggestion_cache_key(context, variant_name),
+        "cached_at": cached_at,
+        "suggestion": suggestion,
+    }
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {**suggestion, "cached": False, "cached_at": cached_at}
+
+
 def list_optimization_methods() -> dict[str, Any]:
     return {"methods": list_methods(include_mock=False)}
 
@@ -93,6 +152,7 @@ def list_optimizable_runs(limit: int = 100) -> dict[str, Any]:
 def get_search_space(run_id: str, variant_name: str = "baseline") -> dict[str, Any]:
     context = _run_context(run_id)
     inventory = dict(context["inventory"])
+    cached_suggestion = _read_cached_suggestion(context, variant_name)
     return {
         "run_id": run_id,
         "variant_name": variant_name,
@@ -101,6 +161,7 @@ def get_search_space(run_id: str, variant_name: str = "baseline") -> dict[str, A
         "parameters": inventory.get("parameters") or [],
         "hidden_parameters": inventory.get("hidden_parameters") or [],
         "diagnostics": inventory.get("diagnostics") or [],
+        "cached_suggestion": cached_suggestion,
     }
 
 
@@ -112,6 +173,12 @@ def suggest_optimization_space(
 ) -> dict[str, Any]:
     context = _run_context(run_id)
     config = dict(context["config"])
+    resolved_options = dict(options or {})
+    force_refresh = bool(resolved_options.pop("force_refresh", False))
+    if not force_refresh:
+        cached = _read_cached_suggestion(context, variant_name)
+        if cached is not None:
+            return {"run_id": run_id, "variant_name": variant_name, **cached}
     suggestion = suggest_search_space(
         strategy_code=str(context["strategy_code"]),
         inventory=dict(context["inventory"]),
@@ -123,9 +190,10 @@ def suggest_optimization_space(
             "rate": config.get("rate"),
             "slippage": config.get("slippage"),
         },
-        options=options,
+        options=resolved_options,
     )
-    return {"run_id": run_id, "variant_name": variant_name, **suggestion}
+    cached = _write_cached_suggestion(context, variant_name, suggestion)
+    return {"run_id": run_id, "variant_name": variant_name, **cached}
 
 
 def _validate_selected_parameters(search_space: dict[str, Any], selected: list[str], parameter_ranges: dict[str, Any]) -> None:
@@ -183,6 +251,10 @@ def _result_payload(optimization: dict[str, Any], selected_variant: str, artifac
         "selected_variant": selected_variant,
         "optimizer_name": optimization.get("optimizer_name"),
         "optimizer_version": optimization.get("optimizer_version"),
+        "sampling_mode": optimization.get("sampling_mode"),
+        "requested_trials": optimization.get("requested_trials"),
+        "executed_trials": optimization.get("executed_trials"),
+        "search_space_size": optimization.get("search_space_size"),
         "diagnostics": optimization.get("diagnostics") or [],
         "artifact_paths": artifact_paths,
         "success": bool(optimization.get("success")),

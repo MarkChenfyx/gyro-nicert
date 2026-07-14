@@ -1,4 +1,5 @@
 .env
+.vntrader/
 .venv/
 __pycache__/
 *.pyc

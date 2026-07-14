@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 
 from strategy_optimization.range_generation.api_generator import suggest_search_space
+from strategy_optimization.range_generation.validator import validate_ai_search_space
 from strategy_optimization.search_space import build_parameter_inventory
+from backend.services import optimization_service
 
 
 CODE = '''
@@ -68,3 +70,74 @@ def test_ai_failure_falls_back_to_static_space():
     assert result["fallback_used"] is True
     assert result["parameters"]
     assert "model timeout" in result["diagnostics"][0]["message"]
+
+
+def test_validator_removes_floating_point_noise_near_zero():
+    inventory = {
+        "parameters": [{
+            "name": "price_buffer", "current": 0.0, "role": "signal_threshold",
+            "low": 0.0, "high": 0.01, "step": 0.001, "type": "float",
+        }],
+        "hidden_parameters": [],
+    }
+    result = validate_ai_search_space({
+        "parameters": [{
+            "name": "price_buffer", "optimize": True, "type": "float",
+            "low": 0.0000000001, "high": 0.0050000000000001, "step": 0.0010000000000001,
+        }]
+    }, inventory)
+
+    parameter = result["parameters"][0]
+    assert parameter["low"] == 0.0
+    assert parameter["high"] == 0.005
+    assert parameter["step"] == 0.001
+
+
+def test_ai_suggestion_reason_is_cached_per_run(monkeypatch, tmp_path):
+    inventory = build_parameter_inventory(strategy_code=CODE)
+    context = {
+        "run_path": tmp_path,
+        "strategy_code": CODE,
+        "inventory": inventory,
+        "config": {"interval": "1m", "start_date": "2025-01-02", "end_date": "2026-06-25"},
+        "vt_symbol": "511380.SSE",
+    }
+    generated = {
+        "source": "ai",
+        "fallback_used": False,
+        "parameters": [{
+            "name": "setup_coef",
+            "category": "signal_threshold",
+            "optimize": True,
+            "type": "float",
+            "low": 0.18,
+            "high": 0.32,
+            "step": 0.02,
+            "reason": "控制入场信号强度",
+        }],
+        "excluded_parameters": [],
+        "constraints": [],
+        "virtual_parameters": [],
+        "warnings": [],
+        "diagnostics": [],
+    }
+    calls = []
+    monkeypatch.setattr(optimization_service, "_run_context", lambda _run_id: context)
+    monkeypatch.setattr(
+        optimization_service,
+        "suggest_search_space",
+        lambda **kwargs: calls.append(kwargs) or generated,
+    )
+
+    first = optimization_service.suggest_optimization_space(
+        "run_demo",
+        options={"force_refresh": True},
+    )
+    second = optimization_service.suggest_optimization_space("run_demo")
+    search_space = optimization_service.get_search_space("run_demo")
+
+    assert len(calls) == 1
+    assert first["cached"] is False
+    assert second["cached"] is True
+    assert second["parameters"][0]["reason"] == "控制入场信号强度"
+    assert search_space["cached_suggestion"]["parameters"][0]["reason"] == "控制入场信号强度"

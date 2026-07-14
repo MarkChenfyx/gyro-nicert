@@ -17,6 +17,7 @@ def add_to_pool(payload: PoolAddRequest) -> dict:
         tags=payload.tags,
         note=payload.note,
         vt_symbol=payload.vt_symbol,
+        strategy_name=payload.strategy_name,
     )
 
 
@@ -27,7 +28,11 @@ def compare_pool_items(payload: PoolCompareRequest) -> dict:
 
 @router.post("/rerun")
 def rerun_pool_items(payload: PoolRerunRequest) -> dict:
-    return pool_service.rerun_pool_items_to_latest(payload.pool_item_ids, end_date=payload.end_date)
+    return pool_service.rerun_pool_items_to_latest(
+        payload.pool_item_ids,
+        end_date=payload.end_date,
+        start_mode=payload.start_mode,
+    )
 
 
 @router.get("")
@@ -61,3 +66,8 @@ def get_pool_item(pool_item_id: str) -> dict:
 @router.get("/{pool_item_id}/curve")
 def get_pool_curve(pool_item_id: str) -> dict:
     return query_service.get_pool_curve(pool_item_id)
+
+
+@router.delete("/{pool_item_id}")
+def delete_pool_item(pool_item_id: str) -> dict:
+    return pool_service.remove_pool_item(pool_item_id)

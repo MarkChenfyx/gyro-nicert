@@ -38,6 +38,27 @@ def _suggest(trial: optuna.Trial, name: str, spec: Any, base_value: Any) -> Any:
     return trial.suggest_float(name, float(low), float(high), step=float_step)
 
 
+def _finite_search_grid(
+    selected: list[str],
+    parameter_space: dict[str, Any],
+    base_parameters: dict[str, Any],
+    virtual_specs: dict[str, dict[str, Any]],
+) -> tuple[dict[str, list[Any]] | None, int | None]:
+    """Return every unique discrete value when the whole search space is finite."""
+    search_grid: dict[str, list[Any]] = {}
+    total = 1
+    for name in selected:
+        if name in virtual_specs:
+            values = values_from_range(list(virtual_specs[name].get("choices") or []))
+        else:
+            values = values_from_range(parameter_space[name], base_parameters.get(name))
+        if not values:
+            return None, None
+        search_grid[name] = values
+        total *= len(values)
+    return search_grid, total
+
+
 def _violates_common_constraints(parameters: dict[str, Any]) -> str | None:
     """Reject obviously invalid indicator relationships before running a backtest."""
     pairs = [
@@ -114,7 +135,7 @@ def _constraint_violation(
 @dataclass(slots=True)
 class OptunaOptimizer:
     optimizer_name: str = "optuna_tpe_optimizer"
-    optimizer_version: str = "phase8_optuna_tpe_v1"
+    optimizer_version: str = "phase8_optuna_adaptive_v2"
 
     def optimize(
         self,
@@ -146,13 +167,31 @@ class OptunaOptimizer:
         max_trials = max(1, int(options.get("max_trials") or backtest_config.get("max_trials") or 100))
         progress_callback = options.get("progress_callback") if callable(options.get("progress_callback")) else None
         seed = int(options.get("seed") or 42)
-        sampler = optuna.samplers.TPESampler(seed=seed, multivariate=len(selected) > 1)
+        finite_grid, finite_count = _finite_search_grid(selected, parameter_space, base_parameters, virtual_specs)
+        if finite_grid is not None and finite_count is not None and finite_count <= max_trials:
+            effective_trials = finite_count
+            sampling_mode = "exhaustive_grid"
+            sampler = optuna.samplers.GridSampler(finite_grid, seed=seed)
+            diagnostics.append(
+                diagnostic(
+                    "info",
+                    f"离散参数空间只有 {finite_count} 个唯一组合，Optuna 将逐一回测，不重复补足到 {max_trials} 次",
+                )
+            )
+        else:
+            effective_trials = max_trials
+            sampling_mode = "tpe"
+            sampler = optuna.samplers.TPESampler(seed=seed, multivariate=len(selected) > 1)
+            if finite_count is not None:
+                diagnostics.append(diagnostic("info", f"参数空间共 {finite_count} 个组合，使用 TPE 抽样 {max_trials} 次"))
+            else:
+                diagnostics.append(diagnostic("info", f"参数空间包含连续分布，使用 TPE 抽样 {max_trials} 次"))
         study = optuna.create_study(direction="maximize", sampler=sampler)
         candidate_results: list[dict[str, Any]] = []
         best_result: dict[str, Any] | None = None
 
         if progress_callback:
-            progress_callback(0, max_trials, f"Optuna 参数优化进行中 0/{max_trials} 组")
+            progress_callback(0, effective_trials, f"Optuna 参数优化进行中 0/{effective_trials} 组")
 
         def evaluate(trial: optuna.Trial) -> float:
             nonlocal best_result
@@ -207,10 +246,10 @@ class OptunaOptimizer:
         def report_progress(study: optuna.Study, trial: optuna.trial.FrozenTrial) -> None:
             completed = len(study.trials)
             if progress_callback:
-                progress_callback(completed, max_trials, f"Optuna 参数优化进行中 {completed}/{max_trials} 组")
+                progress_callback(completed, effective_trials, f"Optuna 参数优化进行中 {completed}/{effective_trials} 组")
 
         try:
-            study.optimize(evaluate, n_trials=max_trials, callbacks=[report_progress], catch=(Exception,))
+            study.optimize(evaluate, n_trials=effective_trials, callbacks=[report_progress], catch=(Exception,))
         except Exception as exc:
             diagnostics.append(diagnostic("error", f"Optuna study failed: {exc}"))
 
@@ -247,6 +286,10 @@ class OptunaOptimizer:
             "diagnostics": diagnostics,
             "optimizer_name": self.optimizer_name,
             "optimizer_version": self.optimizer_version,
+            "sampling_mode": sampling_mode,
+            "requested_trials": max_trials,
+            "executed_trials": len(study.trials),
+            "search_space_size": finite_count,
             "error": None,
         }
 

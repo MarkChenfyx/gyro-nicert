@@ -68,3 +68,13 @@ def get_artifact(artifact_id: str) -> dict[str, Any] | None:
             (str(artifact_id),),
         ).fetchone()
     return dict(row) if row is not None else None
+
+
+def delete_artifacts_by_owner(owner_type: str, owner_id: str) -> int:
+    with get_app_db_connection() as connection:
+        cursor = connection.execute(
+            "DELETE FROM artifacts WHERE owner_type = ? AND owner_id = ?",
+            (str(owner_type), str(owner_id)),
+        )
+        connection.commit()
+    return cursor.rowcount

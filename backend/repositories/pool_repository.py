@@ -153,3 +153,13 @@ def list_pool_items(
     with get_app_db_connection() as connection:
         rows = connection.execute(sql, tuple(values)).fetchall()
     return [dict(row) for row in rows]
+
+
+def delete_pool_item(pool_item_id: str) -> bool:
+    with get_app_db_connection() as connection:
+        cursor = connection.execute(
+            "DELETE FROM pool_items WHERE pool_item_id = ?",
+            (str(pool_item_id),),
+        )
+        connection.commit()
+    return cursor.rowcount > 0

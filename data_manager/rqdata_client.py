@@ -51,8 +51,6 @@ def _candidate_setting_paths() -> list[Path]:
         paths.append(Path(env_path).expanduser())
     paths.append(PROJECT_ROOT / ".vntrader" / "vt_setting.json")
     paths.append(Path.home() / ".vntrader" / "vt_setting.json")
-    legacy_path = PROJECT_ROOT.parent.parent / "test1" / ".vntrader" / "vt_setting.json"
-    paths.append(legacy_path)
     return paths
 
 

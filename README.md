@@ -72,6 +72,8 @@ RQData 凭据查找顺序：
 
 不要提交 `.env`、RQData 密码或模型 API Key。
 
+项目本地的 vn.py/RQData 配置可放在 `.vntrader/vt_setting.json`。该目录已被 Git 忽略，项目不会读取工作区外的旧工程凭据。
+
 ## 启动
 
 在项目根目录初始化数据库：

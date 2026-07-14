@@ -1090,6 +1090,13 @@ textarea {
   font-size: 12px;
 }
 
+.param-name-cell small {
+  max-width: 520px;
+  color: #475569;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
 .parameter-metric-grid {
   margin-top: 14px;
 }
@@ -1099,24 +1106,73 @@ textarea {
 }
 
 .optimization-mode-head {
-  align-items: center;
+  align-items: flex-start;
+  gap: 28px;
+}
+
+.optimization-title-block {
+  min-width: 280px;
+}
+
+.optimization-suggestion-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+  flex-wrap: wrap;
 }
 
 .optimization-mode-inline {
   display: flex;
-  align-items: center;
-  gap: 10px;
+  justify-content: flex-end;
+  align-items: flex-end;
+  gap: 12px;
   flex-wrap: wrap;
+  margin-left: auto;
 }
 
-.optimization-mode-inline > span:first-child {
+.optimization-mode-inline label {
+  display: grid;
+  gap: 7px;
+}
+
+.optimization-mode-inline label > span {
   color: #64748b;
   font-size: 12px;
   font-weight: 600;
 }
 
 .optimization-mode-inline .ant-select {
-  min-width: 160px;
+  min-width: 190px;
+}
+
+.optimization-ai-progress {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 16px;
+  padding: 14px 16px;
+  border: 1px solid rgba(20, 184, 166, 0.20);
+  border-radius: 10px;
+  background: rgba(240, 253, 250, 0.72);
+}
+
+.optimization-ai-progress > div:first-child {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.optimization-ai-progress span {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.optimization-run-row {
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
+.optimization-run-row .ant-btn {
+  min-width: 132px;
 }
 
 .parameter-frame {

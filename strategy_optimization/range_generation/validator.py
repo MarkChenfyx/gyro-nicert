@@ -23,6 +23,11 @@ def _number(value: Any) -> float | None:
         return None
 
 
+def _clean_float(value: float) -> float:
+    cleaned = float(round(value, 10))
+    return 0.0 if abs(cleaned) < 1e-9 else cleaned
+
+
 def _normalize_numeric(item: dict[str, Any], static: dict[str, Any]) -> dict[str, Any] | None:
     value_type = str(static.get("type") or "float")
     low = _number(item.get("low"))
@@ -47,6 +52,10 @@ def _normalize_numeric(item: dict[str, Any], static: dict[str, Any]) -> dict[str
     if value_type == "int":
         low, high, step = int(round(low)), int(round(high)), max(1, int(round(step)))
         if low >= high:
+            return None
+    else:
+        low, high, step = _clean_float(low), _clean_float(high), _clean_float(step)
+        if low >= high or step <= 0:
             return None
     count = int((high - low) / step) + 1
     if count > 1000:

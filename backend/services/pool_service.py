@@ -521,7 +521,11 @@ def rerun_pool_items_to_latest(pool_item_ids: list[str] | None, *, end_date: str
             "rerun_end": requested_end_date,
         }
 
-    task = task_service.create_task(TaskType.POOL_REBUILD.value, message="Pool rerun queued")
+    task = task_service.create_task(
+        TaskType.POOL_REBUILD.value,
+        message="Pool rerun queued",
+        related_pool_item_id=requested_ids[0] if len(requested_ids) == 1 else None,
+    )
     task = task_service.mark_running(task["task_id"], message="正在准备策略池重跑")
     diagnostics: list[dict[str, Any]] = []
     items: list[dict[str, Any]] = []
@@ -558,7 +562,13 @@ def rerun_pool_items_to_latest(pool_item_ids: list[str] | None, *, end_date: str
         task_service.mark_progress(task["task_id"], 0.96, message="正在汇总曲线与指标")
         task = task_service.mark_completed(task["task_id"], message="策略池重跑完成")
     else:
-        task = task_service.mark_failed(task["task_id"], error="No selected pool items reran successfully", message="Pool rerun failed")
+        failure_messages = list(dict.fromkeys(
+            str(item.get("message") or "").split(" | ", 1)[-1]
+            for item in diagnostics
+            if item.get("message")
+        ))
+        detailed_error = "; ".join(failure_messages)[:2000] or "No selected pool items reran successfully"
+        task = task_service.mark_failed(task["task_id"], error=detailed_error, message="Pool rerun failed")
 
     return {
         "task": task,

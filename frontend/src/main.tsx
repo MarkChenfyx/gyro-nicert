@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import ReactDOM from "react-dom/client";
-import { Button, Checkbox, ConfigProvider, Drawer, Input, InputNumber, Select, Table, Tag, message } from "antd";
+import { Button, Checkbox, ConfigProvider, Drawer, Input, InputNumber, Progress, Select, Table, Tag, message } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import * as echarts from "echarts";
 import {
@@ -295,6 +295,19 @@ function formatPercent(value: unknown, digits = 2) {
 function formatReturnPct(value: unknown, digits = 2) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? `${parsed.toFixed(digits)}%` : "-";
+}
+
+function cleanOptimizationNumber(value: number | null): number | null {
+  if (value === null || !Number.isFinite(Number(value))) return value;
+  const cleaned = Number(Number(value).toFixed(10));
+  return Math.abs(cleaned) < 1e-9 ? 0 : cleaned;
+}
+
+function optimizationPrecision(step: unknown): number {
+  const numeric = Math.abs(Number(step));
+  if (!Number.isFinite(numeric) || numeric <= 0 || Number.isInteger(numeric)) return 0;
+  const text = numeric.toFixed(10).replace(/0+$/, "");
+  return Math.min(10, Math.max(0, text.length - text.indexOf(".") - 1));
 }
 
 function formatParameterValue(value: unknown) {
@@ -2035,7 +2048,16 @@ function ParameterOptimizationPage({
   const [optimizationResult, setOptimizationResult] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [suggestionLoading, setSuggestionLoading] = useState(false);
+  const [suggestionProgress, setSuggestionProgress] = useState(0);
   const [spaceSuggestion, setSpaceSuggestion] = useState<any>(null);
+
+  useEffect(() => {
+    if (!suggestionLoading) return;
+    const timer = window.setInterval(() => {
+      setSuggestionProgress((current) => Math.min(92, current + Math.max(1, Math.ceil((92 - current) * 0.12))));
+    }, 180);
+    return () => window.clearInterval(timer);
+  }, [suggestionLoading]);
 
   async function refreshRuns(defaultRunId?: string) {
     const payload = await listRuns();
@@ -2215,11 +2237,12 @@ function ParameterOptimizationPage({
   }, [optimizationMatchesRun, optimizationResult, poolVariant, runDetail]);
 
   function updateRange(name: string, key: string, value: number | null) {
-    setRanges((current) => ({ ...current, [name]: { ...(current[name] || {}), [key]: value } }));
+    setRanges((current) => ({ ...current, [name]: { ...(current[name] || {}), [key]: cleanOptimizationNumber(value) } }));
   }
 
   async function generateSpaceSuggestion() {
     if (!runId) return;
+    setSuggestionProgress(6);
     setSuggestionLoading(true);
     try {
       const payload = await suggestOptimizationSearchSpace(runId, "baseline");
@@ -2246,10 +2269,13 @@ function ParameterOptimizationPage({
       } else {
         message.success("AI 优化建议已生成，请确认后再运行");
       }
+      setSuggestionProgress(100);
     } catch (error) {
+      setSuggestionProgress(100);
       message.error(String(error));
     } finally {
       setSuggestionLoading(false);
+      window.setTimeout(() => setSuggestionProgress(0), 700);
     }
   }
 
@@ -2330,9 +2356,9 @@ function ParameterOptimizationPage({
     },
     { title: zh.paramName, dataIndex: "name", render: (value, record) => <div className="param-name-cell"><strong>{value}</strong><span>{record.category || record.role}</span>{record.reason && <small>{record.reason}</small>}</div> },
     { title: zh.currentValue, dataIndex: "current", render: (value) => String(value) },
-    { title: "下限", dataIndex: "low", render: (_, record) => <InputNumber value={ranges[record.name]?.low} step="any" onChange={(value) => updateRange(record.name, "low", value)} /> },
-    { title: "上限", dataIndex: "high", render: (_, record) => <InputNumber value={ranges[record.name]?.high} step="any" onChange={(value) => updateRange(record.name, "high", value)} /> },
-    { title: "步长", dataIndex: "step", render: (_, record) => <InputNumber value={ranges[record.name]?.step} step="any" onChange={(value) => updateRange(record.name, "step", value)} /> },
+    { title: "下限", dataIndex: "low", render: (_, record) => <InputNumber value={ranges[record.name]?.low} precision={optimizationPrecision(ranges[record.name]?.step)} step={ranges[record.name]?.step || 1} onChange={(value) => updateRange(record.name, "low", value)} /> },
+    { title: "上限", dataIndex: "high", render: (_, record) => <InputNumber value={ranges[record.name]?.high} precision={optimizationPrecision(ranges[record.name]?.step)} step={ranges[record.name]?.step || 1} onChange={(value) => updateRange(record.name, "high", value)} /> },
+    { title: "步长", dataIndex: "step", render: (_, record) => <InputNumber value={ranges[record.name]?.step} precision={optimizationPrecision(ranges[record.name]?.step)} step={record.type === "int" ? 1 : 0.001} onChange={(value) => updateRange(record.name, "step", value)} /> },
     { title: "类型", dataIndex: "type" }
   ];
 
@@ -2520,7 +2546,7 @@ function ParameterOptimizationPage({
         <div className="library-section-head">
           <div>
             <h3>累计收益对比</h3>
-            <p>`manual_grid` 只展示最新一条同名结果，界面布局对齐 test1，先看曲线，再看表现。</p>
+            <p>`manual_grid` 只展示最新一条同名结果，先看累计收益曲线，再看绩效表现。</p>
           </div>
         </div>
         <CurveControls
@@ -2555,34 +2581,40 @@ function ParameterOptimizationPage({
 
       <section className="band library-shell">
         <div className="library-section-head optimization-mode-head">
-          <div>
-            <h3>{method === "optuna" ? "Optuna 智能优化" : method === "auto" ? "自动优化" : "手动网格"}</h3>
-            <p>{method === "optuna" ? "使用 TPE 在限定试验次数内搜索更有希望的参数组合。" : method === "auto" ? "在选定参数范围内自动搜索最优组合。" : "在选定参数范围内做手动网格比较。"}</p>
+          <div className="optimization-title-block">
+            <h3>参数优化</h3>
+            <p>生成或调整参数范围，确认后再运行所选优化器。</p>
+            <div className="optimization-suggestion-actions">
+              <Button loading={suggestionLoading} disabled={!runId} onClick={generateSpaceSuggestion}>AI 生成参数范围</Button>
+              <Button disabled={!runId || suggestionLoading} onClick={restoreStaticSpace}>恢复默认</Button>
+            </div>
           </div>
           <div className="optimization-mode-inline">
-            <span>优化模式</span>
-            <Select value={method} onChange={setMethod} options={methods.map((item) => ({ value: item.method, label: item.method === "auto" ? "自动优化" : item.method === "manual_grid" ? "手动网格" : item.label }))} />
-            <span>Score 评分方式</span>
-            <Select
-              value={objective}
-              onChange={setObjective}
-              options={[
-                { value: "sharpe", label: "Sharpe" },
-                { value: "excess_return", label: "超额收益" }
-              ]}
-            />
+            <label>
+              <span>优化模式</span>
+              <Select value={method} onChange={setMethod} options={methods.map((item) => ({ value: item.method, label: item.method === "auto" ? "自动优化" : item.method === "manual_grid" ? "手动网格" : item.label }))} />
+            </label>
+            <label>
+              <span>评分方式</span>
+              <Select
+                value={objective}
+                onChange={setObjective}
+                options={[
+                  { value: "sharpe", label: "Sharpe" },
+                  { value: "excess_return", label: "超额收益" }
+                ]}
+              />
+            </label>
             <span className="status-pill status-running">{method === "optuna" ? "Trials 200" : `网格 ${totalGridCount}`}</span>
           </div>
         </div>
-        {["auto", "optuna"].includes(method) && (
-          <div className="detail-grid optimizer-preview">
-            {(searchSpace?.parameters || []).map((item: any) => (
-              <div key={item.name}>
-                <div className="summary-label">{item.name}</div>
-                <div className="summary-value">{item.type}</div>
-                <div className="meta-inline">{item.low} {"->"} {item.high} step {item.step}</div>
-              </div>
-            ))}
+        {suggestionProgress > 0 && (
+          <div className="optimization-ai-progress">
+            <div>
+              <strong>{suggestionProgress >= 100 ? "参数范围已生成" : "AI 正在分析策略参数"}</strong>
+              <span>{suggestionProgress >= 100 ? "请检查范围和启用状态" : "正在识别参数语义、约束和合理范围"}</span>
+            </div>
+            <Progress percent={suggestionProgress} status={suggestionProgress >= 100 ? "success" : "active"} showInfo={false} />
           </div>
         )}
         <div className="parameter-frame">
@@ -2602,11 +2634,9 @@ function ParameterOptimizationPage({
             ))}
           </div>
         )}
-        <div className="action-row">
-          <Button loading={suggestionLoading} disabled={!runId} onClick={generateSpaceSuggestion}>AI 生成优化建议</Button>
-          <Button disabled={!runId || suggestionLoading} onClick={restoreStaticSpace}>恢复默认建议</Button>
+        <div className="action-row optimization-run-row">
           <Button type="primary" loading={loading} disabled={!runId || (method === "manual_grid" && !selectedParams.length)} onClick={submitOptimization}>
-            {method === "optuna" ? "运行 Optuna 优化" : method === "auto" ? "运行自动优化" : "运行手动比较"}
+            运行优化
           </Button>
         </div>
         {manualGridNeedsRerun && (

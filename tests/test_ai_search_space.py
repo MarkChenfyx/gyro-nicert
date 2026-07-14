@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 from strategy_optimization.range_generation.api_generator import suggest_search_space
+from strategy_optimization.range_generation.validator import validate_ai_search_space
 from strategy_optimization.search_space import build_parameter_inventory
 
 
@@ -68,3 +69,24 @@ def test_ai_failure_falls_back_to_static_space():
     assert result["fallback_used"] is True
     assert result["parameters"]
     assert "model timeout" in result["diagnostics"][0]["message"]
+
+
+def test_validator_removes_floating_point_noise_near_zero():
+    inventory = {
+        "parameters": [{
+            "name": "price_buffer", "current": 0.0, "role": "signal_threshold",
+            "low": 0.0, "high": 0.01, "step": 0.001, "type": "float",
+        }],
+        "hidden_parameters": [],
+    }
+    result = validate_ai_search_space({
+        "parameters": [{
+            "name": "price_buffer", "optimize": True, "type": "float",
+            "low": 0.0000000001, "high": 0.0050000000000001, "step": 0.0010000000000001,
+        }]
+    }, inventory)
+
+    parameter = result["parameters"][0]
+    assert parameter["low"] == 0.0
+    assert parameter["high"] == 0.005
+    assert parameter["step"] == 0.001

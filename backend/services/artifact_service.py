@@ -81,7 +81,12 @@ def _copy_optional(source: Path, destination: Path) -> Path | None:
     return destination
 
 
-def create_run_artifact(run_type: str, strategy: dict[str, Any], source: str) -> dict[str, Any]:
+def create_run_artifact(
+    run_type: str,
+    strategy: dict[str, Any],
+    source: str,
+    lineage: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     run_id = _stamp_id("run")
     run_path = _run_path(run_id)
     run_path.mkdir(parents=True, exist_ok=False)
@@ -100,6 +105,8 @@ def create_run_artifact(run_type: str, strategy: dict[str, Any], source: str) ->
         "run_path": str(run_path),
         "created_at": _now(),
     }
+    if lineage:
+        manifest["lineage"] = dict(lineage)
     _write_json(manifest_path, manifest)
     return {
         "run_id": run_id,

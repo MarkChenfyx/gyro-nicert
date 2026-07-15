@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Checkbox, Drawer, Input, InputNumber, Modal, Progress, Select, Table, Tag, message } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import {
@@ -29,6 +29,7 @@ import {
 } from "../api";
 import {
   PageKey,
+  TaskRunNavigation,
   PAGE_STORAGE_KEY,
   OPTIMIZE_DRAFT_STORAGE_KEY,
   BENCHMARK_CURVE_COLOR,
@@ -61,9 +62,7 @@ import {
   formatPercent,
   formatReturnPct,
   cleanOptimizationNumber,
-  optimizationPrecision,
   formatParameterValue,
-  summarizeParameters,
   statusClass,
   extractMissingRanges,
   missingRangeLabel,
@@ -102,6 +101,141 @@ import {
 } from "../app/App";
 
 
+type RangeField = "low" | "high" | "step";
+
+function parseGridParameters(parameters: unknown): Record<string, unknown> {
+  if (parameters && typeof parameters === "object" && !Array.isArray(parameters)) {
+    return parameters as Record<string, unknown>;
+  }
+  const text = String(parameters || "").trim();
+  if (!text) return {};
+  const jsonCandidates = [
+    text,
+    text.replace(/\bTrue\b/g, "true").replace(/\bFalse\b/g, "false").replace(/\bNone\b/g, "null").replace(/'/g, '"')
+  ];
+  for (const candidate of jsonCandidates) {
+    try {
+      const parsed = JSON.parse(candidate);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
+    } catch {
+      // Continue with the historical key=value fallback below.
+    }
+  }
+  const result: Record<string, unknown> = {};
+  const body = text.replace(/^\s*[\{\[]|[\}\]]\s*$/g, "");
+  for (const segment of body.split(",")) {
+    const match = segment.match(/^\s*['"]?([^'":=]+)['"]?\s*[:=]\s*(.*?)\s*$/);
+    if (!match) continue;
+    const key = match[1].trim();
+    const rawValue = match[2].replace(/^['"]|['"]$/g, "").trim();
+    const numericValue = Number(rawValue);
+    result[key] = Number.isFinite(numericValue)
+      ? numericValue
+      : /^(true|false)$/i.test(rawValue)
+        ? rawValue.toLowerCase() === "true"
+        : rawValue;
+  }
+  return result;
+}
+
+function parameterDraftValue(value: unknown): string | null {
+  if (value === null || value === undefined || value === "") return null;
+  return String(value);
+}
+
+function parsedParameterValue(value: string | null, integerOnly: boolean): number | null | undefined {
+  if (value === null || value.trim() === "") return null;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return undefined;
+  return cleanOptimizationNumber(integerOnly ? Math.trunc(parsed) : parsed);
+}
+
+const ParameterNumberInput = React.memo(function ParameterNumberInput({
+  parameterName,
+  field,
+  parameterType,
+  value,
+  stepValue,
+  onCommit
+}: {
+  parameterName: string;
+  field: RangeField;
+  parameterType: string;
+  value: number | null | undefined;
+  stepValue: number | null | undefined;
+  onCommit: (name: string, field: RangeField, value: number | null) => void;
+}) {
+  const integerOnly = parameterType === "int";
+  const [draft, setDraft] = useState<string | null>(() => parameterDraftValue(value));
+  const draftRef = useRef<string | null>(draft);
+  const focusedRef = useRef(false);
+  const commitTimerRef = useRef<number | null>(null);
+
+  function updateDraft(nextValue: string | null) {
+    draftRef.current = nextValue;
+    setDraft(nextValue);
+  }
+
+  useEffect(() => {
+    if (!focusedRef.current) updateDraft(parameterDraftValue(value));
+  }, [value]);
+
+  useEffect(() => () => {
+    if (commitTimerRef.current !== null) window.clearTimeout(commitTimerRef.current);
+  }, []);
+
+  function cancelPendingCommit() {
+    if (commitTimerRef.current === null) return;
+    window.clearTimeout(commitTimerRef.current);
+    commitTimerRef.current = null;
+  }
+
+  function scheduleCommit(nextValue: number | null) {
+    cancelPendingCommit();
+    commitTimerRef.current = window.setTimeout(() => {
+      commitTimerRef.current = null;
+      onCommit(parameterName, field, nextValue);
+    }, 80);
+  }
+
+  function commitDraft(normalizeDisplay: boolean) {
+    cancelPendingCommit();
+    const parsed = parsedParameterValue(draftRef.current, integerOnly);
+    if (parsed === undefined) {
+      if (normalizeDisplay) updateDraft(parameterDraftValue(value));
+      return;
+    }
+    onCommit(parameterName, field, parsed);
+    if (normalizeDisplay) updateDraft(parameterDraftValue(parsed));
+  }
+
+  const configuredStep = Number(stepValue);
+  const inputStep = field === "step"
+    ? (integerOnly ? 1 : 0.001)
+    : (Number.isFinite(configuredStep) && configuredStep > 0 ? configuredStep : integerOnly ? 1 : 0.001);
+
+  return (
+    <InputNumber<string>
+      stringMode
+      value={draft}
+      precision={integerOnly ? 0 : undefined}
+      step={inputStep}
+      onFocus={() => { focusedRef.current = true; }}
+      onBlur={() => {
+        focusedRef.current = false;
+        commitDraft(true);
+      }}
+      onPressEnter={(event) => event.currentTarget.blur()}
+      onChange={(nextValue) => {
+        updateDraft(nextValue);
+        const parsed = parsedParameterValue(nextValue, integerOnly);
+        if (parsed !== undefined) scheduleCommit(parsed);
+      }}
+    />
+  );
+});
+
+
 function variantCurveDateBounds(curves: Record<string, any[]>) {
   const dates = Object.values(curves)
     .flatMap((rows) => rows.map((row) => normalizeDateKey(rowDate(row))))
@@ -114,11 +248,15 @@ function variantCurveDateBounds(curves: Record<string, any[]>) {
 
 export default function ParameterOptimizationPage({
   lastResearch,
+  taskRunNavigation,
+  onTaskRunApplied,
   refreshPool,
   onOpenPool,
   refreshTasks
 }: {
   lastResearch: any;
+  taskRunNavigation: TaskRunNavigation | null;
+  onTaskRunApplied: (requestId: number) => void;
   refreshPool: () => Promise<void>;
   onOpenPool: () => void;
   refreshTasks: () => Promise<void>;
@@ -127,13 +265,14 @@ export default function ParameterOptimizationPage({
   const [runs, setRuns] = useState<any[]>([]);
   const [methods, setMethods] = useState<any[]>([]);
   const [selectedFamily, setSelectedFamily] = useState(String(persistedDraft.selectedFamily || ""));
-  const [runId, setRunId] = useState(String(persistedDraft.runId || lastResearch?.baseline?.run?.run_id || ""));
+  const [runId, setRunId] = useState(String(taskRunNavigation?.runId || persistedDraft.runId || lastResearch?.baseline?.run?.run_id || ""));
   const [method, setMethod] = useState(String(persistedDraft.method || "manual_grid"));
   const [objective, setObjective] = useState(String(persistedDraft.objective || "sharpe"));
   const [poolVariant, setPoolVariant] = useState(String(persistedDraft.poolVariant || "manual_grid"));
   const [searchSpace, setSearchSpace] = useState<any>(null);
   const [selectedParams, setSelectedParams] = useState<string[]>(Array.isArray(persistedDraft.selectedParams) ? persistedDraft.selectedParams.map(String) : []);
   const [ranges, setRanges] = useState<Record<string, any>>(persistedDraft.ranges && typeof persistedDraft.ranges === "object" ? persistedDraft.ranges : {});
+  const rangesRef = useRef(ranges);
   const [runDetail, setRunDetail] = useState<any>(null);
   const [variantCurves, setVariantCurves] = useState<Record<string, any[]>>({});
   const [visibleCurveKeys, setVisibleCurveKeys] = useState<string[]>(Array.isArray(persistedDraft.visibleCurveKeys) ? persistedDraft.visibleCurveKeys.map(String) : []);
@@ -145,8 +284,13 @@ export default function ParameterOptimizationPage({
   const [suggestionProgress, setSuggestionProgress] = useState(0);
   const [spaceSuggestion, setSpaceSuggestion] = useState<any>(null);
   const [poolStrategyName, setPoolStrategyName] = useState("");
+  const [poolNote, setPoolNote] = useState("");
   const [addingToPool, setAddingToPool] = useState(false);
   const runContextRequestRef = useRef(0);
+
+  useEffect(() => {
+    rangesRef.current = ranges;
+  }, [ranges]);
 
   useEffect(() => {
     if (!suggestionLoading) return;
@@ -157,14 +301,15 @@ export default function ParameterOptimizationPage({
   }, [suggestionLoading]);
 
   async function refreshRuns(defaultRunId?: string) {
-    const payload = await listRuns();
+    const payload = await listRuns(defaultRunId ? 1000 : 50);
     const nextRuns = payload.runs || [];
     setRuns(nextRuns);
     const preferred = defaultRunId || runId || lastResearch?.baseline?.run?.run_id || nextRuns[0]?.run_id || "";
     const preferredRun = nextRuns.find((item: any) => item.run_id === preferred) || nextRuns[0];
+    const resolvedRunId = String(preferredRun?.run_id || "");
     const preferredFamily = strategyFamily(preferredRun);
     if (preferredFamily) setSelectedFamily(preferredFamily);
-    if (preferred && preferred !== runId) setRunId(preferred);
+    if (resolvedRunId) setRunId(resolvedRunId);
   }
 
   async function loadRunContext(nextRunId: string, useCachedSuggestion = true, reuseDraftParams = true) {
@@ -257,8 +402,13 @@ export default function ParameterOptimizationPage({
 
   useEffect(() => {
     getOptimizationMethods().then((payload) => setMethods(payload.methods || [])).catch((error) => message.error(String(error)));
-    refreshRuns(lastResearch?.baseline?.run?.run_id).catch((error) => message.error(String(error)));
-  }, [lastResearch?.baseline?.run?.run_id]);
+    const requestedRunId = String(taskRunNavigation?.runId || lastResearch?.baseline?.run?.run_id || "");
+    refreshRuns(requestedRunId || undefined)
+      .then(() => {
+        if (taskRunNavigation) onTaskRunApplied(taskRunNavigation.requestId);
+      })
+      .catch((error) => message.error(String(error)));
+  }, [lastResearch?.baseline?.run?.run_id, taskRunNavigation?.requestId]);
 
   const families = useMemo(
     () => Array.from(new Set(runs.map((item) => strategyFamily(item)).filter(Boolean))),
@@ -296,9 +446,14 @@ export default function ParameterOptimizationPage({
   }, [runId]);
 
   const currentRun = runs.find((item) => item.run_id === runId);
+  const runLineage = runDetail?.manifest?.lineage;
+  const poolRunLineage = runLineage?.source_type === "pool_item" && runLineage?.operation === "rerun_as_baseline" ? runLineage : null;
   useEffect(() => {
     setPoolStrategyName(String(currentRun?.strategy_name || runDetail?.strategy?.strategy_name || ""));
   }, [currentRun?.strategy_name, runDetail?.strategy?.strategy_name]);
+  useEffect(() => {
+    setPoolNote("");
+  }, [runId, poolVariant]);
   const optimizationRunId = String(optimizationResult?.run?.run_id || "");
   const optimizationObjective = String(optimizationResult?.objective || optimizationResult?.optimization?.objective || "");
   const optimizationMatchesRun = Boolean(optimizationResult) && optimizationRunId === runId;
@@ -357,9 +512,12 @@ export default function ParameterOptimizationPage({
     return runDetail?.variant_trade_counts?.[poolVariant];
   }, [optimizationMatchesRun, optimizationResult, poolVariant, runDetail]);
 
-  function updateRange(name: string, key: string, value: number | null) {
-    setRanges((current) => ({ ...current, [name]: { ...(current[name] || {}), [key]: cleanOptimizationNumber(value) } }));
-  }
+  const updateRange = useCallback((name: string, key: RangeField, value: number | null) => {
+    const current = rangesRef.current;
+    const next = { ...current, [name]: { ...(current[name] || {}), [key]: cleanOptimizationNumber(value) } };
+    rangesRef.current = next;
+    setRanges(next);
+  }, []);
 
   async function generateSpaceSuggestion() {
     if (!runId) return;
@@ -425,7 +583,7 @@ export default function ParameterOptimizationPage({
         variant_name: "baseline",
         method,
         selected_parameters: selected,
-        parameter_ranges: Object.fromEntries(selected.filter((name: string) => ranges[name]).map((name: string) => [name, ranges[name]])),
+        parameter_ranges: Object.fromEntries(selected.filter((name: string) => rangesRef.current[name]).map((name: string) => [name, rangesRef.current[name]])),
         constraints: spaceSuggestion?.constraints || [],
         virtual_parameters: spaceSuggestion?.virtual_parameters || [],
         objective,
@@ -452,7 +610,7 @@ export default function ParameterOptimizationPage({
     if (!runId) return;
     setAddingToPool(true);
     try {
-      const payload = await addToPool(runId, poolVariant, currentRun?.vt_symbol, poolStrategyName.trim() || undefined);
+      const payload = await addToPool(runId, poolVariant, currentRun?.vt_symbol, poolStrategyName.trim() || undefined, poolNote);
       await Promise.all([refreshPool(), refreshTasks()]);
       if (payload?.rerun_succeeded) {
         const rerunStart = String(payload?.rerun?.items?.[0]?.rerun_start || "").trim();
@@ -462,6 +620,7 @@ export default function ParameterOptimizationPage({
         const diagnostic = String(payload?.rerun?.diagnostics?.[0]?.message || "自动重跑未完成");
         message.warning(`已加入策略池，但${diagnostic}`);
       }
+      setPoolNote("");
       onOpenPool();
     } catch (error) {
       message.error(String(error));
@@ -470,26 +629,53 @@ export default function ParameterOptimizationPage({
     }
   }
 
-  const parameterColumns: ColumnsType<any> = [
+  const parameterRows = useMemo(
+    () => (searchSpace?.parameters || []).map((record: any) => ({
+      ...record,
+      rangeLow: ranges[record.name]?.low,
+      rangeHigh: ranges[record.name]?.high,
+      rangeStep: ranges[record.name]?.step,
+      rangeType: ranges[record.name]?.type || record.type
+    })),
+    [ranges, searchSpace?.parameters]
+  );
+
+  const toggleSelectedParam = useCallback((name: string, checked: boolean) => {
+    setSelectedParams((current) => checked
+      ? Array.from(new Set([...current, name]))
+      : current.filter((item) => item !== name));
+  }, []);
+
+  const parameterColumns: ColumnsType<any> = useMemo(() => [
     {
       title: "",
       width: 48,
       render: (_, record) => (
         <Checkbox
           checked={selectedParams.includes(record.name)}
-          onChange={(event) => {
-            setSelectedParams((current) => event.target.checked ? [...current, record.name] : current.filter((item) => item !== record.name));
-          }}
+          onChange={(event) => toggleSelectedParam(record.name, event.target.checked)}
         />
       )
     },
     { title: zh.paramName, dataIndex: "name", render: (value, record) => <div className="param-name-cell"><strong>{value}</strong><span>{record.category || record.role}</span>{record.reason && <small>{record.reason}</small>}</div> },
     { title: zh.currentValue, dataIndex: "current", render: (value) => String(value) },
-    { title: "下限", dataIndex: "low", render: (_, record) => <InputNumber value={ranges[record.name]?.low} precision={optimizationPrecision(ranges[record.name]?.step)} step={ranges[record.name]?.step || 1} onChange={(value) => updateRange(record.name, "low", value)} /> },
-    { title: "上限", dataIndex: "high", render: (_, record) => <InputNumber value={ranges[record.name]?.high} precision={optimizationPrecision(ranges[record.name]?.step)} step={ranges[record.name]?.step || 1} onChange={(value) => updateRange(record.name, "high", value)} /> },
-    { title: "步长", dataIndex: "step", render: (_, record) => <InputNumber value={ranges[record.name]?.step} precision={optimizationPrecision(ranges[record.name]?.step)} step={record.type === "int" ? 1 : 0.001} onChange={(value) => updateRange(record.name, "step", value)} /> },
+    {
+      title: "下限",
+      dataIndex: "rangeLow",
+      render: (value, record) => <ParameterNumberInput parameterName={record.name} field="low" parameterType={record.rangeType} value={value} stepValue={record.rangeStep} onCommit={updateRange} />
+    },
+    {
+      title: "上限",
+      dataIndex: "rangeHigh",
+      render: (value, record) => <ParameterNumberInput parameterName={record.name} field="high" parameterType={record.rangeType} value={value} stepValue={record.rangeStep} onCommit={updateRange} />
+    },
+    {
+      title: "步长",
+      dataIndex: "rangeStep",
+      render: (value, record) => <ParameterNumberInput parameterName={record.name} field="step" parameterType={record.rangeType} value={value} stepValue={value} onCommit={updateRange} />
+    },
     { title: "类型", dataIndex: "type" }
-  ];
+  ], [selectedParams, toggleSelectedParam, updateRange]);
 
   const performanceColumns: ColumnsType<any> = [
     { title: "版本", dataIndex: "label", width: 180 },
@@ -542,8 +728,59 @@ export default function ParameterOptimizationPage({
     return rows
       .filter((item: any) => Number(item?.rank) > 0 && item?.success !== false)
       .sort((a: any, b: any) => Number(a.rank) - Number(b.rank))
-      .slice(0, 6);
+      .slice(0, 10);
   }, [canUseOptimizationResultGrid, canUseStoredGridSummary, optimizationResult, runDetail]);
+  const manualGridTableRows = useMemo(
+    () => manualGridTopRows.map((item: any) => ({
+      ...item,
+      key: `rank-${item.rank}-${String(item.label || "")}`,
+      parsedParameters: parseGridParameters(item.parameters)
+    })),
+    [manualGridTopRows]
+  );
+  const manualGridParameterNames = useMemo(() => {
+    const names = new Set<string>();
+    for (const row of manualGridTableRows) {
+      Object.keys(row.parsedParameters).forEach((name) => names.add(name));
+    }
+    return Array.from(names);
+  }, [manualGridTableRows]);
+  const manualGridColumns: ColumnsType<any> = useMemo(() => [
+    {
+      title: "排名",
+      dataIndex: "rank",
+      width: 68,
+      fixed: "left" as const,
+      render: (value) => <strong className="optimizer-grid-rank">#{value}</strong>
+    },
+    ...manualGridParameterNames.map((name) => ({
+      title: <span className="optimizer-grid-param-name" title={name}>{name}</span>,
+      key: `parameter-${name}`,
+      width: 124,
+      render: (_: unknown, record: any) => (
+        <span title={`${name}=${formatParameterValue(record.parsedParameters[name])}`}>
+          {formatParameterValue(record.parsedParameters[name])}
+        </span>
+      )
+    })),
+    {
+      title: "超额收益",
+      dataIndex: "excess_return",
+      width: 118,
+      className: objective === "excess_return" ? "optimizer-current-metric" : "",
+      onHeaderCell: () => ({ className: objective === "excess_return" ? "optimizer-current-metric" : "" }),
+      render: (value) => formatReturnPct(value, 2)
+    },
+    {
+      title: "Sharpe",
+      dataIndex: "sharpe",
+      width: 100,
+      className: objective === "sharpe" ? "optimizer-current-metric" : "",
+      onHeaderCell: () => ({ className: objective === "sharpe" ? "optimizer-current-metric" : "" }),
+      render: (value) => formatNumber(value, 2)
+    }
+  ], [manualGridParameterNames, objective]);
+  const manualGridTableWidth = 68 + manualGridParameterNames.length * 124 + 218;
 
   useEffect(() => {
     if (!curveDateBounds.min || !curveDateBounds.max) return;
@@ -591,6 +828,7 @@ export default function ParameterOptimizationPage({
     }
     return rows;
   }, [curveVariantNames, filteredVariantCurves, primaryVariant]);
+  const orderedCurveKeys = useMemo(() => curveSelectorItems.map((item) => item.key), [curveSelectorItems]);
 
   function toggleCurveVisibility(nextKey: string) {
     setVisibleCurveKeys((current) => current.includes(nextKey) ? current.filter((key) => key !== nextKey) : [...current, nextKey]);
@@ -612,8 +850,7 @@ export default function ParameterOptimizationPage({
     setCurveEndDate(curveDateBounds.max);
   }
 
-  useEffect(() => {
-    window.localStorage.setItem(OPTIMIZE_DRAFT_STORAGE_KEY, JSON.stringify({
+  const optimizeDraft = useMemo(() => ({
       selectedFamily,
       runId,
       method,
@@ -624,8 +861,24 @@ export default function ParameterOptimizationPage({
       visibleCurveKeys,
       curveStartDate,
       curveEndDate,
-    }));
-  }, [curveEndDate, curveStartDate, method, objective, poolVariant, ranges, runId, selectedFamily, selectedParams, visibleCurveKeys]);
+    }), [curveEndDate, curveStartDate, method, objective, poolVariant, ranges, runId, selectedFamily, selectedParams, visibleCurveKeys]);
+  const latestOptimizeDraftRef = useRef(optimizeDraft);
+  latestOptimizeDraftRef.current = optimizeDraft;
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      window.localStorage.setItem(OPTIMIZE_DRAFT_STORAGE_KEY, JSON.stringify(optimizeDraft));
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [optimizeDraft]);
+
+  useEffect(() => {
+    const flushDraft = () => {
+      window.localStorage.setItem(OPTIMIZE_DRAFT_STORAGE_KEY, JSON.stringify(latestOptimizeDraftRef.current));
+    };
+    window.addEventListener("pagehide", flushDraft);
+    return () => window.removeEventListener("pagehide", flushDraft);
+  }, []);
 
   return (
     <section className="view is-active">
@@ -669,6 +922,9 @@ export default function ParameterOptimizationPage({
             />
           </label>
         </div>
+        {poolRunLineage && (
+          <p className="band-note">来自策略池 · 原版本：{poolRunLineage.source_variant_name || poolRunLineage.source_variant_id || "-"} · 已重跑为 Baseline</p>
+        )}
       </section>
 
       <section className="band library-shell">
@@ -692,7 +948,7 @@ export default function ParameterOptimizationPage({
           onShortcut={applyCurveShortcut}
         />
         {visibleCurveKeys.length > 0 && curveVariantNames.length > 0 ? (
-          <div className="library-curve-panel unified-curve-panel"><MultiVariantCurveChart curves={filteredVariantCurves} visibleKeys={visibleCurveKeys} orderedKeys={curveSelectorItems.map((item) => item.key)} showLegend={false} height={420} /></div>
+          <div className="library-curve-panel unified-curve-panel"><MultiVariantCurveChart curves={filteredVariantCurves} visibleKeys={visibleCurveKeys} orderedKeys={orderedCurveKeys} showLegend={false} height={420} /></div>
         ) : curveVariantNames.length > 0 ? (
           <div className="empty-state">当前没有展示的曲线，可在上方重新勾选。</div>
         ) : (
@@ -755,7 +1011,7 @@ export default function ParameterOptimizationPage({
           </div>
         )}
         <div className="parameter-frame">
-          <Table rowKey="name" columns={parameterColumns} dataSource={searchSpace?.parameters || []} pagination={false} className="workbench-table parameter-table" />
+          <Table rowKey="name" columns={parameterColumns} dataSource={parameterRows} pagination={false} className="workbench-table parameter-table" />
         </div>
         {(spaceSuggestion?.virtual_parameters || []).length > 0 && (
           <div className="detail-grid optimizer-preview">
@@ -780,19 +1036,21 @@ export default function ParameterOptimizationPage({
           <div className="empty-state">当前这个 run 还没有按“超额收益”生成过手动网格排名，切换评分方式后需要重新运行一次手动优化。</div>
         )}
         {method === "manual_grid" && manualGridTopRows.length > 0 && (
-          <div className="detail-grid optimizer-preview">
-            {manualGridTopRows.map((item: any) => (
-              <div className="viewer-summary-card compact-optimizer-card" key={String(item.label || item.rank)}>
-                <div className="summary-label">Top {item.rank} · {item.label || "-"}</div>
-                <strong>{formatNumber(item.score, 4)}</strong>
-                <div className="meta-inline">
-                  {objective === "excess_return"
-                    ? `超额 ${formatReturnPct(item.excess_return, 2)}`
-                    : `Sharpe ${formatNumber(item.sharpe, 2)}`}
-                </div>
-                <div className="meta-inline">{summarizeParameters(item.parameters)}</div>
-              </div>
-            ))}
+          <div className="optimizer-grid-results">
+            <div className="optimizer-grid-results-head">
+              <strong>参数组合 Top 10</strong>
+              <span>按当前评分方式排列</span>
+            </div>
+            <Table
+              rowKey="key"
+              columns={manualGridColumns}
+              dataSource={manualGridTableRows}
+              pagination={false}
+              size="small"
+              scroll={{ x: manualGridTableWidth }}
+              rowClassName={(record) => Number(record.rank) === 1 ? "optimizer-grid-first" : ""}
+              className="workbench-table optimizer-grid-table"
+            />
           </div>
         )}
       </section>
@@ -825,7 +1083,16 @@ export default function ParameterOptimizationPage({
           </div>
           <div className="viewer-summary-card"><span className="summary-label">版本 Sharpe</span><strong>{formatNumber(poolVariantMetrics.sharpe ?? poolVariantMetrics.sharpe_ratio)}</strong></div>
           <div className="viewer-summary-card"><span className="summary-label">版本交易数</span><strong>{Number.isFinite(Number(poolVariantTradeCount)) ? String(poolVariantTradeCount) : "-"}</strong></div>
-          <div className="viewer-summary-card"><span className="summary-label">优化器</span><strong>{optimizationResult?.optimization?.optimizer_name || "-"}</strong></div>
+          <div className="viewer-summary-card pool-note-input-card">
+            <span className="summary-label">入池备注</span>
+            <Input.TextArea
+              value={poolNote}
+              onChange={(event) => setPoolNote(event.target.value)}
+              autoSize={{ minRows: 1, maxRows: 3 }}
+              maxLength={500}
+              placeholder="可选，记录策略特点、适用场景或注意事项。"
+            />
+          </div>
         </div>
       </section>
     </section>

@@ -23,6 +23,18 @@ export function generateStrategy(sourceFilename: string) {
   });
 }
 
+export function repairStrategyCode(payload: {
+  strategy_name: string;
+  strategy_code: string;
+  vt_symbol?: string;
+  interval?: string;
+}) {
+  return request<any>("/api/strategies/repair", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
 export type ResearchCreatePayload = {
   source_filename: string;
   symbol: string;
@@ -150,10 +162,10 @@ export function getVariantCurve(runId: string, variantName: string) {
   return request<any>(`/api/runs/${encodeURIComponent(runId)}/variants/${encodeURIComponent(variantName)}/curve`);
 }
 
-export function addToPool(runId: string, variantName = "baseline", vtSymbol?: string, strategyName?: string) {
+export function addToPool(runId: string, variantName = "baseline", vtSymbol?: string, strategyName?: string, note?: string) {
   return request<any>("/api/pool/add", {
     method: "POST",
-    body: JSON.stringify({ run_id: runId, variant_name: variantName, vt_symbol: vtSymbol, strategy_name: strategyName, tags: ["frontend"] })
+    body: JSON.stringify({ run_id: runId, variant_name: variantName, vt_symbol: vtSymbol, strategy_name: strategyName, note, tags: ["frontend"] })
   });
 }
 
@@ -163,6 +175,19 @@ export function listPool() {
 
 export function getPoolItem(poolItemId: string) {
   return request<any>(`/api/pool/${encodeURIComponent(poolItemId)}`);
+}
+
+export function continuePoolOptimization(poolItemId: string) {
+  return request<any>(`/api/pool/${encodeURIComponent(poolItemId)}/continue-optimization`, {
+    method: "POST"
+  });
+}
+
+export function updatePoolNotes(poolItemId: string, note: string) {
+  return request<any>(`/api/pool/${encodeURIComponent(poolItemId)}/notes`, {
+    method: "PATCH",
+    body: JSON.stringify({ note })
+  });
 }
 
 export function getPoolCurve(poolItemId: string) {

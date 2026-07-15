@@ -31,12 +31,14 @@ import {
   listPool,
   listTasks,
   removeFromPool,
+  repairStrategyCode,
   rerunPool,
   runOptimization,
   updateNaturalLanguageSource
 } from "../api";
 
 export type PageKey = "launch" | "generate" | "optimize" | "pool";
+export type TaskRunNavigation = { runId: string; requestId: number };
 export const PAGE_STORAGE_KEY = "gyro_nicert.active_page";
 export const OPTIMIZE_DRAFT_STORAGE_KEY = "gyro_nicert.optimize_draft";
 export const BENCHMARK_CURVE_COLOR = "#475569";
@@ -321,7 +323,41 @@ export type LocalStrategyFile = {
   name: string;
   relativePath: string;
   code: string;
+  aiRepaired?: boolean;
+  repairWarnings?: string[];
 };
+
+export type StrategyRepairUiStatus = "runnable" | "warning" | "failed";
+
+export function normalizeStrategyRepairResponse(payload: any): {
+  status: StrategyRepairUiStatus;
+  detail: string;
+  strategyCode: string;
+} {
+  const status = String(payload?.status || "").trim().toLowerCase();
+  const strategyCode = typeof payload?.strategy_code === "string" ? payload.strategy_code : "";
+  const changes = Array.isArray(payload?.changes) ? payload.changes.map(String).filter(Boolean) : [];
+  const reasons = Array.isArray(payload?.reasons) ? payload.reasons.map(String).filter(Boolean) : [];
+  if (status === "runnable" && strategyCode.trim()) {
+    return {
+      status: "runnable",
+      detail: changes.length ? changes.slice(0, 2).join("；") : "修正后的代码已可在平台独立运行",
+      strategyCode
+    };
+  }
+  if (status === "warning") {
+    return {
+      status: "warning",
+      detail: reasons.length ? reasons.join("；") : "AI 判断代码仍需人工处理",
+      strategyCode: ""
+    };
+  }
+  return {
+    status: "failed",
+    detail: String(payload?.error || reasons[0] || (status === "runnable" ? "AI 修正没有返回可用代码" : "AI 返回格式错误或修正失败")),
+    strategyCode: ""
+  };
+}
 
 export type WorkflowUiState = {
   stageKey: "idle" | "generation" | "download" | "backtest";
@@ -864,12 +900,15 @@ export function buildComparisonSeries(
   return series;
 }
 
-export function MultiVariantCurveChart({
+const EMPTY_CURVE_LABELS: Record<string, string> = {};
+const EMPTY_ORDERED_CURVE_KEYS: string[] = [];
+
+function MultiVariantCurveChartComponent({
   curves,
   visibleKeys,
-  labels = {},
+  labels = EMPTY_CURVE_LABELS,
   benchmark = null,
-  orderedKeys = [],
+  orderedKeys = EMPTY_ORDERED_CURVE_KEYS,
   height = 340,
   showLegend = true
 }: {
@@ -882,6 +921,7 @@ export function MultiVariantCurveChart({
   showLegend?: boolean;
 }) {
   const ref = useRef<HTMLDivElement | null>(null);
+  const chartRef = useRef<ReturnType<typeof echarts.init> | null>(null);
   const series = useMemo(() => buildComparisonSeries(curves, visibleKeys, labels, benchmark), [curves, visibleKeys, labels, benchmark]);
   const dates = useMemo(() => {
     const seen = new Set<string>();
@@ -892,18 +932,24 @@ export function MultiVariantCurveChart({
     }
     return Array.from(seen).sort();
   }, [series]);
+  const option = useMemo(() => buildCumulativeChartOption(series, dates, orderedKeys), [dates, orderedKeys, series]);
 
   useEffect(() => {
     if (!ref.current) return;
     const chart = echarts.init(ref.current);
-    chart.setOption(buildCumulativeChartOption(series, dates, orderedKeys), true);
+    chartRef.current = chart;
     const resize = () => chart.resize();
     window.addEventListener("resize", resize);
     return () => {
       window.removeEventListener("resize", resize);
       chart.dispose();
+      chartRef.current = null;
     };
-  }, [dates, orderedKeys, series]);
+  }, []);
+
+  useEffect(() => {
+    chartRef.current?.setOption(option, true);
+  }, [option]);
 
   return (
     <div className="curve-chart-shell">
@@ -932,9 +978,13 @@ export function MultiVariantCurveChart({
   );
 }
 
+export const MultiVariantCurveChart = React.memo(MultiVariantCurveChartComponent);
+MultiVariantCurveChart.displayName = "MultiVariantCurveChart";
+
 export function Sidebar({
   page,
   onPageChange,
+  onTaskNavigate,
   tasks,
   onRefreshTasks,
   taskConnectionError,
@@ -943,6 +993,7 @@ export function Sidebar({
 }: {
   page: PageKey;
   onPageChange: (page: PageKey) => void;
+  onTaskNavigate: (task: WorkbenchTask) => void;
   tasks: WorkbenchTask[];
   onRefreshTasks: () => Promise<void>;
   taskConnectionError: boolean;
@@ -1038,7 +1089,7 @@ export function Sidebar({
   }
 
   function navigateFromTask(task: WorkbenchTask) {
-    onPageChange(taskTargetPage(task));
+    onTaskNavigate(task);
     setDrawerOpen(false);
   }
 
@@ -1199,6 +1250,12 @@ export function LaunchFlowPage({
   const [loadingResearch, setLoadingResearch] = useState(false);
   const [loadingSources, setLoadingSources] = useState(false);
   const [savingSource, setSavingSource] = useState(false);
+  const [repairingLocalCode, setRepairingLocalCode] = useState(false);
+  const [localRepairProgress, setLocalRepairProgress] = useState(0);
+  const [localRepairFeedback, setLocalRepairFeedback] = useState<{
+    status: StrategyRepairUiStatus;
+    detail: string;
+  } | null>(null);
   const [launchError, setLaunchError] = useState<any>(null);
   const isSourceDirty = !isCreatingSource && Boolean(selectedFile) && sourceText !== savedSourceText;
   const canRunNaturalLanguage = Boolean(selectedFile && sourceText.trim()) && !isCreatingSource && !isSourceDirty;
@@ -1216,6 +1273,16 @@ export function LaunchFlowPage({
       mountedRef.current = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (!repairingLocalCode) return;
+    const timer = window.setInterval(() => {
+      setLocalRepairProgress((current) => current >= 100
+        ? 100
+        : Math.min(92, current + Math.max(1, Math.ceil((92 - current) * 0.12))));
+    }, 500);
+    return () => window.clearInterval(timer);
+  }, [repairingLocalCode]);
 
   async function refreshSourceFiles(preferredSelection?: string) {
     setLoadingSources(true);
@@ -1363,11 +1430,59 @@ export function LaunchFlowPage({
       setLocalStrategyFiles(loaded);
       setSelectedLocalPath(loaded[0].relativePath);
       setManualStrategyName(loaded[0].name.replace(/\.py$/i, ""));
+      setLocalRepairProgress(0);
+      setLocalRepairFeedback(null);
       message.success(`已读取策略文件：${file.name}`);
     } catch (error) {
       message.error(`读取本地策略失败：${String(error)}`);
     } finally {
       event.target.value = "";
+    }
+  }
+
+  async function repairLocalStrategyCode() {
+    if (!selectedLocalFile?.code.trim()) {
+      message.warning("请先选择需要修正的 .py 策略文件");
+      return;
+    }
+    const targetPath = selectedLocalFile.relativePath;
+    setLocalRepairProgress(6);
+    setLocalRepairFeedback(null);
+    setRepairingLocalCode(true);
+    try {
+      const payload = await repairStrategyCode({
+        strategy_name: manualStrategyName.trim() || selectedLocalFile.name.replace(/\.py$/i, ""),
+        strategy_code: selectedLocalFile.code,
+        vt_symbol: vtSymbolInput.trim(),
+        interval
+      });
+      const feedback = normalizeStrategyRepairResponse(payload);
+      setLocalRepairProgress(100);
+      setLocalRepairFeedback({ status: feedback.status, detail: feedback.detail });
+      if (feedback.status === "warning") {
+        message.warning("AI 判断代码仍需人工处理，已保留原回测代码");
+        return;
+      }
+      if (feedback.status === "failed") {
+        message.error(`AI 修正失败：${feedback.detail}`);
+        return;
+      }
+      setLocalStrategyFiles((files) => files.map((file) => file.relativePath === targetPath
+        ? {
+            ...file,
+            code: feedback.strategyCode,
+            aiRepaired: true,
+            repairWarnings: []
+          }
+        : file));
+      message.success("AI修正完成，启动回测时将使用修正后的代码");
+    } catch (error) {
+      const detail = "AI 修正请求失败，请检查接口配置或网络后重试";
+      setLocalRepairProgress(100);
+      setLocalRepairFeedback({ status: "failed", detail });
+      message.error(detail);
+    } finally {
+      setRepairingLocalCode(false);
     }
   }
 
@@ -1649,10 +1764,34 @@ export function LaunchFlowPage({
                   />
                   <div className="inline-input-row">
                     <Button onClick={() => localFolderInputRef.current?.click()}>选择 .py 文件</Button>
+                    <Button disabled={!selectedLocalFile} loading={repairingLocalCode} onClick={repairLocalStrategyCode}>AI 修正代码</Button>
                     <span className="meta-inline">
                       {selectedLocalFile ? `已选择：${selectedLocalFile.name}` : "尚未选择策略文件"}
                     </span>
                   </div>
+                  {(repairingLocalCode || localRepairFeedback) && (
+                    <div className={`ai-repair-mini ${localRepairFeedback ? `is-${localRepairFeedback.status}` : ""}`}>
+                      <span className="ai-repair-mini-label">
+                        {repairingLocalCode
+                          ? "AI 正在修正"
+                          : localRepairFeedback?.status === "runnable"
+                            ? "修正成功"
+                            : localRepairFeedback?.status === "warning"
+                              ? "需要人工处理"
+                              : "修正失败"}
+                      </span>
+                      <Progress
+                        percent={localRepairProgress}
+                        status={localRepairFeedback?.status === "failed" ? "exception" : localRepairFeedback?.status === "runnable" ? "success" : "active"}
+                        strokeColor={localRepairFeedback?.status === "warning" ? "#d97706" : undefined}
+                        showInfo={false}
+                        strokeWidth={3}
+                      />
+                      <span className="ai-repair-mini-result">
+                        {repairingLocalCode ? `${localRepairProgress}%` : localRepairFeedback?.detail}
+                      </span>
+                    </div>
+                  )}
                 </section>
                 <label className="field span-2">
                   <span>{zh.strategyNameInput}</span>
@@ -1662,9 +1801,12 @@ export function LaunchFlowPage({
                   <section className="field span-2">
                     <div className="field-head">
                       <span>代码预览</span>
-                      <span className="meta-inline">{selectedLocalFile.relativePath}</span>
+                      <span className="meta-inline">{selectedLocalFile.aiRepaired ? "AI修正版 · 本地原文件未修改" : selectedLocalFile.relativePath}</span>
                     </div>
                     <Input.TextArea rows={12} value={selectedLocalFile.code} readOnly />
+                    {selectedLocalFile.aiRepaired && selectedLocalFile.repairWarnings?.length ? (
+                      <span className="meta-inline">{selectedLocalFile.repairWarnings.join("；")}</span>
+                    ) : null}
                   </section>
                 )}
               </>
@@ -1760,13 +1902,22 @@ export function CurveControls({
             maxDrawdown: 0
           };
           const color = curveSeriesColor(previewSeries, index);
+          const detail = item.detail || formatReturnPct(item.value, 2);
           return (
-            <button type="button" key={item.key} className={`curve-pill ${active ? "is-active" : ""}`} onClick={() => onToggle(item.key)} aria-pressed={active}>
+            <button
+              type="button"
+              key={item.key}
+              className={`curve-pill ${active ? "is-active" : ""}`}
+              onClick={() => onToggle(item.key)}
+              aria-pressed={active}
+              title={`${item.label}\n${detail}`}
+            >
               <span className={`curve-swatch ${item.type === "benchmark" ? "is-dashed" : ""}`} style={item.type === "benchmark" ? { borderLeftColor: color } : { background: color }} />
               <span className="curve-pill-copy">
                 <strong>{item.label}</strong>
-                <small>{item.detail || formatReturnPct(item.value, 2)}</small>
+                <small>{detail}</small>
               </span>
+              <span className="curve-pill-check" aria-hidden="true">✓</span>
             </button>
           );
         })}
@@ -2078,6 +2229,8 @@ const PoolPage = React.lazy(() => import("../pages/PoolPage"));
 
 export default function App() {
   const [page, setPage] = useState<PageKey>(() => loadInitialPage());
+  const [taskRunNavigation, setTaskRunNavigation] = useState<TaskRunNavigation | null>(null);
+  const taskNavigationSequenceRef = useRef(0);
   const [tasks, setTasks] = useState<WorkbenchTask[]>([]);
   const [taskConnectionError, setTaskConnectionError] = useState(false);
   const [poolItems, setPoolItems] = useState<any[]>([]);
@@ -2145,6 +2298,24 @@ export default function App() {
     setPoolItems(payload.items || []);
   }
 
+  function navigateToOptimizationRun(runId: string) {
+    const resolvedRunId = String(runId || "").trim();
+    if (!resolvedRunId) return;
+    taskNavigationSequenceRef.current += 1;
+    setTaskRunNavigation({ runId: resolvedRunId, requestId: taskNavigationSequenceRef.current });
+    setPage("optimize");
+  }
+
+  function navigateFromTask(task: WorkbenchTask) {
+    const targetPage = taskTargetPage(task);
+    const relatedRunId = String(task.related_run_id || "").trim();
+    if (targetPage === "optimize" && relatedRunId) {
+      navigateToOptimizationRun(relatedRunId);
+      return;
+    }
+    setPage(targetPage);
+  }
+
   useEffect(() => {
     refreshTasks().catch((error) => message.error(String(error)));
     refreshPool().catch((error) => message.error(String(error)));
@@ -2196,6 +2367,7 @@ export default function App() {
         <Sidebar
           page={page}
           onPageChange={setPage}
+          onTaskNavigate={navigateFromTask}
           tasks={tasks}
           onRefreshTasks={refreshTasks}
           taskConnectionError={taskConnectionError}
@@ -2229,8 +2401,17 @@ export default function App() {
               onGoOptimize={() => setPage("optimize")}
             />
           )}
-          {page === "optimize" && <ParameterOptimizationPage lastResearch={lastResearch} refreshPool={refreshPool} refreshTasks={refreshTasks} onOpenPool={() => setPage("pool")} />}
-          {page === "pool" && <PoolPage poolItems={poolItems} refreshPool={refreshPool} refreshTasks={refreshTasks} />}
+          {page === "optimize" && (
+            <ParameterOptimizationPage
+              lastResearch={lastResearch}
+              taskRunNavigation={taskRunNavigation}
+              onTaskRunApplied={(requestId) => setTaskRunNavigation((current) => current?.requestId === requestId ? null : current)}
+              refreshPool={refreshPool}
+              refreshTasks={refreshTasks}
+              onOpenPool={() => setPage("pool")}
+            />
+          )}
+          {page === "pool" && <PoolPage poolItems={poolItems} refreshPool={refreshPool} refreshTasks={refreshTasks} onContinueOptimization={navigateToOptimizationRun} />}
           </React.Suspense>
         </main>
       </div>

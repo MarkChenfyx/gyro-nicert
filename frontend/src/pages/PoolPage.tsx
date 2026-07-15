@@ -5,6 +5,7 @@ import {
   addToPool,
   archiveTerminalTasks,
   comparePool,
+  continuePoolOptimization,
   createNaturalLanguageSource,
   createResearchBaseline,
   createResearchBaselineFromCode,
@@ -25,6 +26,7 @@ import {
   removeFromPool,
   rerunPool,
   runOptimization,
+  updatePoolNotes,
   updateNaturalLanguageSource
 } from "../api";
 import {
@@ -104,17 +106,19 @@ import {
 export default function PoolPage({
   poolItems,
   refreshPool,
-  refreshTasks
+  refreshTasks,
+  onContinueOptimization
 }: {
   poolItems: any[];
   refreshPool: () => Promise<void>;
   refreshTasks: () => Promise<void>;
+  onContinueOptimization: (runId: string) => void;
 }) {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [selectedSymbol, setSelectedSymbol] = useState("");
   const [searchText, setSearchText] = useState("");
   const [selectionMode, setSelectionMode] = useState("all");
-  const [poolSortKey, setPoolSortKey] = useState<"created_at" | "total_return" | "sharpe" | "trade_count" | "max_drawdown">("created_at");
+  const [poolSortKey, setPoolSortKey] = useState<"created_at" | "total_return" | "sharpe" | "trade_count" | "max_drawdown" | "excess_return">("created_at");
   const [poolSortOrder, setPoolSortOrder] = useState<"asc" | "desc">("desc");
   const [selectedDetailId, setSelectedDetailId] = useState("");
   const [detail, setDetail] = useState<any>(null);
@@ -123,6 +127,10 @@ export default function PoolPage({
   const [rerunning, setRerunning] = useState(false);
   const [rerunProgress, setRerunProgress] = useState(0);
   const [rerunMessage, setRerunMessage] = useState("");
+  const [continuingPoolItemId, setContinuingPoolItemId] = useState("");
+  const [editingNotes, setEditingNotes] = useState(false);
+  const [noteDraft, setNoteDraft] = useState("");
+  const [savingNotes, setSavingNotes] = useState(false);
   const [poolRerunStartMode, setPoolRerunStartMode] = useState("auto_earliest");
   const [showBenchmark, setShowBenchmark] = useState(true);
   const [curveStartDate, setCurveStartDate] = useState("");
@@ -176,7 +184,7 @@ export default function PoolPage({
     };
   }
 
-  function togglePoolSort(nextKey: "total_return" | "sharpe" | "trade_count" | "max_drawdown") {
+  function togglePoolSort(nextKey: "total_return" | "sharpe" | "trade_count" | "max_drawdown" | "excess_return") {
     if (poolSortKey === nextKey) {
       setPoolSortOrder((current) => current === "desc" ? "asc" : "desc");
       return;
@@ -185,7 +193,7 @@ export default function PoolPage({
     setPoolSortOrder("desc");
   }
 
-  function sortArrow(key: "total_return" | "sharpe" | "trade_count" | "max_drawdown") {
+  function sortArrow(key: "total_return" | "sharpe" | "trade_count" | "max_drawdown" | "excess_return") {
     if (poolSortKey !== key) return null;
     return poolSortOrder === "desc" ? "down" : "up";
   }
@@ -275,10 +283,60 @@ export default function PoolPage({
     try {
       const detailPayload = await getPoolItem(poolItemId);
       setDetail(detailPayload);
+      setNoteDraft(String(detailPayload?.notes || ""));
+      setEditingNotes(false);
     } catch (error) {
       message.error(String(error));
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function continueOptimizationFromPool() {
+    const poolItemId = String(detail?.pool_item?.pool_item_id || "");
+    if (!poolItemId) return;
+    setContinuingPoolItemId(poolItemId);
+    try {
+      const payload = await continuePoolOptimization(poolItemId);
+      const newRunId = String(payload?.baseline?.run?.run_id || "");
+      if (!newRunId) throw new Error("重跑完成，但没有返回新的 run");
+      await refreshTasks();
+      message.success("已重跑为新的 Baseline，正在打开参数优化");
+      onContinueOptimization(newRunId);
+    } catch (error) {
+      message.error(`继续参数优化失败：${String(error)}`);
+    } finally {
+      setContinuingPoolItemId("");
+    }
+  }
+
+  function beginEditingNotes() {
+    setNoteDraft(String(detail?.notes || ""));
+    setEditingNotes(true);
+  }
+
+  function cancelEditingNotes() {
+    setNoteDraft(String(detail?.notes || ""));
+    setEditingNotes(false);
+  }
+
+  async function saveNotes() {
+    const poolItemId = String(detail?.pool_item?.pool_item_id || "");
+    if (!poolItemId || savingNotes) return;
+    setSavingNotes(true);
+    try {
+      const payload = await updatePoolNotes(poolItemId, noteDraft);
+      const savedNote = String(payload?.note ?? noteDraft);
+      setDetail((current: any) => String(current?.pool_item?.pool_item_id || "") === poolItemId
+        ? { ...current, notes: savedNote }
+        : current);
+      setNoteDraft(savedNote);
+      setEditingNotes(false);
+      message.success("备注已保存");
+    } catch (error) {
+      message.error(`备注保存失败：${String(error)}`);
+    } finally {
+      setSavingNotes(false);
     }
   }
 
@@ -374,14 +432,18 @@ export default function PoolPage({
           ? Number(aMetrics.sharpe ?? -Infinity)
           : poolSortKey === "max_drawdown"
             ? Number(aMetrics.maxDrawdown ?? -Infinity)
-            : Number(aMetrics.tradeCount ?? -Infinity);
+            : poolSortKey === "excess_return"
+              ? Number(aMetrics.excessReturn ?? -Infinity)
+              : Number(aMetrics.tradeCount ?? -Infinity);
       const bValue = poolSortKey === "total_return"
         ? Number(bMetrics.totalReturn ?? -Infinity)
         : poolSortKey === "sharpe"
           ? Number(bMetrics.sharpe ?? -Infinity)
           : poolSortKey === "max_drawdown"
             ? Number(bMetrics.maxDrawdown ?? -Infinity)
-            : Number(bMetrics.tradeCount ?? -Infinity);
+            : poolSortKey === "excess_return"
+              ? Number(bMetrics.excessReturn ?? -Infinity)
+              : Number(bMetrics.tradeCount ?? -Infinity);
       return (aValue - bValue) * direction;
     });
     return items;
@@ -391,13 +453,20 @@ export default function PoolPage({
     () => curveDateBoundsForRows(Object.values(compareCurves).flatMap((rows: any) => rows)),
     [compareCurves]
   );
-  const selectedCurveSetKey = useMemo(() => [...selectedIds].sort().join("|"), [selectedIds]);
 
   useEffect(() => {
     if (!poolCurveDateBounds.min || !poolCurveDateBounds.max) return;
-    setCurveStartDate(poolCurveDateBounds.min);
-    setCurveEndDate(poolCurveDateBounds.max);
-  }, [poolCurveDateBounds.max, poolCurveDateBounds.min, selectedCurveSetKey]);
+    setCurveStartDate((current) => {
+      if (!current || current < poolCurveDateBounds.min) return poolCurveDateBounds.min;
+      if (current > poolCurveDateBounds.max) return poolCurveDateBounds.max;
+      return current;
+    });
+    setCurveEndDate((current) => {
+      if (!current || current > poolCurveDateBounds.max) return poolCurveDateBounds.max;
+      if (current < poolCurveDateBounds.min) return poolCurveDateBounds.min;
+      return current;
+    });
+  }, [poolCurveDateBounds.max, poolCurveDateBounds.min]);
 
   const filteredCompareCurves = useMemo(
     () => Object.fromEntries(Object.entries(compareCurves).map(([key, rows]) => [key, clampDateRange(rows as any[], curveStartDate, curveEndDate)])),
@@ -464,7 +533,14 @@ export default function PoolPage({
         ),
         render: (_, record) => formatReturnPct(strategyCurveMetrics(record).maxDrawdown)
       },
-      { title: "超额收益", render: (_, record) => formatReturnPct(strategyCurveMetrics(record).excessReturn) },
+      {
+        title: (
+          <button type="button" className="table-sort-button" onClick={() => togglePoolSort("excess_return")}>
+            超额收益 <SortCaret state={sortArrow("excess_return")} />
+          </button>
+        ),
+        render: (_, record) => formatReturnPct(strategyCurveMetrics(record).excessReturn)
+      },
       {
         title: "操作",
         render: (_, record) => (
@@ -506,7 +582,71 @@ export default function PoolPage({
   const resultParams = detail?.result?.recommended?.parameters || detail?.result?.params || detail?.result?.parameters || {};
   const params = detail?.config?.parameters || detail?.manifest?.parameters || detailParams || resultParams || {};
   const trades = detail?.trades?.data || [];
-  const tradeColumns = (detail?.trades?.columns || Object.keys(trades[0] || {})).slice(0, 8).map((column: string) => ({ title: column, dataIndex: column }));
+  const sortedTrades = useMemo(() => [...trades].sort((left: any, right: any) => {
+    const leftDatetime = String(left?.datetime || left?.date || left?.trading_day || "");
+    const rightDatetime = String(right?.datetime || right?.date || right?.trading_day || "");
+    const datetimeOrder = rightDatetime.localeCompare(leftDatetime, "zh-CN", { numeric: true });
+    if (datetimeOrder !== 0) return datetimeOrder;
+    return String(right?.tradeid || "").localeCompare(String(left?.tradeid || ""), "zh-CN", { numeric: true });
+  }), [trades]);
+  const tradeValueLabel = (value: unknown, labels: Record<string, string>) => {
+    const text = String(value ?? "").trim();
+    return labels[text.toLowerCase()] || text || "-";
+  };
+  const tradeColumns: ColumnsType<any> = [
+    {
+      title: "成交时间",
+      key: "datetime",
+      width: 180,
+      render: (_, row) => formatDate(row?.datetime || row?.date || row?.trading_day)
+    },
+    {
+      title: "方向",
+      dataIndex: "direction",
+      width: 72,
+      render: (value) => tradeValueLabel(value, { long: "多", short: "空", "direction.long": "多", "direction.short": "空" })
+    },
+    {
+      title: "开平",
+      dataIndex: "offset",
+      width: 82,
+      render: (value) => tradeValueLabel(value, {
+        open: "开仓",
+        close: "平仓",
+        closetoday: "平今",
+        closeyesterday: "平昨",
+        "offset.open": "开仓",
+        "offset.close": "平仓",
+        "offset.closetoday": "平今",
+        "offset.closeyesterday": "平昨"
+      })
+    },
+    {
+      title: "成交价格",
+      dataIndex: "price",
+      width: 110,
+      align: "right"
+    },
+    {
+      title: "数量",
+      dataIndex: "volume",
+      width: 80,
+      align: "right"
+    },
+    {
+      title: "标的",
+      key: "symbol",
+      width: 130,
+      render: (_, row) => {
+        const symbol = String(row?.vt_symbol || row?.symbol || "").trim();
+        const exchange = String(row?.exchange || "").replace(/^Exchange\./i, "").trim();
+        if (!symbol) return "-";
+        return exchange && !symbol.toUpperCase().endsWith(`.${exchange.toUpperCase()}`) ? `${symbol}.${exchange}` : symbol;
+      }
+    },
+    { title: "交易编号", dataIndex: "tradeid", width: 130, ellipsis: true },
+    { title: "订单编号", dataIndex: "orderid", width: 130, ellipsis: true }
+  ];
 
   return (
     <section className="view is-active">
@@ -593,8 +733,8 @@ export default function PoolPage({
           endDate={curveEndDate}
           bounds={poolCurveDateBounds}
           onToggle={togglePoolItem}
-          onSelectAll={() => { setSelectedIds(candidateItems.map((item) => String(item.pool_item_id))); setShowBenchmark(true); }}
-          onClear={() => { setSelectedIds([]); setShowBenchmark(false); }}
+          onSelectAll={() => setSelectedIds(candidateItems.map((item) => String(item.pool_item_id)))}
+          onClear={() => setSelectedIds([])}
           onStartDateChange={setCurveStartDate}
           onEndDateChange={setCurveEndDate}
           onShortcut={applyPoolCurveShortcut}
@@ -619,7 +759,7 @@ export default function PoolPage({
 
       {detail && (
         <section className="band library-shell">
-          <div className="library-section-head"><div><h3>{strategyLabel(detail.pool_item)}</h3><p>{detail.pool_item?.pool_item_id}</p></div><div className="detail-head-actions"><span className="status-pill status-completed">completed</span><Button size="small" danger onClick={() => handleDeletePoolItem(String(detail.pool_item?.pool_item_id))}>从池中移除</Button></div></div>
+          <div className="library-section-head"><div><h3>{strategyLabel(detail.pool_item)}</h3><p>{detail.pool_item?.pool_item_id}</p></div><div className="detail-head-actions"><span className="status-pill status-completed">completed</span><Button size="small" loading={continuingPoolItemId === String(detail.pool_item?.pool_item_id)} onClick={continueOptimizationFromPool}>继续参数优化</Button><Button size="small" danger disabled={Boolean(continuingPoolItemId)} onClick={() => handleDeletePoolItem(String(detail.pool_item?.pool_item_id))}>从池中移除</Button></div></div>
           <div className="library-metric-grid">
             <div className="library-metric-card"><span>{zh.sharpe}</span><strong>{formatNumber(detail.pool_item?.sharpe ?? metrics.sharpe ?? metrics.sharpe_ratio)}</strong></div>
             <div className="library-metric-card positive"><span>策略累计收益</span><strong>{detailCurveSummary.strategy ? formatReturnPct(detailCurveSummary.strategy.totalReturn, 2) : "-"}</strong></div>
@@ -628,9 +768,32 @@ export default function PoolPage({
           </div>
           <div className="detail-grid">
             <div className="viewer-summary-card"><span className="summary-label">参数</span><pre className="mini-code">{JSON.stringify(params, null, 2)}</pre></div>
-            <div className="viewer-summary-card"><span className="summary-label">{zh.notes}</span><p className="notes-text">{detail.notes || "-"}</p></div>
+            <div className="viewer-summary-card pool-note-card">
+              <div className="pool-note-card-head">
+                <span className="summary-label">{zh.notes}</span>
+                {editingNotes ? (
+                  <div className="pool-note-card-actions">
+                    <Button type="link" size="small" loading={savingNotes} disabled={savingNotes} onClick={saveNotes}>保存</Button>
+                    <Button type="link" size="small" disabled={savingNotes} onClick={cancelEditingNotes}>取消</Button>
+                  </div>
+                ) : (
+                  <Button type="link" size="small" onClick={beginEditingNotes}>编辑</Button>
+                )}
+              </div>
+              {editingNotes ? (
+                <Input.TextArea
+                  value={noteDraft}
+                  onChange={(event) => setNoteDraft(event.target.value)}
+                  autoSize={{ minRows: 1, maxRows: 3 }}
+                  maxLength={500}
+                  placeholder="可选，记录策略特点、适用场景或注意事项。"
+                />
+              ) : (
+                <p className="notes-text pool-note-text">{detail.notes || "-"}</p>
+              )}
+            </div>
           </div>
-          <section className="library-section"><div className="library-section-head"><div><h3>{zh.trades}</h3></div></div><Table rowKey={(_, index) => String(index)} dataSource={trades} pagination={{ pageSize: 6 }} className="workbench-table" columns={tradeColumns} /></section>
+          <section className="library-section"><div className="library-section-head"><div><h3>{zh.trades}</h3></div></div><Table rowKey={(row) => `${row?.datetime || row?.date || row?.trading_day || "trade"}-${row?.tradeid || ""}-${row?.orderid || ""}`} dataSource={sortedTrades} pagination={{ pageSize: 6, showSizeChanger: false, showTotal: (total) => `共 ${total} 条` }} scroll={{ x: 900 }} className="workbench-table" columns={tradeColumns} /></section>
           <section className="library-section"><div className="library-section-head"><div><h3>{zh.code}</h3></div></div><pre className="code-block">{detail.strategy_code || ""}</pre></section>
         </section>
       )}

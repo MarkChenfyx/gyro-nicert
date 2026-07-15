@@ -32,6 +32,7 @@ def test_add_variant_reruns_from_earliest_local_data(tmp_path, monkeypatch):
         "sharpe": 1.0,
     }
     rerun_calls: list[tuple[list[str], str | None, str | None]] = []
+    snapshot_notes: list[str | None] = []
 
     monkeypatch.setattr(pool_service.run_repository, "get_run", lambda run_id: {"run_id": run_id, "strategy_id": "strategy_1"})
     monkeypatch.setattr(
@@ -40,11 +41,11 @@ def test_add_variant_reruns_from_earliest_local_data(tmp_path, monkeypatch):
         lambda run_id, variant_name: {"variant_id": "variant_1", "variant_name": variant_name},
     )
     monkeypatch.setattr(pool_service.strategy_repository, "get_strategy", lambda strategy_id: {"strategy_name": "Example"})
-    monkeypatch.setattr(
-        pool_service.artifact_service,
-        "create_pool_snapshot",
-        lambda run_id, variant_name, tags=None, note=None: {"pool_item_id": "pool_1", "pool_path": pool_path},
-    )
+    def fake_create_pool_snapshot(run_id, variant_name, tags=None, note=None):
+        snapshot_notes.append(note)
+        return {"pool_item_id": "pool_1", "pool_path": pool_path}
+
+    monkeypatch.setattr(pool_service.artifact_service, "create_pool_snapshot", fake_create_pool_snapshot)
     monkeypatch.setattr(pool_service.pool_repository, "create_pool_item", lambda **kwargs: dict(pool_item))
     monkeypatch.setattr(pool_service.pool_repository, "get_pool_item", lambda pool_item_id: {**pool_item, "sharpe": 1.3})
     monkeypatch.setattr(pool_service.artifact_repository, "create_artifact", lambda **kwargs: kwargs)
@@ -62,11 +63,13 @@ def test_add_variant_reruns_from_earliest_local_data(tmp_path, monkeypatch):
     result = pool_service.add_variant_to_pool(
         "run_1",
         "manual_grid",
+        note="适合震荡行情\n注意回撤",
         vt_symbol="511380.SSE",
         strategy_name="Example manual grid",
     )
 
     assert rerun_calls == [(["pool_1"], None, "auto_earliest")]
+    assert snapshot_notes == ["适合震荡行情\n注意回撤"]
     assert result["rerun_succeeded"] is True
     assert result["rerun"]["items"][0]["rerun_start"] == "2023-01-03"
     assert result["sharpe"] == 1.3

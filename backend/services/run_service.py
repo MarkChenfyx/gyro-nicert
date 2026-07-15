@@ -45,15 +45,23 @@ def create_baseline_run(
     result_payload: dict[str, Any],
     daily_results: Any = None,
     trades: Any = None,
+    manifest_lineage: dict[str, Any] | None = None,
+    related_pool_item_id: str | None = None,
 ) -> dict[str, Any]:
     strategy_id = str(strategy["strategy_id"])
-    task = task_service.create_task(TaskType.BACKTEST.value, message="Baseline run queued", related_strategy_id=strategy_id)
+    task = task_service.create_task(
+        TaskType.BACKTEST.value,
+        message="Baseline run queued",
+        related_strategy_id=strategy_id,
+        related_pool_item_id=related_pool_item_id,
+    )
     try:
         task = task_service.mark_running(task["task_id"], message="Creating baseline run artifacts")
         run_artifact = artifact_service.create_run_artifact(
             run_type=RunType.BASELINE.value,
             strategy=strategy,
             source="service_test",
+            lineage=manifest_lineage,
         )
         run_id = str(run_artifact["run_id"])
         run_path = Path(run_artifact["run_path"])

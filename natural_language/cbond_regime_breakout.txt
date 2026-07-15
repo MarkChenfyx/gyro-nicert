@@ -1,0 +1,16 @@
+请生成一个适用于 511380.SSE 转债 ETF 的低频长线趋势突破策略，类名 RegimeFilteredDualThrustLongStrategy，必须符合 vn.py CTA 规范并可直接回测。
+
+目标不是高频交易，而是尽量抓住转债 ETF 的中期上涨趋势，减少手续费和震荡期反复止损。
+
+规则：
+1. 输入是 1 分钟 K 线。用 BarGenerator 合成 60 分钟 K 线，信号只在 60 分钟 K 线收盘后判断，不得使用未来数据。
+2. 只做多，绝不做空。固定仓位 fixed_size=1，任何时候最多一个多头仓位，不加仓。
+3. 使用 12 周期和 48 周期 60分钟均线做趋势过滤。只有 fast_ma > slow_ma 且收盘价高于 slow_ma 时才允许开仓。
+4. 使用最近 20 根已经完成的 60分钟 K 线最高价作为突破线。当前收盘价首次向上突破前一根已经确定的突破线时开多。
+5. 为减少假突破，要求最近 14 周期 ATR 大于0，且当前 60分钟振幅不超过 3 倍 ATR。
+6. 持仓后允许跨日持有，不要每日收盘强制平仓。记录持仓后的最高价，采用最高价减 3 倍 ATR 的移动止损。
+7. 收盘价跌破最近 10 根 60分钟 K 线最低价，或 fast_ma 跌破 slow_ma，或触发 ATR 移动止损时全部平仓。
+8. 平仓后至少等待 2 根完整 60分钟 K 线才能重新开仓，避免来回交易。
+9. 参数暴露 fast_window=12、slow_window=48、breakout_window=20、exit_window=10、atr_window=14、atr_multiple=3.0、cooldown_bars=2、fixed_size=1。
+10. 预热数据充足后才交易；每根bar先 cancel_all；正确实现 on_init、on_start、on_stop、on_tick、on_bar、on_order、on_trade、on_stop_order。
+11. 禁止未来函数，禁止以当前 bar 同时构造突破线并判断突破。不要做空，不要分批止盈，不要复杂的日内反复交易。

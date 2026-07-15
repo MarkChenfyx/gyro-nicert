@@ -2,11 +2,24 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+import logging
 
 from backend.core.hashing import compute_sha256
 from backend.domain.enums import ArtifactType, RunType, TaskStatus, TaskType, VariantType
 from backend.repositories import artifact_repository, run_repository, variant_repository
 from backend.services import artifact_service, task_service
+
+
+LOGGER = logging.getLogger(__name__)
+
+
+def _prune_runs_best_effort(run_id: str) -> None:
+    try:
+        from backend.services import run_cleanup_service
+
+        run_cleanup_service.prune_runs()
+    except Exception:
+        LOGGER.exception("Best-effort run retention failed after baseline %s", run_id)
 
 
 def _register_artifact(owner_type: str, owner_id: str, artifact_type: str, path: str | Path | None) -> dict[str, Any] | None:
@@ -84,6 +97,7 @@ def create_baseline_run(
         _register_artifact("variant", variant["variant_id"], ArtifactType.TRADES.value, variant_artifacts["trades_path"])
 
         task = task_service.mark_completed(task["task_id"], message="Baseline run completed")
+        _prune_runs_best_effort(run_id)
         return {
             "task": task,
             "run": run,

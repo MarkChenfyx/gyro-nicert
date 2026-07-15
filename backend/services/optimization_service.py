@@ -129,18 +129,17 @@ def list_optimization_methods() -> dict[str, Any]:
     return {"methods": list_methods(include_mock=False)}
 
 
-def list_optimizable_runs(limit: int = 100) -> dict[str, Any]:
+def list_optimizable_runs(limit: int = 50) -> dict[str, Any]:
     rows = []
-    for run in run_repository.list_runs(limit=limit):
+    for run in run_repository.list_run_summaries(limit=limit):
         config = _read_json(Path(str(run["runtime_path"])) / "config.json")
-        strategy = strategy_repository.get_strategy(str(run["strategy_id"])) or {}
         rows.append(
             {
                 **run,
-                "strategy_name": strategy.get("strategy_name") or run.get("strategy_id"),
-                "strategy_family": strategy.get("strategy_family") or "",
-                "strategy_version": strategy.get("strategy_version") or "",
-                "source_filename": strategy.get("source_filename") or "",
+                "strategy_name": run.get("strategy_name") or run.get("strategy_id"),
+                "strategy_family": run.get("strategy_family") or "",
+                "strategy_version": run.get("strategy_version") or "",
+                "source_filename": run.get("source_filename") or "",
                 "vt_symbol": config.get("vt_symbol") or f"{config.get('symbol', '')}.{config.get('exchange', '')}".strip("."),
                 "interval": config.get("interval") or "",
                 "mode": config.get("mode") or "",

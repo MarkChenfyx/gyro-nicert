@@ -142,7 +142,7 @@ export function getRun(runId: string) {
   return request<any>(`/api/runs/${encodeURIComponent(runId)}`);
 }
 
-export function listRuns(limit = 100) {
+export function listRuns(limit = 50) {
   return request<any>(`/api/runs?limit=${encodeURIComponent(String(limit))}`);
 }
 
@@ -158,7 +158,7 @@ export function addToPool(runId: string, variantName = "baseline", vtSymbol?: st
 }
 
 export function listPool() {
-  return request<any>("/api/pool");
+  return request<any>("/api/pool", { cache: "no-store" });
 }
 
 export function getPoolItem(poolItemId: string) {
@@ -192,7 +192,7 @@ export function removeFromPool(poolItemId: string) {
 export function listTasks(options: { view?: "active" | "recent" | "archived" | "all"; status?: string; limit?: number } = {}) {
   const params = new URLSearchParams();
   params.set("view", options.view || "recent");
-  params.set("limit", String(options.limit || 100));
+  params.set("limit", String(options.limit || 50));
   if (options.status) params.set("status", options.status);
   return request<any>(`/api/tasks?${params.toString()}`);
 }

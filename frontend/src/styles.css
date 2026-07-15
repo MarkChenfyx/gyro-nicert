@@ -461,7 +461,7 @@ textarea {
   color: #b42318;
 }
 
-@media (max-width: 760px) {
+@media (max-width: 1260px) {
   .task-drawer-body {
     grid-template-columns: 1fr;
   }
@@ -1262,6 +1262,8 @@ textarea {
 }
 
 .library-table-wrap {
+  width: 100%;
+  min-width: 0;
   overflow: auto;
   border-radius: 8px;
   border: 1px solid rgba(148, 163, 184, 0.16);
@@ -1505,10 +1507,6 @@ textarea {
 .strategy-pool-empty {
   grid-column: 1 / -1;
   padding: 12px;
-}
-
-.strategy-pool-detail-table {
-  min-width: 960px;
 }
 
 .library-curve-panel {
@@ -1809,7 +1807,7 @@ textarea {
   width: 100%;
 }
 
-@media (max-width: 1260px) {
+@media (max-width: 760px) {
   .sidebar {
     position: static;
     width: 100%;

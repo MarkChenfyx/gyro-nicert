@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 
 from backend.services import optimization_service
 from backend.services import query_service
@@ -10,7 +10,7 @@ router = APIRouter(prefix="/api/runs", tags=["runs"])
 
 
 @router.get("")
-def list_runs(limit: int = 100) -> dict:
+def list_runs(limit: int = Query(default=50, ge=1, le=1000)) -> dict:
     return optimization_service.list_optimizable_runs(limit=limit)
 
 

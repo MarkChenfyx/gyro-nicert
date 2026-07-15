@@ -29,6 +29,18 @@ def _read_csv(path: str | Path | None) -> dict[str, Any]:
     return {"columns": columns, "data": rows}
 
 
+def _count_csv_rows(path: str | Path | None) -> int:
+    if not path:
+        return 0
+    candidate = Path(path)
+    if not candidate.exists() or not candidate.is_file():
+        return 0
+    with candidate.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.reader(handle)
+        next(reader, None)
+        return sum(1 for _ in reader)
+
+
 def _variant_artifact_path(run_path: Path, variant: dict[str, Any], filename: str) -> Path | None:
     explicit = variant.get({
         "result.json": "result_path",
@@ -43,15 +55,21 @@ def _variant_artifact_path(run_path: Path, variant: dict[str, Any], filename: st
     return run_path / "variants" / variant_name / filename
 
 
-def _latest_variant_payloads(run_path: Path, variants: list[dict[str, Any]]) -> tuple[dict[str, dict[str, Any]], dict[str, int]]:
-    by_name: dict[str, dict[str, Any]] = {}
-    trade_counts: dict[str, int] = {}
-    for variant in variants:
+def _latest_variant_payloads(
+    run_path: Path,
+    variants: list[dict[str, Any]],
+    *,
+    preloaded_results: dict[str, dict[str, Any]] | None = None,
+    preloaded_trade_counts: dict[str, int] | None = None,
+) -> tuple[dict[str, dict[str, Any]], dict[str, int]]:
+    by_name = dict(preloaded_results or {})
+    trade_counts = dict(preloaded_trade_counts or {})
+    for variant in reversed(variants):
         variant_name = str(variant.get("variant_name") or "").strip()
-        if not variant_name:
+        if not variant_name or variant_name in by_name:
             continue
         by_name[variant_name] = _read_json(_variant_artifact_path(run_path, variant, "result.json") or "")
-        trade_counts[variant_name] = len((_read_csv(_variant_artifact_path(run_path, variant, "trades.csv")).get("data") or []))
+        trade_counts[variant_name] = _count_csv_rows(_variant_artifact_path(run_path, variant, "trades.csv"))
     return by_name, trade_counts
 
 
@@ -78,7 +96,13 @@ def get_run_detail(run_id: str) -> dict[str, Any]:
     baseline_trades_path = Path(str(baseline_variant.get("trades_path"))) if baseline_variant and baseline_variant.get("trades_path") else (run_path / "variants" / "baseline" / "trades.csv")
     baseline_result = _read_json(baseline_result_path)
     baseline_trades = _read_csv(baseline_trades_path)
-    variant_results, variant_trade_counts = _latest_variant_payloads(run_path, variants)
+    baseline_trades_count = len(baseline_trades.get("data") or [])
+    variant_results, variant_trade_counts = _latest_variant_payloads(
+        run_path,
+        variants,
+        preloaded_results={"baseline": baseline_result} if baseline_variant else None,
+        preloaded_trade_counts={"baseline": baseline_trades_count} if baseline_variant else None,
+    )
     variant_grid_summaries = _latest_variant_grid_summaries(run_path, variants)
     return {
         "run": run,
@@ -95,7 +119,7 @@ def get_run_detail(run_id: str) -> dict[str, Any]:
         "strategy_code": (run_path / "strategy.py").read_text(encoding="utf-8") if (run_path / "strategy.py").exists() else "",
         "baseline_result": baseline_result,
         "baseline_trades": baseline_trades,
-        "baseline_trades_count": len(baseline_trades.get("data") or []),
+        "baseline_trades_count": baseline_trades_count,
         "variant_results": variant_results,
         "variant_trade_counts": variant_trade_counts,
         "variant_grid_summaries": variant_grid_summaries,

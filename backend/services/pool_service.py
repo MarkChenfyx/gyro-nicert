@@ -56,6 +56,7 @@ def _write_csv_atomic(path: Path, rows: list[dict[str, Any]]) -> None:
 def _persist_rerun_snapshot(
     detail: dict[str, Any],
     *,
+    rerun_start: str,
     rerun_end: str,
     backtest_result: dict[str, Any],
     curve: list[dict[str, Any]],
@@ -76,9 +77,19 @@ def _persist_rerun_snapshot(
     config = dict(detail.get("config") or {})
     if resolved_params:
         config["parameters"] = resolved_params
-    config.update({"end_date": rerun_end, "last_rerun_at": now_beijing().isoformat(), "last_rerun_end": rerun_end})
+    config.update({
+        "start_date": rerun_start,
+        "end_date": rerun_end,
+        "last_rerun_at": now_beijing().isoformat(),
+        "last_rerun_start": rerun_start,
+        "last_rerun_end": rerun_end,
+    })
     manifest = dict(detail.get("manifest") or {})
-    manifest.update({"pool_last_rerun_at": now_beijing().isoformat(), "pool_last_rerun_end": rerun_end})
+    manifest.update({
+        "pool_last_rerun_at": now_beijing().isoformat(),
+        "pool_last_rerun_start": rerun_start,
+        "pool_last_rerun_end": rerun_end,
+    })
 
     result_path = pool_path / "result.json"
     daily_path = pool_path / "daily_results.csv"
@@ -235,6 +246,7 @@ def _compare_item(detail: dict[str, Any]) -> dict[str, Any]:
         "pool_item_id": item.get("pool_item_id"),
         "strategy_id": item.get("strategy_id"),
         "strategy_name": item.get("strategy_name"),
+        "pool_strategy_name": item.get("strategy_name") or manifest.get("pool_strategy_name"),
         "strategy_family": item.get("strategy_family"),
         "strategy_version": item.get("strategy_version"),
         "vt_symbol": item.get("vt_symbol"),
@@ -259,6 +271,7 @@ def _compare_payload_from_parts(detail: dict[str, Any], *, metrics: dict[str, An
         "pool_item_id": item.get("pool_item_id"),
         "strategy_id": item.get("strategy_id"),
         "strategy_name": item.get("strategy_name"),
+        "pool_strategy_name": item.get("strategy_name") or manifest.get("pool_strategy_name"),
         "strategy_family": item.get("strategy_family"),
         "strategy_version": item.get("strategy_version"),
         "vt_symbol": item.get("vt_symbol"),
@@ -371,6 +384,7 @@ def _rerun_payload(
         progress_callback(0.86, f"正在保存 {vt_symbol} 最新回测快照")
     _persist_rerun_snapshot(
         detail,
+        rerun_start=rerun_start,
         rerun_end=rerun_end,
         backtest_result=backtest_result,
         curve=curve,
@@ -406,6 +420,10 @@ def add_variant_to_pool(
     metrics = dict(result.get("metrics") or result)
     strategy = strategy_repository.get_strategy(str(run["strategy_id"])) or {}
     resolved_strategy_name = _text(strategy_name) or str(strategy.get("strategy_name") or run.get("strategy_id") or "")
+    manifest_path = pool_path / "manifest.json"
+    manifest = _read_json(manifest_path)
+    manifest["pool_strategy_name"] = resolved_strategy_name
+    _write_json_atomic(manifest_path, manifest)
 
     pool_item = pool_repository.create_pool_item(
         pool_item_id=pool_item_id,
@@ -438,7 +456,26 @@ def add_variant_to_pool(
         path=str(pool_path),
         sha256=None,
     )
-    return pool_item
+    try:
+        rerun = rerun_pool_items_to_latest([pool_item_id], start_mode="auto_earliest")
+    except Exception as exc:
+        rerun = {
+            "task": None,
+            "items": [],
+            "benchmark": {"label": "Buy & Hold", "curve": []},
+            "diagnostics": [{
+                "level": "warning",
+                "message": f"pool rerun failed after add: {pool_item_id} | {exc}",
+                "pool_item_id": pool_item_id,
+            }],
+            "rerun_end": "",
+        }
+    refreshed_pool_item = pool_repository.get_pool_item(pool_item_id) or pool_item
+    return {
+        **refreshed_pool_item,
+        "rerun": rerun,
+        "rerun_succeeded": bool(rerun.get("items")),
+    }
 
 
 def get_pool_item_detail(pool_item_id: str) -> dict[str, Any]:
@@ -446,10 +483,16 @@ def get_pool_item_detail(pool_item_id: str) -> dict[str, Any]:
     if item is None:
         raise FileNotFoundError(f"Pool item not found: {pool_item_id}")
     pool_path = Path(str(item["pool_path"]))
+    manifest_path = pool_path / "manifest.json"
+    manifest = _read_json(manifest_path)
+    pool_strategy_name = _text(item.get("strategy_name"))
+    if pool_strategy_name and manifest.get("pool_strategy_name") != pool_strategy_name:
+        manifest["pool_strategy_name"] = pool_strategy_name
+        _write_json_atomic(manifest_path, manifest)
     detail = {
         "pool_item": item,
         "pool_path": str(pool_path),
-        "manifest": _read_json(pool_path / "manifest.json"),
+        "manifest": manifest,
         "config": _read_json(pool_path / "config.json"),
         "result": _read_json(pool_path / "result.json"),
         "tags": _read_json(pool_path / "tags.json"),
@@ -475,7 +518,7 @@ def list_pool_items(
     order: str = "desc",
     limit: int = 100,
 ) -> list[dict[str, Any]]:
-    return pool_repository.list_pool_items(
+    items = pool_repository.list_pool_items(
         keyword=keyword,
         vt_symbol=vt_symbol,
         min_sharpe=min_sharpe,
@@ -484,6 +527,7 @@ def list_pool_items(
         order=order,
         limit=limit,
     )
+    return [{**item, "pool_strategy_name": item.get("strategy_name")} for item in items]
 
 
 def compare_pool_items(pool_item_ids: list[str] | None) -> dict[str, Any]:

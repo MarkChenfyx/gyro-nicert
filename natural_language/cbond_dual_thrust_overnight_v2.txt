@@ -1,0 +1,17 @@
+请生成一个适用于 511380.SSE 转债 ETF 的限制型 Dual Thrust 长线突破策略，类名 LimitedDualThrustLongOvernightV2Strategy，必须符合当前 vn.py CTA 模板并可直接回测。
+
+目标是抓住转债 ETF 的持续上涨段。允许隔夜持仓，只做多，不做空；控制每天开仓次数，避免高频来回交易。
+
+规则：
+1. 输入为1分钟K线。保留1分钟bar用于判断日内是否触发突破，同时使用 BarGenerator 合成日线并维护日线 ArrayManager。
+2. 每个交易日第一根bar记录当日开盘价。使用此前4个完整交易日计算 Dual Thrust 范围：HH为最高价、HC为最高收盘、LC为最低收盘、LL为最低价，range=max(HH-LC, HC-LL)。绝对不能包含当日未完成数据。
+3. 多头触发线 = 当日开盘价 + 0.35 × range。只有昨日收盘价高于20日均线且5日均线高于20日均线时，价格向上突破触发线才可以买入。
+4. 只做多，fixed_size=1，不加仓。每个交易日最多允许一次新开仓；同一天平仓后不再重新进场。
+5. 持仓允许跨日，不在收盘前强制平仓。
+6. 日线ATR使用14周期。持仓后记录最高价，移动止损为最高价减2.5倍日线ATR；初始止损为入场价减1.8倍日线ATR，取两者中较高者。
+7. 如果日线5日均线跌破20日均线，下一根可交易bar全部卖出；如果1分钟价格触发已计算好的止损，也全部卖出。
+8. 当此前4日range小于等于0、日线数据未初始化、ATR无效时不交易。
+9. 参数暴露 lookback_days=4、entry_k=0.35、fast_window=5、slow_window=20、atr_window=14、initial_atr=1.8、trailing_atr=2.5、fixed_size=1。
+10. 正确处理跨日状态、当日开盘价和每日是否已交易标记。每根bar开头cancel_all。
+11. 禁止使用 get_active_orderids 或任何查询活动委托的方法；不要使用平台参考模板之外的API。
+12. 正确实现on_init、on_start、on_stop、on_tick、on_bar、on_daily_bar、on_order、on_trade、on_stop_order。禁止未来函数。

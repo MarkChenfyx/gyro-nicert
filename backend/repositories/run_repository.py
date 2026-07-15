@@ -69,11 +69,36 @@ def get_run(run_id: str) -> dict[str, Any] | None:
     return dict(row) if row is not None else None
 
 
-def list_runs(limit: int = 100) -> list[dict[str, Any]]:
-    safe_limit = max(1, min(int(limit or 100), 1000))
+def list_runs(limit: int = 50) -> list[dict[str, Any]]:
+    safe_limit = max(1, min(int(limit or 50), 1000))
     with get_app_db_connection() as connection:
         rows = connection.execute(
             "SELECT * FROM runs ORDER BY created_at DESC, run_id DESC LIMIT ?",
+            (safe_limit,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def list_run_summaries(limit: int = 50) -> list[dict[str, Any]]:
+    """Return the lightweight fields needed by run selectors in one query."""
+    safe_limit = max(1, min(int(limit or 50), 1000))
+    with get_app_db_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT
+                runs.*,
+                strategies.strategy_name AS strategy_name,
+                strategies.strategy_family AS strategy_family,
+                strategies.strategy_version AS strategy_version,
+                strategies.source_filename AS source_filename,
+                COUNT(run_variants.variant_id) AS variant_count
+            FROM runs
+            LEFT JOIN strategies ON strategies.strategy_id = runs.strategy_id
+            LEFT JOIN run_variants ON run_variants.run_id = runs.run_id
+            GROUP BY runs.run_id
+            ORDER BY runs.created_at DESC, runs.run_id DESC
+            LIMIT ?
+            """,
             (safe_limit,),
         ).fetchall()
     return [dict(row) for row in rows]

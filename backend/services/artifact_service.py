@@ -6,9 +6,10 @@ from typing import Any
 from uuid import uuid4
 import csv
 import json
+import re
 import shutil
 
-from common.time_utils import now_iso, timestamp_id
+from common.time_utils import now_beijing, now_iso, timestamp_id
 from backend.core.hashing import compute_sha256
 from backend.core.paths import POOL_STRATEGIES_ROOT, RUNS_ROOT
 
@@ -81,7 +82,12 @@ def _copy_optional(source: Path, destination: Path) -> Path | None:
     return destination
 
 
-def create_run_artifact(run_type: str, strategy: dict[str, Any], source: str) -> dict[str, Any]:
+def create_run_artifact(
+    run_type: str,
+    strategy: dict[str, Any],
+    source: str,
+    lineage: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     run_id = _stamp_id("run")
     run_path = _run_path(run_id)
     run_path.mkdir(parents=True, exist_ok=False)
@@ -100,6 +106,8 @@ def create_run_artifact(run_type: str, strategy: dict[str, Any], source: str) ->
         "run_path": str(run_path),
         "created_at": _now(),
     }
+    if lineage:
+        manifest["lineage"] = dict(lineage)
     _write_json(manifest_path, manifest)
     return {
         "run_id": run_id,
@@ -146,6 +154,50 @@ def save_variant_grid_summary(run_id: str, variant_name: str, grid_summary: Any)
     return _write_csv(_run_path(run_id) / "variants" / str(variant_name) / "grid_summary.csv", grid_summary)
 
 
+def _safe_storage_component(value: str, label: str) -> str:
+    component = str(value or "").strip()
+    if not component or component in {".", ".."} or not re.fullmatch(r"[A-Za-z0-9_.-]+", component):
+        raise ValueError(f"Invalid {label}: {value}")
+    return component
+
+
+def _candidate_curves_dir(run_id: str, variant_name: str) -> Path:
+    safe_run_id = _safe_storage_component(run_id, "run_id")
+    safe_variant_name = _safe_storage_component(variant_name, "variant_name")
+    runs_root = RUNS_ROOT.resolve()
+    candidate_dir = (runs_root / safe_run_id / "variants" / safe_variant_name / "candidates").resolve()
+    if runs_root not in candidate_dir.parents:
+        raise ValueError("Candidate curve directory is outside runtime runs storage")
+    return candidate_dir
+
+
+def candidate_curve_path(run_id: str, variant_name: str, candidate_label: str) -> Path:
+    safe_label = _safe_storage_component(candidate_label, "candidate_label")
+    candidate_dir = _candidate_curves_dir(run_id, variant_name)
+    path = (candidate_dir / safe_label / "daily_results.csv").resolve()
+    if candidate_dir not in path.parents:
+        raise ValueError("Candidate curve path is outside its variant directory")
+    return path
+
+
+def save_variant_candidate_curves(run_id: str, variant_name: str, candidates: Any) -> Path:
+    candidate_dir = _candidate_curves_dir(run_id, variant_name)
+    staging_dir = candidate_dir.with_name(f"{candidate_dir.name}.tmp_{uuid4().hex[:8]}")
+    staging_dir.mkdir(parents=True, exist_ok=False)
+    try:
+        for candidate in list(candidates or [])[:10]:
+            label = _safe_storage_component(str(candidate.get("label") or ""), "candidate_label")
+            _write_csv(staging_dir / label / "daily_results.csv", candidate.get("daily_results") or [])
+        if candidate_dir.exists():
+            shutil.rmtree(candidate_dir)
+        staging_dir.replace(candidate_dir)
+    except Exception:
+        if staging_dir.exists():
+            shutil.rmtree(staging_dir, ignore_errors=True)
+        raise
+    return candidate_dir
+
+
 def create_pool_snapshot(
     run_id: str,
     variant_name: str,
@@ -154,9 +206,19 @@ def create_pool_snapshot(
 ) -> dict[str, Any]:
     source_run_path = _run_path(run_id)
     variant_dir = source_run_path / "variants" / str(variant_name)
-    pool_item_id = _stamp_id("pool")
-    pool_path = POOL_STRATEGIES_ROOT / pool_item_id
-    pool_path.mkdir(parents=True, exist_ok=False)
+    pooled_at = now_beijing()
+    base_pool_version = pooled_at.strftime("%Y%m%d_%H%M%S")
+    suffix = 1
+    while True:
+        pool_version = base_pool_version if suffix == 1 else f"{base_pool_version}_{suffix:02d}"
+        pool_item_id = f"pool_{pool_version}"
+        pool_path = POOL_STRATEGIES_ROOT / pool_item_id
+        try:
+            pool_path.mkdir(parents=True, exist_ok=False)
+            break
+        except FileExistsError:
+            suffix += 1
+    created_at = pooled_at.isoformat()
 
     copied = {
         "manifest_path": _copy_required(source_run_path / "manifest.json", pool_path / "manifest.json", "manifest.json"),
@@ -178,26 +240,52 @@ def create_pool_snapshot(
             "tags": list(tags or []),
             "source_run_id": run_id,
             "source_variant_name": str(variant_name),
-            "created_at": _now(),
+            "created_at": created_at,
         },
     )
     notes_path = pool_path / "notes.md"
     notes_path.write_text(str(note or ""), encoding="utf-8")
 
     manifest = _read_json(pool_path / "manifest.json")
+    run_lineage = dict(manifest.get("lineage") or {})
+    source_strategy_version = str(
+        run_lineage.get("source_strategy_version")
+        or manifest.get("source_strategy_version")
+        or manifest.get("strategy_version")
+        or ""
+    )
+    if run_lineage.get("source_type") == "pool_item":
+        parent_pool_item_id = str(run_lineage.get("source_pool_item_id") or run_lineage.get("pool_item_id") or "")
+        parent_pool_version = str(
+            run_lineage.get("source_pool_version")
+            or (parent_pool_item_id[5:] if parent_pool_item_id.startswith("pool_") else "")
+        )
+        manifest["lineage"] = {
+            "parent_pool_item_id": parent_pool_item_id,
+            "parent_pool_version": parent_pool_version,
+            "source_strategy_version": source_strategy_version,
+            "source_variant": str(variant_name),
+            "operation": "optimized_and_repooled",
+        }
     manifest.update(
         {
             "pool_item_id": pool_item_id,
+            "pool_version": pool_version,
             "pool_path": str(pool_path),
             "source_run_id": run_id,
             "source_variant_name": str(variant_name),
-            "pool_created_at": _now(),
+            "source_strategy_version": source_strategy_version,
+            "strategy_version": pool_version,
+            "pool_created_at": created_at,
         }
     )
     _write_json(pool_path / "manifest.json", manifest)
 
     return {
         "pool_item_id": pool_item_id,
+        "pool_version": pool_version,
+        "created_at": created_at,
+        "source_strategy_version": source_strategy_version,
         "pool_path": pool_path,
         "tags_path": tags_path,
         "notes_path": notes_path,

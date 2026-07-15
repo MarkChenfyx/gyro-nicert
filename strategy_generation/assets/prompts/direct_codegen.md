@@ -21,8 +21,8 @@
    * 止损或移动止损
 7. 不要生成只计算指标但不交易的策略。
 8. 重要数字必须参数化，例如窗口、阈值、止损、止盈、移动止损。
-9. 默认仓位参数使用 fixed_size = 1，并加入 parameters。
-10. 不要使用 position_pct，不要根据资金百分比计算仓位。
+9. 仓位参数必须使用 fixed_size = 1，并加入 parameters；所有 buy 和 short 开仓调用的数量参数必须严格写成 self.fixed_size。
+10. 禁止使用 target_size、low_size、medium_size、固定数字、账户资金、目标市值、算术表达式或其他变量作为 buy 和 short 的开仓数量；不要使用 position_pct，不要根据资金百分比计算仓位。
 11. 不允许调用 RQData、网络、文件、数据库或外部 API。
 12. 策略只负责交易逻辑，行情数据会通过 on_bar 的 BarData 传入。
 

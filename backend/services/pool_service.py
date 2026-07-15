@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 from typing import Any, Callable
+from uuid import uuid4
 import csv
 import json
 
@@ -11,9 +12,10 @@ from backtesting.local_data_provider import split_vt_symbol
 from common.time_utils import now_beijing
 from data_manager import coverage_service, download_service
 from backend.core.hashing import compute_sha256
+from backend.core.paths import POOL_STRATEGIES_ROOT
 from backend.domain.enums import ArtifactType, TaskType
 from backend.repositories import artifact_repository, pool_repository, run_repository, strategy_repository, variant_repository
-from backend.services import artifact_service, task_service
+from backend.services import artifact_service, run_service, task_service
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -56,6 +58,7 @@ def _write_csv_atomic(path: Path, rows: list[dict[str, Any]]) -> None:
 def _persist_rerun_snapshot(
     detail: dict[str, Any],
     *,
+    rerun_start: str,
     rerun_end: str,
     backtest_result: dict[str, Any],
     curve: list[dict[str, Any]],
@@ -76,9 +79,19 @@ def _persist_rerun_snapshot(
     config = dict(detail.get("config") or {})
     if resolved_params:
         config["parameters"] = resolved_params
-    config.update({"end_date": rerun_end, "last_rerun_at": now_beijing().isoformat(), "last_rerun_end": rerun_end})
+    config.update({
+        "start_date": rerun_start,
+        "end_date": rerun_end,
+        "last_rerun_at": now_beijing().isoformat(),
+        "last_rerun_start": rerun_start,
+        "last_rerun_end": rerun_end,
+    })
     manifest = dict(detail.get("manifest") or {})
-    manifest.update({"pool_last_rerun_at": now_beijing().isoformat(), "pool_last_rerun_end": rerun_end})
+    manifest.update({
+        "pool_last_rerun_at": now_beijing().isoformat(),
+        "pool_last_rerun_start": rerun_start,
+        "pool_last_rerun_end": rerun_end,
+    })
 
     result_path = pool_path / "result.json"
     daily_path = pool_path / "daily_results.csv"
@@ -139,6 +152,61 @@ def _text(value: Any, default: str = "") -> str:
     return text or default
 
 
+def _pool_name_prefix(value: Any, default: str = "") -> str:
+    resolved = _text(value, default)
+    return resolved.split("|", 1)[0].strip()
+
+
+def _pool_version(item: dict[str, Any], manifest: dict[str, Any] | None = None) -> str:
+    explicit = _text(dict(manifest or {}).get("pool_version"))
+    if explicit:
+        return explicit
+    item_id = _text(item.get("pool_item_id"))
+    strategy_version = _text(item.get("strategy_version"))
+    if strategy_version and item_id == f"pool_{strategy_version}":
+        return strategy_version
+    return ""
+
+
+def _pool_item_view(item: dict[str, Any], manifest: dict[str, Any] | None = None) -> dict[str, Any]:
+    resolved = dict(item)
+    pool_version = _pool_version(resolved, manifest)
+    if not pool_version:
+        return {**resolved, "pool_strategy_name": resolved.get("strategy_name")}
+    name_prefix = _pool_name_prefix(resolved.get("strategy_name"), resolved.get("strategy_family") or "策略")
+    return {
+        **resolved,
+        "strategy_name": name_prefix,
+        "pool_strategy_name": name_prefix,
+        "strategy_version": pool_version,
+        "pool_version": pool_version,
+        "display_name": f"{name_prefix} | {pool_version}",
+        "source_strategy_version": _text(dict(manifest or {}).get("source_strategy_version")),
+    }
+
+
+def _validated_note(note: str | None) -> str:
+    text = str(note or "")
+    if len(text) > 500:
+        raise ValueError("策略池备注不能超过 500 字")
+    return text
+
+
+def _validated_pool_snapshot_path(item: dict[str, Any]) -> Path:
+    pool_item_id = _text(item.get("pool_item_id"))
+    root = POOL_STRATEGIES_ROOT.resolve()
+    candidate = Path(str(item.get("pool_path") or "")).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError as exc:
+        raise ValueError("策略池存储路径不安全，拒绝修改备注") from exc
+    if candidate == root:
+        raise ValueError("策略池存储路径不安全，拒绝修改备注")
+    if not candidate.exists() or not candidate.is_dir():
+        raise FileNotFoundError(f"策略池快照目录不存在：{pool_item_id or '-'}")
+    return candidate
+
+
 def _date_only(value: str | None, default: str = "") -> str:
     text = _text(value, default)
     return text[:10] if len(text) >= 10 else text
@@ -172,8 +240,8 @@ def _params_from_detail(detail: dict[str, Any]) -> dict[str, Any]:
         result.get("params"),
         result.get("parameters"),
     ):
-        if isinstance(candidate, dict):
-            return candidate
+        if isinstance(candidate, dict) and candidate:
+            return dict(candidate)
     return {}
 
 
@@ -235,8 +303,11 @@ def _compare_item(detail: dict[str, Any]) -> dict[str, Any]:
         "pool_item_id": item.get("pool_item_id"),
         "strategy_id": item.get("strategy_id"),
         "strategy_name": item.get("strategy_name"),
+        "pool_strategy_name": item.get("strategy_name") or manifest.get("pool_strategy_name"),
         "strategy_family": item.get("strategy_family"),
         "strategy_version": item.get("strategy_version"),
+        "pool_version": item.get("pool_version"),
+        "display_name": item.get("display_name"),
         "vt_symbol": item.get("vt_symbol"),
         "variant_name": variant_name,
         "created_at": item.get("created_at"),
@@ -259,8 +330,11 @@ def _compare_payload_from_parts(detail: dict[str, Any], *, metrics: dict[str, An
         "pool_item_id": item.get("pool_item_id"),
         "strategy_id": item.get("strategy_id"),
         "strategy_name": item.get("strategy_name"),
+        "pool_strategy_name": item.get("strategy_name") or manifest.get("pool_strategy_name"),
         "strategy_family": item.get("strategy_family"),
         "strategy_version": item.get("strategy_version"),
+        "pool_version": item.get("pool_version"),
+        "display_name": item.get("display_name"),
         "vt_symbol": item.get("vt_symbol"),
         "variant_name": variant_name,
         "created_at": item.get("created_at"),
@@ -371,6 +445,7 @@ def _rerun_payload(
         progress_callback(0.86, f"正在保存 {vt_symbol} 最新回测快照")
     _persist_rerun_snapshot(
         detail,
+        rerun_start=rerun_start,
         rerun_end=rerun_end,
         backtest_result=backtest_result,
         curve=curve,
@@ -392,6 +467,7 @@ def add_variant_to_pool(
     vt_symbol: str | None = None,
     strategy_name: str | None = None,
 ) -> dict[str, Any]:
+    resolved_note = _validated_note(note)
     run = run_repository.get_run(run_id)
     if run is None:
         raise FileNotFoundError(f"Run not found: {run_id}")
@@ -399,13 +475,22 @@ def add_variant_to_pool(
     if variant is None:
         raise FileNotFoundError(f"Variant not found: {run_id} / {variant_name}")
 
-    snapshot = artifact_service.create_pool_snapshot(run_id, variant_name, tags=tags, note=note)
+    snapshot = artifact_service.create_pool_snapshot(run_id, variant_name, tags=tags, note=resolved_note)
     pool_item_id = str(snapshot["pool_item_id"])
     pool_path = Path(snapshot["pool_path"])
     result = _read_json(pool_path / "result.json")
     metrics = dict(result.get("metrics") or result)
     strategy = strategy_repository.get_strategy(str(run["strategy_id"])) or {}
-    resolved_strategy_name = _text(strategy_name) or str(strategy.get("strategy_name") or run.get("strategy_id") or "")
+    resolved_strategy_name = _pool_name_prefix(
+        strategy_name,
+        _pool_name_prefix(strategy.get("strategy_name"), run.get("strategy_id") or "策略"),
+    )
+    pool_version = _text(snapshot.get("pool_version"))
+    manifest_path = pool_path / "manifest.json"
+    manifest = _read_json(manifest_path)
+    manifest["pool_strategy_name"] = resolved_strategy_name
+    manifest["strategy_name"] = f"{resolved_strategy_name} | {pool_version}"
+    _write_json_atomic(manifest_path, manifest)
 
     pool_item = pool_repository.create_pool_item(
         pool_item_id=pool_item_id,
@@ -415,13 +500,14 @@ def add_variant_to_pool(
         pool_path=str(pool_path),
         strategy_name=resolved_strategy_name,
         strategy_family=str(strategy.get("strategy_family") or ""),
-        strategy_version=str(strategy.get("strategy_version") or ""),
+        strategy_version=pool_version,
         vt_symbol=vt_symbol,
         annual_return=_metric(metrics, "annual_return"),
         max_drawdown=_metric(metrics, "max_drawdown_pct", "max_ddpercent", "max_drawdown"),
         sharpe=_metric(metrics, "sharpe", "sharpe_ratio"),
         calmar=_metric(metrics, "calmar", "return_drawdown_ratio"),
         tags=tags,
+        created_at=_text(snapshot.get("created_at")) or None,
     )
 
     _artifact(pool_item_id, ArtifactType.MANIFEST.value, pool_path / "manifest.json")
@@ -438,18 +524,44 @@ def add_variant_to_pool(
         path=str(pool_path),
         sha256=None,
     )
-    return pool_item
+    try:
+        rerun = rerun_pool_items_to_latest([pool_item_id], start_mode="auto_earliest")
+    except Exception as exc:
+        rerun = {
+            "task": None,
+            "items": [],
+            "benchmark": {"label": "Buy & Hold", "curve": []},
+            "diagnostics": [{
+                "level": "warning",
+                "message": f"pool rerun failed after add: {pool_item_id} | {exc}",
+                "pool_item_id": pool_item_id,
+            }],
+            "rerun_end": "",
+        }
+    refreshed_pool_item = pool_repository.get_pool_item(pool_item_id) or pool_item
+    return {
+        **_pool_item_view(dict(refreshed_pool_item), manifest),
+        "rerun": rerun,
+        "rerun_succeeded": bool(rerun.get("items")),
+    }
 
 
 def get_pool_item_detail(pool_item_id: str) -> dict[str, Any]:
-    item = pool_repository.get_pool_item(pool_item_id)
-    if item is None:
+    stored_item = pool_repository.get_pool_item(pool_item_id)
+    if stored_item is None:
         raise FileNotFoundError(f"Pool item not found: {pool_item_id}")
-    pool_path = Path(str(item["pool_path"]))
+    pool_path = Path(str(stored_item["pool_path"]))
+    manifest_path = pool_path / "manifest.json"
+    manifest = _read_json(manifest_path)
+    pool_strategy_name = _text(stored_item.get("strategy_name"))
+    if pool_strategy_name and manifest.get("pool_strategy_name") != pool_strategy_name:
+        manifest["pool_strategy_name"] = pool_strategy_name
+        _write_json_atomic(manifest_path, manifest)
+    item = _pool_item_view(dict(stored_item), manifest)
     detail = {
         "pool_item": item,
         "pool_path": str(pool_path),
-        "manifest": _read_json(pool_path / "manifest.json"),
+        "manifest": manifest,
         "config": _read_json(pool_path / "config.json"),
         "result": _read_json(pool_path / "result.json"),
         "tags": _read_json(pool_path / "tags.json"),
@@ -466,6 +578,117 @@ def get_pool_item_detail(pool_item_id: str) -> dict[str, Any]:
     return detail
 
 
+def update_pool_item_notes(pool_item_id: str, note: str | None) -> dict[str, Any]:
+    item = pool_repository.get_pool_item(pool_item_id)
+    if item is None:
+        raise FileNotFoundError(f"策略池条目不存在：{pool_item_id}")
+    resolved_note = _validated_note(note)
+    pool_path = _validated_pool_snapshot_path(dict(item))
+    notes_path = (pool_path / "notes.md").resolve()
+    try:
+        notes_path.relative_to(POOL_STRATEGIES_ROOT.resolve())
+    except ValueError as exc:
+        raise ValueError("策略池备注路径不安全，拒绝保存") from exc
+    temporary = notes_path.with_name(f".{notes_path.name}.{uuid4().hex}.tmp")
+    try:
+        temporary.write_text(resolved_note, encoding="utf-8")
+        temporary.replace(notes_path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+    return {
+        "pool_item_id": pool_item_id,
+        "note": resolved_note,
+    }
+
+
+def continue_optimization_from_pool(pool_item_id: str) -> dict[str, Any]:
+    """Rerun a stable pool snapshot as a fresh baseline-only optimization run."""
+    detail = get_pool_item_detail(pool_item_id)
+    item = dict(detail.get("pool_item") or {})
+    config = dict(detail.get("config") or {})
+    manifest = dict(detail.get("manifest") or {})
+    strategy_code = str(detail.get("strategy_code") or "")
+    if not strategy_code.strip():
+        raise FileNotFoundError(f"strategy code not found for pool item: {pool_item_id}")
+
+    strategy_id = _text(item.get("strategy_id"))
+    strategy = strategy_repository.get_strategy(strategy_id) if strategy_id else None
+    if strategy is None:
+        raise FileNotFoundError(f"strategy record not found for pool item: {pool_item_id}")
+
+    vt_symbol = _text(item.get("vt_symbol") or config.get("vt_symbol"))
+    if not vt_symbol:
+        raise ValueError(f"vt_symbol missing for pool item: {pool_item_id}")
+    symbol, exchange = split_vt_symbol(vt_symbol)
+    interval = _text(config.get("interval"), "1m")
+    class_name = _text(manifest.get("class_name") or config.get("class_name") or strategy.get("class_name") or _extract_class_name(strategy_code))
+    if not class_name:
+        raise ValueError(f"class_name missing for pool item: {pool_item_id}")
+
+    parameters = _params_from_detail(detail)
+    backtest_config = {
+        **config,
+        "vt_symbol": vt_symbol,
+        "symbol": symbol,
+        "exchange": exchange,
+        "interval": interval,
+        "mode": "real",
+        "execution_mode": "real_backtest",
+        "is_real_backtest": True,
+        "parameters": parameters,
+    }
+    backtest_result = run_backtest(
+        strategy_code=strategy_code,
+        class_name=class_name,
+        vt_symbol=vt_symbol,
+        parameters=parameters,
+        config=backtest_config,
+    )
+    if not backtest_result.get("success"):
+        raise RuntimeError(str(backtest_result.get("error") or "pool baseline rerun failed"))
+
+    original_variant = _text(
+        manifest.get("source_variant_name") or manifest.get("variant_name") or item.get("source_variant_id"),
+        "baseline",
+    )
+    source_pool_version = _pool_version(item, manifest) or (pool_item_id[5:] if pool_item_id.startswith("pool_") else "")
+    lineage = {
+        "source_type": "pool_item",
+        "source_pool_item_id": pool_item_id,
+        "source_pool_version": source_pool_version,
+        "source_strategy_version": _text(manifest.get("source_strategy_version") or item.get("source_strategy_version") or item.get("strategy_version")),
+        "source_variant": original_variant,
+        "operation": "rerun_as_baseline",
+    }
+    result_payload = dict(backtest_result)
+    result_payload.pop("daily_results", None)
+    result_payload.pop("trades", None)
+    result_payload["params"] = parameters
+    pool_path = Path(str(detail.get("pool_path") or item.get("pool_path") or ""))
+    input_payload = _read_json(pool_path / "input.json") if pool_path else {}
+    baseline = run_service.create_baseline_run(
+        strategy=dict(strategy),
+        source_text=_text(input_payload.get("source_text") or strategy.get("source_text") or strategy_code),
+        config_payload=backtest_config,
+        strategy_code=strategy_code,
+        result_payload=result_payload,
+        daily_results=backtest_result.get("daily_results"),
+        trades=backtest_result.get("trades"),
+        manifest_lineage=lineage,
+        related_pool_item_id=pool_item_id,
+    )
+    return {
+        "baseline": baseline,
+        "lineage": lineage,
+        "parameters": parameters,
+        "backtest": {
+            "success": True,
+            "metrics": dict(backtest_result.get("metrics") or {}),
+        },
+    }
+
+
 def list_pool_items(
     keyword: str | None = None,
     vt_symbol: str | None = None,
@@ -475,7 +698,7 @@ def list_pool_items(
     order: str = "desc",
     limit: int = 100,
 ) -> list[dict[str, Any]]:
-    return pool_repository.list_pool_items(
+    items = pool_repository.list_pool_items(
         keyword=keyword,
         vt_symbol=vt_symbol,
         min_sharpe=min_sharpe,
@@ -484,6 +707,7 @@ def list_pool_items(
         order=order,
         limit=limit,
     )
+    return [_pool_item_view(dict(item)) for item in items]
 
 
 def compare_pool_items(pool_item_ids: list[str] | None) -> dict[str, Any]:

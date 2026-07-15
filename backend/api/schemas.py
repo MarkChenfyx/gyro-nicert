@@ -10,6 +10,14 @@ class StrategyGenerateRequest(BaseModel):
     options: dict[str, Any] | None = None
 
 
+class StrategyRepairRequest(BaseModel):
+    strategy_name: str
+    strategy_code: str
+    vt_symbol: str = ""
+    interval: str = "1m"
+    options: dict[str, Any] | None = None
+
+
 class ResearchCreateRequest(BaseModel):
     source_filename: str
     symbol: str = "510300"
@@ -61,9 +69,13 @@ class PoolAddRequest(BaseModel):
     run_id: str
     variant_name: str = "baseline"
     tags: list[str] | None = None
-    note: str | None = None
+    note: str | None = Field(default=None, max_length=500)
     vt_symbol: str | None = None
     strategy_name: str | None = None
+
+
+class PoolNoteUpdateRequest(BaseModel):
+    note: str = Field(default="", max_length=500)
 
 
 class PoolCompareRequest(BaseModel):

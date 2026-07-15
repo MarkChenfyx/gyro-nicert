@@ -172,13 +172,14 @@ def create_baseline_run_from_manual_code(
             strategy_name=strategy_name,
             code=strategy_code,
         )
+        executable_code = Path(str(strategy["code_path"])).read_text(encoding="utf-8")
         generated = {
             "success": True,
             "source_type": "manual_code",
             "input_mode": "manual_code",
             "strategy_name": str(strategy_name or "").strip(),
             "source_text": str(strategy_code or ""),
-            "strategy_code": str(strategy_code or ""),
+            "strategy_code": executable_code,
             "class_name": str(strategy.get("class_name") or ""),
             "params": {},
             "diagnostics": [],

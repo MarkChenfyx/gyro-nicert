@@ -2,11 +2,24 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+import logging
 
 from backend.core.hashing import compute_sha256
 from backend.domain.enums import ArtifactType, RunType, TaskStatus, TaskType, VariantType
 from backend.repositories import artifact_repository, run_repository, variant_repository
 from backend.services import artifact_service, task_service
+
+
+LOGGER = logging.getLogger(__name__)
+
+
+def _prune_runs_best_effort(run_id: str) -> None:
+    try:
+        from backend.services import run_cleanup_service
+
+        run_cleanup_service.prune_runs()
+    except Exception:
+        LOGGER.exception("Best-effort run retention failed after baseline %s", run_id)
 
 
 def _register_artifact(owner_type: str, owner_id: str, artifact_type: str, path: str | Path | None) -> dict[str, Any] | None:
@@ -32,15 +45,23 @@ def create_baseline_run(
     result_payload: dict[str, Any],
     daily_results: Any = None,
     trades: Any = None,
+    manifest_lineage: dict[str, Any] | None = None,
+    related_pool_item_id: str | None = None,
 ) -> dict[str, Any]:
     strategy_id = str(strategy["strategy_id"])
-    task = task_service.create_task(TaskType.BACKTEST.value, message="Baseline run queued", related_strategy_id=strategy_id)
+    task = task_service.create_task(
+        TaskType.BACKTEST.value,
+        message="Baseline run queued",
+        related_strategy_id=strategy_id,
+        related_pool_item_id=related_pool_item_id,
+    )
     try:
         task = task_service.mark_running(task["task_id"], message="Creating baseline run artifacts")
         run_artifact = artifact_service.create_run_artifact(
             run_type=RunType.BASELINE.value,
             strategy=strategy,
             source="service_test",
+            lineage=manifest_lineage,
         )
         run_id = str(run_artifact["run_id"])
         run_path = Path(run_artifact["run_path"])
@@ -84,6 +105,7 @@ def create_baseline_run(
         _register_artifact("variant", variant["variant_id"], ArtifactType.TRADES.value, variant_artifacts["trades_path"])
 
         task = task_service.mark_completed(task["task_id"], message="Baseline run completed")
+        _prune_runs_best_effort(run_id)
         return {
             "task": task,
             "run": run,

@@ -32,11 +32,15 @@ def generate_and_register_strategy(source_filename: str, options: dict[str, Any]
     generation_result: dict[str, Any] = {}
     try:
         task = task_service.mark_running(task["task_id"], message=f"{source_filename} · 正在生成策略代码")
+        task = task_service.mark_progress(task["task_id"], 0.12, message=f"{source_filename} · 正在读取自然语言文档")
         source_payload = natural_language_source_service.read_source_file(source_filename)
         source_text = str(source_payload.get("text") or "")
+        task = task_service.mark_progress(task["task_id"], 0.25, message=f"{source_filename} · 已调用生成 API，正在等待返回")
         generation_result = generate_strategy_from_text(source_text, options=options)
+        task = task_service.mark_progress(task["task_id"], 0.78, message=f"{source_filename} · 生成 API 已返回，正在校验代码")
         _validate_generation_result(generation_result)
 
+        task = task_service.mark_progress(task["task_id"], 0.9, message=f"{source_filename} · 代码校验通过，正在保存 strategy.py")
         strategy_name = str(generation_result.get("strategy_name") or generation_result.get("class_name") or source_payload.get("name") or "Generated Strategy")
         strategy = strategy_service.register_generated_strategy(
             strategy_name=strategy_name,

@@ -1,0 +1,15 @@
+请生成一个适用于 511380.SSE 转债 ETF 的极简慢速均线趋势策略，类名 ConvertibleBondSlowTrendStrategy，符合 vn.py CTA 规范并能直接在当前平台回测。
+
+核心思想是低频跟随大趋势，宁可少交易，也不要在一分钟噪声中来回交易。
+
+规则：
+1. 输入为 1 分钟 K 线，合成为 60 分钟 K 线，所有指标和交易信号只在合成 K 线完成后计算。
+2. 只做多，固定 1 手，不做空、不加仓。
+3. 计算 10 周期 EMA 和 40 周期 EMA。只有 fast_ema > slow_ema、收盘价高于 slow_ema，并且 slow_ema 高于上一根 slow_ema 时，市场处于多头状态。
+4. 开仓要求多头状态已经连续维持至少 2 根 60分钟 K 线，然后当前收盘价突破最近 8 根已完成 K 线的最高价。突破线必须排除当前 K 线。
+5. 开仓后跨日持有。退出条件任意一个满足即全部卖出：fast_ema 跌破 slow_ema；收盘价跌破最近 6 根已完成 K 线最低价；收盘价跌破持仓以来最高价减 2.8 倍 ATR。
+6. 不设固定止盈，让利润奔跑。平仓后冷却 3 根 60分钟 K 线。
+7. 参数暴露 fast_window=10、slow_window=40、entry_window=8、exit_window=6、atr_window=14、atr_multiple=2.8、confirm_bars=2、cooldown_bars=3、fixed_size=1。
+8. 至少预热 80 根合成 K 线；指标未初始化、ATR无效或有活动委托时不交易。
+9. 正确使用 BarGenerator、ArrayManager、buy、sell、cancel_all，并实现所有 vn.py CTA 标准回调。
+10. 禁止未来函数，禁止做空，禁止日内强制平仓，禁止一分钟级连续下单。

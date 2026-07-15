@@ -10,6 +10,7 @@ from backend.core.hashing import compute_sha256
 from backend.domain.enums import ArtifactType, TaskStatus, TaskType
 from backend.repositories import artifact_repository, run_repository, strategy_repository, variant_repository
 from backend.services import artifact_service, task_service
+from strategy_optimization import parameter_policy
 from strategy_optimization import optimize_parameters
 from strategy_optimization.optimizers.registry import list_methods, resolve_method, variant_for_method
 from strategy_optimization.search_space import build_parameter_inventory, read_json_file
@@ -45,6 +46,33 @@ def _read_json(path: str | Path | None) -> dict[str, Any]:
     return json.loads(candidate.read_text(encoding="utf-8"))
 
 
+def _apply_baseline_parameters(inventory: dict[str, Any], parameters: dict[str, Any]) -> dict[str, Any]:
+    resolved = dict(inventory)
+    known_names = set(dict(inventory.get("base_parameters") or {}))
+    overrides = {name: value for name, value in dict(parameters or {}).items() if name in known_names}
+    if not overrides:
+        return resolved
+
+    def update_items(items: list[dict[str, Any]], *, refresh_range: bool) -> list[dict[str, Any]]:
+        updated_items: list[dict[str, Any]] = []
+        for raw_item in items:
+            item = dict(raw_item)
+            name = str(item.get("name") or "")
+            if name in overrides:
+                item["current"] = overrides[name]
+                if refresh_range:
+                    range_spec = parameter_policy.default_range_for_parameter(name, overrides[name])
+                    if range_spec is not None:
+                        item.update(range_spec)
+            updated_items.append(item)
+        return updated_items
+
+    resolved["base_parameters"] = {**dict(inventory.get("base_parameters") or {}), **overrides}
+    resolved["parameters"] = update_items(list(inventory.get("parameters") or []), refresh_range=True)
+    resolved["hidden_parameters"] = update_items(list(inventory.get("hidden_parameters") or []), refresh_range=False)
+    return resolved
+
+
 def _run_context(run_id: str) -> dict[str, Any]:
     run = run_repository.get_run(run_id)
     if run is None:
@@ -56,9 +84,13 @@ def _run_context(run_id: str) -> dict[str, Any]:
     strategy = strategy_repository.get_strategy(str(run["strategy_id"])) or {}
     report_path = Path(str(strategy.get("code_path") or "")).parent / "generation_report.json" if strategy.get("code_path") else None
     config = _read_json(run_path / "config.json")
+    manifest = _read_json(run_path / "manifest.json")
     report = read_json_file(report_path)
     strategy_code = strategy_path.read_text(encoding="utf-8")
     inventory = build_parameter_inventory(strategy_code=strategy_code, generation_report=report)
+    lineage = dict(manifest.get("lineage") or {})
+    if lineage.get("source_type") == "pool_item" and lineage.get("operation") == "rerun_as_baseline":
+        inventory = _apply_baseline_parameters(inventory, dict(config.get("parameters") or {}))
     vt_symbol = str(config.get("vt_symbol") or f"{config.get('symbol', '')}.{config.get('exchange', '')}").strip(".")
     return {
         "run": run,
@@ -67,6 +99,7 @@ def _run_context(run_id: str) -> dict[str, Any]:
         "strategy_code": strategy_code,
         "generation_report": report,
         "config": config,
+        "manifest": manifest,
         "inventory": inventory,
         "vt_symbol": vt_symbol,
     }
@@ -129,18 +162,17 @@ def list_optimization_methods() -> dict[str, Any]:
     return {"methods": list_methods(include_mock=False)}
 
 
-def list_optimizable_runs(limit: int = 100) -> dict[str, Any]:
+def list_optimizable_runs(limit: int = 50) -> dict[str, Any]:
     rows = []
-    for run in run_repository.list_runs(limit=limit):
+    for run in run_repository.list_run_summaries(limit=limit):
         config = _read_json(Path(str(run["runtime_path"])) / "config.json")
-        strategy = strategy_repository.get_strategy(str(run["strategy_id"])) or {}
         rows.append(
             {
                 **run,
-                "strategy_name": strategy.get("strategy_name") or run.get("strategy_id"),
-                "strategy_family": strategy.get("strategy_family") or "",
-                "strategy_version": strategy.get("strategy_version") or "",
-                "source_filename": strategy.get("source_filename") or "",
+                "strategy_name": run.get("strategy_name") or run.get("strategy_id"),
+                "strategy_family": run.get("strategy_family") or "",
+                "strategy_version": run.get("strategy_version") or "",
+                "source_filename": run.get("source_filename") or "",
                 "vt_symbol": config.get("vt_symbol") or f"{config.get('symbol', '')}.{config.get('exchange', '')}".strip("."),
                 "interval": config.get("interval") or "",
                 "mode": config.get("mode") or "",
@@ -339,6 +371,12 @@ def run_optimization(
             trades=best_result.get("trades"),
         )
         grid_summary_path = artifact_service.save_variant_grid_summary(run_id, selected_variant, optimization.get("grid_summary") or [])
+        if resolved_method == "manual_grid":
+            artifact_service.save_variant_candidate_curves(
+                run_id,
+                selected_variant,
+                optimization.get("candidate_curves") or [],
+            )
         artifact_paths = {
             "result_path": str(variant_artifacts["result_path"]),
             "daily_results_path": str(variant_artifacts["daily_results_path"] or ""),

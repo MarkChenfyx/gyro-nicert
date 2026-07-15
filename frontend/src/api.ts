@@ -23,6 +23,18 @@ export function generateStrategy(sourceFilename: string) {
   });
 }
 
+export function repairStrategyCode(payload: {
+  strategy_name: string;
+  strategy_code: string;
+  vt_symbol?: string;
+  interval?: string;
+}) {
+  return request<any>("/api/strategies/repair", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
 export type ResearchCreatePayload = {
   source_filename: string;
   symbol: string;
@@ -142,7 +154,7 @@ export function getRun(runId: string) {
   return request<any>(`/api/runs/${encodeURIComponent(runId)}`);
 }
 
-export function listRuns(limit = 100) {
+export function listRuns(limit = 50) {
   return request<any>(`/api/runs?limit=${encodeURIComponent(String(limit))}`);
 }
 
@@ -150,19 +162,36 @@ export function getVariantCurve(runId: string, variantName: string) {
   return request<any>(`/api/runs/${encodeURIComponent(runId)}/variants/${encodeURIComponent(variantName)}/curve`);
 }
 
-export function addToPool(runId: string, variantName = "baseline", vtSymbol?: string, strategyName?: string) {
+export function getGridCandidateCurve(runId: string, variantName: string, candidateLabel: string) {
+  return request<any>(`/api/runs/${encodeURIComponent(runId)}/variants/${encodeURIComponent(variantName)}/candidates/${encodeURIComponent(candidateLabel)}/curve`);
+}
+
+export function addToPool(runId: string, variantName = "baseline", vtSymbol?: string, strategyName?: string, note?: string) {
   return request<any>("/api/pool/add", {
     method: "POST",
-    body: JSON.stringify({ run_id: runId, variant_name: variantName, vt_symbol: vtSymbol, strategy_name: strategyName, tags: ["frontend"] })
+    body: JSON.stringify({ run_id: runId, variant_name: variantName, vt_symbol: vtSymbol, strategy_name: strategyName, note, tags: ["frontend"] })
   });
 }
 
 export function listPool() {
-  return request<any>("/api/pool");
+  return request<any>("/api/pool", { cache: "no-store" });
 }
 
 export function getPoolItem(poolItemId: string) {
   return request<any>(`/api/pool/${encodeURIComponent(poolItemId)}`);
+}
+
+export function continuePoolOptimization(poolItemId: string) {
+  return request<any>(`/api/pool/${encodeURIComponent(poolItemId)}/continue-optimization`, {
+    method: "POST"
+  });
+}
+
+export function updatePoolNotes(poolItemId: string, note: string) {
+  return request<any>(`/api/pool/${encodeURIComponent(poolItemId)}/notes`, {
+    method: "PATCH",
+    body: JSON.stringify({ note })
+  });
 }
 
 export function getPoolCurve(poolItemId: string) {
@@ -192,7 +221,7 @@ export function removeFromPool(poolItemId: string) {
 export function listTasks(options: { view?: "active" | "recent" | "archived" | "all"; status?: string; limit?: number } = {}) {
   const params = new URLSearchParams();
   params.set("view", options.view || "recent");
-  params.set("limit", String(options.limit || 100));
+  params.set("limit", String(options.limit || 50));
   if (options.status) params.set("status", options.status);
   return request<any>(`/api/tasks?${params.toString()}`);
 }

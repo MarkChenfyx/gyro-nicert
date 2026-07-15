@@ -1,0 +1,16 @@
+请生成一个 vn.py CTA 策略，使用平台输入的 1 分钟行情，在内部合成 15 分钟完整 K 线。策略支持多空双向、单位仓位，使用社区里较少见的 Fisher Transform 极值反转，追求较灵敏、较频繁的短线交易。
+
+具体规则：
+
+1. 所有计算只使用已完成的 15 分钟 K 线。价格源使用 HL2=(high+low)/2。
+2. 在最近 10 根 K 线内对 HL2 做 min-max 归一化到 -1 至 1，并将归一化值限制在 -0.999 至 0.999。
+3. 使用经典 Fisher Transform：fisher=0.5*ln((1+x)/(1-x))，并对归一化值和 Fisher 值各做轻度递归平滑。必须在代码中自行实现，不能依赖外部指标包。
+4. 保存上一根 Fisher 作为 trigger。先要求 Fisher 曾低于 -1.5；随后 Fisher 上穿 trigger 且 Fisher 仍低于 -0.5时，视为极值向上弹射。
+5. 多头入场还需要当前收盘价高于上一根收盘价，并且不低于 EMA50 超过0.8倍ATR。镜像空头要求 Fisher 曾高于1.5，随后 Fisher 下穿 trigger 且仍高于0.5，当前收盘价低于上一根，并且不高于 EMA50 超过0.8倍ATR。
+6. 多头在 Fisher 高于1.5后向下穿 trigger、跌破0、收盘价跌破EMA10或触发1.3倍ATR止损时退出；空头镜像在 Fisher 低于-1.5后向上穿 trigger、升破0、收盘价升破EMA10或触发镜像止损时退出。任一方向最多持有10根 K 线。
+7. 任一方向浮盈达到1.5倍ATR后，将止损移到实际入场价附近；平仓后冷却1根 K 线。
+8. 参数至少包括 fisher_window=10、fisher_smooth=0.33、trigger_smooth=0.5、oversold_level=-1.5、entry_ceiling=-0.5、overbought_level=1.5、short_entry_floor=0.5、trend_ema=50、exit_ema=10、atr_window=14、trend_tolerance_atr=0.8、stop_atr=1.3、breakeven_atr=1.5、max_holding_bars=10、cooldown_bars=1、bar_window=15、fixed_size=1。
+9. 必须防止最高价等于最低价导致除零；所有对数输入必须安全裁剪。
+10. 开多只允许 self.buy(price, self.fixed_size)，开空只允许 self.short(price, self.fixed_size)；平仓分别用 self.sell/self.cover 和 abs(self.pos)。不得访问外部文件、网络或硬编码历史信号。
+
+策略类名使用 FisherExtremeBounceStrategy，并完整实现 vn.py CTA 回调、BarGenerator、指标状态、实际入场价、止损和持仓计数。

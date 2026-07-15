@@ -1,0 +1,16 @@
+请生成一个 vn.py CTA 策略，使用平台输入的 1 分钟行情，在内部合成 30 分钟完整 K 线。策略支持多空双向、单位仓位，使用 Choppiness Index 在“震荡均值回归”和“趋势突破”两套逻辑之间切换。这是一个偏社区实验性质、信号较积极的双状态策略。
+
+具体规则：
+
+1. 所有指标只能使用已经完成的 30 分钟 K 线，不得使用未来数据。
+2. 自行计算 Choppiness Index(14)：100*log10(sum(TR,14)/(最高价14-最低价14))/log10(14)。必须处理分母为零。
+3. CHOP 高于 61.8 时进入震荡状态；CHOP 低于 38.2 时进入趋势状态；位于中间区域时保持上一状态，形成简单迟滞，减少来回切换。
+4. 震荡状态使用均值回归：布林带(16,1.6)和RSI(5)。跌破下轨后收回且RSI由25下方上穿30时开多；突破上轨后跌回且RSI由75上方下穿70时开空。回到中轨、RSI到达另一侧或持仓超过8根时退出。
+5. 趋势状态使用突破：计算排除当前 K 线的过去12根最高价和最低价。向上突破且EMA8高于EMA20时开多；向下突破且EMA8低于EMA20时开空；两者都要求ATR高于30根ATR均值的0.9倍。
+6. 趋势多仓跌破过去5根最低价、EMA8下穿EMA20或跌破最高收盘价减2.2倍ATR时退出；趋势空仓镜像使用过去5根最高价、均线上穿和最低收盘价加2.2倍ATR。
+7. 多头和空头分别设置入场价减/加1.5倍ATR的灾难止损；状态切换本身不强制平仓，已有仓位继续使用开仓时对应的退出逻辑。
+8. 每次平仓后冷却 2 根 K 线。一次只持有一个方向的单位仓位，不加仓。
+9. 参数至少包括 chop_window=14、trend_level=38.2、range_level=61.8、range_boll_window=16、range_boll_dev=1.6、range_rsi_window=5、range_rsi_low=25、range_rsi_long_entry=30、range_rsi_long_exit=65、range_rsi_high=75、range_rsi_short_entry=70、range_rsi_short_exit=35、trend_breakout_window=12、trend_exit_window=5、fast_ema=8、slow_ema=20、atr_window=14、atr_mean_window=30、trend_trailing_atr=2.2、disaster_stop_atr=1.5、range_max_holding=8、cooldown_bars=2、bar_window=30、fixed_size=1。
+10. 开多/开空分别使用 self.buy/self.short 和 self.fixed_size；平多/平空分别使用 self.sell/self.cover 和 abs(self.pos)。不得读取外部数据、文件、CSV、Parquet、数据库或硬编码历史信号。
+
+策略类名使用 ChoppinessDualRegimeStrategy，完整实现 vn.py CTA 标准回调、BarGenerator、ArrayManager、状态迟滞、两套持仓退出状态和风险控制。

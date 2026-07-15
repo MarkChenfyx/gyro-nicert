@@ -1,0 +1,18 @@
+请生成一个 vn.py CTA 策略，使用平台输入的 1 分钟 K 线，在内部合成 15 分钟完整 K 线。策略支持多空双向、单位仓位，采用社区常见的 Inside Bar 母线压缩、成交量确认和快速突破玩法，风格偏激进。
+
+具体规则：
+
+1. 只使用已经完成的 15 分钟 K 线，不得使用未来数据。
+2. 当前 K 线最高价低于上一根最高价、最低价高于上一根最低价时，认定为 Inside Bar，上一根是 Mother Bar。
+3. 允许连续 1 至 3 根 Inside Bar。准备期间固定 Mother Bar 的最高价和最低价，不得用后续数据回写。
+4. Mother Bar 振幅必须处于 0.5 至 2.0 倍 ATR(14)之间，既排除过窄噪声，也排除已经爆发的大 K 线。
+5. 在最后一根 Inside Bar 后4根内，收盘价突破 Mother Bar 最高价加0.05倍ATR、成交量高于20根均量的1.2倍且收盘价高于EMA30时开多；收盘价跌破 Mother Bar 最低价减0.05倍ATR、成交量放大且低于EMA30时镜像开空。
+6. 多头突破 K 线收盘价位于振幅顶部30%，空头位于底部30%；两者实体占振幅至少50%。
+7. 多头止损为 Mother Bar 最低价和入场价减1.4倍ATR中较高者；空头止损为 Mother Bar 最高价和入场价加1.4倍ATR中较低者。
+8. 浮盈达到1.2倍ATR后移到保本；多头用最高收盘价减1.8倍ATR追踪，空头用最低收盘价加1.8倍ATR追踪。
+9. 多头跌回 Mother Bar 高点下方、EMA8下穿EMA20时退出；空头升回 Mother Bar 低点上方、EMA8上穿EMA20时退出。任一方向最多持仓14根 K 线。
+10. 平仓后只冷却 2 根 K 线；准备状态超时，或价格先向任一方向突破却未满足成交量和实体确认条件时，立即取消本次准备状态。
+11. 参数至少包括 atr_window=14、ema_filter=30、fast_ema=8、slow_ema=20、min_mother_atr=0.5、max_mother_atr=2.0、breakout_buffer_atr=0.05、breakout_valid_bars=4、volume_window=20、volume_multiple=1.2、min_body_ratio=0.5、initial_stop_atr=1.4、breakeven_atr=1.2、trailing_atr=1.8、max_holding_bars=14、cooldown_bars=2、bar_window=15、fixed_size=1。
+12. 开多/开空分别使用 self.buy/self.short 和 self.fixed_size；平仓分别使用 self.sell/self.cover 和 abs(self.pos)。不得读取外部文件、网络或预先生成的信号。
+
+策略类名使用 MotherBarVolumeBreakoutStrategy，完整实现 vn.py CTA 标准回调和全部状态维护。

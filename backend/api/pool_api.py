@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 
-from backend.api.schemas import PoolAddRequest, PoolCompareRequest, PoolRerunRequest
+from backend.api.schemas import PoolAddRequest, PoolCompareRequest, PoolNoteUpdateRequest, PoolRerunRequest
 from backend.services import pool_service, query_service
 
 
@@ -33,6 +33,21 @@ def rerun_pool_items(payload: PoolRerunRequest) -> dict:
         end_date=payload.end_date,
         start_mode=payload.start_mode,
     )
+
+
+@router.post("/{pool_item_id}/continue-optimization")
+def continue_pool_item_optimization(pool_item_id: str) -> dict:
+    return pool_service.continue_optimization_from_pool(pool_item_id)
+
+
+@router.patch("/{pool_item_id}/notes")
+def update_pool_item_notes(pool_item_id: str, payload: PoolNoteUpdateRequest) -> dict:
+    try:
+        return pool_service.update_pool_item_notes(pool_item_id, payload.note)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("")

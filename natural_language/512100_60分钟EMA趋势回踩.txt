@@ -1,0 +1,15 @@
+请生成一个适用于 512100.SSE（中证1000ETF）的 60 分钟 EMA 趋势回踩策略，使用 vn.py CTA 策略规范实现。工作台输入周期为 1 分钟，策略内部用 BarGenerator 合成 60 分钟 K 线；只使用已经收盘的 60 分钟 K 线。
+
+这个策略不追涨，先确认上涨趋势，再等待价格回踩短期均线并重新转强。策略只做多、不做空，fixed_size=1，任何时候只保留一笔仓位，不加仓、不摊平。
+
+具体规则：
+1. 在 60 分钟 K 线上计算 EMA10、EMA30、EMA90、RSI(14) 和 ATR(14)，至少预热 120 根合成 K 线。
+2. 上涨趋势要求 EMA10 高于 EMA30、EMA30 高于 EMA90、收盘价高于 EMA90，并且 EMA90 不低于 5 根 K 线之前的 EMA90。
+3. 定义回踩准备状态：在上涨趋势有效时，最近 5 根完整 K 线内至少有一根最低价触及或跌破 EMA10，但这些 K 线的收盘价均未跌破 EMA30 超过 0.5 倍 ATR。准备状态最多保留 5 根 K 线，超时后取消。
+4. 空仓且处于回踩准备状态时，如果当前收盘价重新高于 EMA10、当前收盘价高于前一根 K 线最高价，并且 RSI(14) 位于 50 到 72 之间，则买入 fixed_size=1。
+5. 不允许在 RSI 高于 72 时追高。ATR 必须有效且大于 0，存在活动委托时不得重复下单。
+6. 开仓后记录实际成交价、入场 ATR和持仓后最高收盘价。初始止损为入场价减去 2 倍入场 ATR。
+7. 持仓后，收盘价跌破 EMA30、EMA10 下穿 EMA30、收盘价跌破初始止损，或收盘价跌破“最高收盘价减去 2.5 倍当前 ATR”时，任一条件成立均全部平仓。
+8. 当浮盈达到 3 倍入场 ATR 后，将保护位至少提高到入场价，之后继续使用 ATR 移动止损。退出 K 线不允许重新开仓，平仓后冷却 3 根 60 分钟 K 线。
+9. 参数至少包括 fast_window=10、middle_window=30、slow_window=90、rsi_window=14、rsi_entry_min=50、rsi_entry_max=72、atr_window=14、pullback_lookback=5、pullback_atr_tolerance=0.5、initial_stop_atr=2.0、trailing_stop_atr=2.5、breakeven_trigger_atr=3.0、cooldown_bars=3、fixed_size=1。
+10. 正确实现 on_init、on_start、on_stop、on_tick、on_bar、on_order、on_trade、on_stop_order，正确维护回踩状态、入场状态和活动委托。策略类名使用 Csi1000EmaPullbackStrategy，不使用未来函数。

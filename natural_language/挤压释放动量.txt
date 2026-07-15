@@ -1,0 +1,17 @@
+请生成一个 vn.py CTA 策略，使用平台输入的 1 分钟 K 线，在内部合成 30 分钟完整 K 线。策略支持多空双向、单位仓位，采用社区常见的 TTM Squeeze / Bollinger-Keltner 挤压释放思路，偏积极地捕捉波动扩张。
+
+具体规则：
+
+1. 只使用已经完成的 30 分钟 K 线，不得使用未来数据。
+2. 计算 20 周期布林带：中轨 SMA20，上下轨为中轨加减 1.8 倍标准差。
+3. 计算 20 周期 Keltner Channel：中轨 EMA20，上下轨为中轨加减 1.4 倍 ATR(20)。
+4. 当布林带上轨低于 Keltner 上轨、布林带下轨高于 Keltner 下轨时，认为 squeeze_on。连续至少 3 根 squeeze_on 后，记录这段挤压期间的最高价和最低价。
+5. 当 squeeze_on 结束后的 3 根 K 线内，收盘价突破挤压区间最高价、成交量高于过去20根均量的1.15倍、EMA8高于EMA20时开多；收盘价跌破区间最低价、成交量同样放大、EMA8低于EMA20时镜像开空。
+6. 为增加交易机会，不要求更长周期趋势过滤；但是突破 K 线实体必须至少占本根振幅的 55%，避免只由上影线造成的假突破。
+7. 多头初始止损为挤压区间最低价与“入场价减1.5倍ATR”两者中较高者；空头初始止损为区间最高价与“入场价加1.5倍ATR”两者中较低者。
+8. 多头维护最高收盘价，以 EMA8 或最高收盘价减2.0倍ATR退出；空头维护最低收盘价，以 EMA8 或最低收盘价加2.0倍ATR退出。任一方向最多持有18根 K 线。
+9. 突破后3根内重新收回挤压区间即视为失败，多空均立即平仓。平仓后冷却2根 K 线。
+10. 参数至少包括 bb_window=20、bb_dev=1.8、kc_window=20、kc_atr=1.4、min_squeeze_bars=3、release_window=3、fast_ema=8、slow_ema=20、volume_window=20、volume_multiple=1.15、min_body_ratio=0.55、initial_stop_atr=1.5、trailing_atr=2.0、max_holding_bars=18、cooldown_bars=2、bar_window=30、fixed_size=1。
+11. 开多和开空分别使用 self.buy/self.short，数量必须为 self.fixed_size；平仓使用 self.sell/self.cover 和 abs(self.pos)。不得依赖任何外部文件、数据库、网络或预先计算的信号。
+
+策略类名使用 SqueezeReleaseMomentumStrategy，正确维护挤压区间、释放窗口、持仓后的最高或最低收盘价和持仓周期，并实现全部 vn.py CTA 标准回调。

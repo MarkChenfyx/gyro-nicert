@@ -371,6 +371,12 @@ def run_optimization(
             trades=best_result.get("trades"),
         )
         grid_summary_path = artifact_service.save_variant_grid_summary(run_id, selected_variant, optimization.get("grid_summary") or [])
+        if resolved_method == "manual_grid":
+            artifact_service.save_variant_candidate_curves(
+                run_id,
+                selected_variant,
+                optimization.get("candidate_curves") or [],
+            )
         artifact_paths = {
             "result_path": str(variant_artifacts["result_path"]),
             "daily_results_path": str(variant_artifacts["daily_results_path"] or ""),

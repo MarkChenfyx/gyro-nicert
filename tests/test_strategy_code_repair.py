@@ -20,13 +20,14 @@ class _FakeProvider:
         return json.dumps(self.payload, ensure_ascii=False)
 
 
-def test_ai_repair_returns_model_code_without_local_validation(monkeypatch):
+def test_ai_repair_returns_model_code_after_open_volume_validation(monkeypatch):
+    repaired_code = "class UploadedStrategy:\n    fixed_size = 1\n    def trade(self, price):\n        self.buy(price, self.fixed_size)"
     provider = _FakeProvider(
         {
             "status": "runnable",
             "success": True,
             "can_backtest": True,
-            "strategy_code": "this is intentionally not valid Python",
+            "strategy_code": repaired_code,
             "changes": ["完成最小修正"],
             "reasons": [],
             "warnings": [],
@@ -45,11 +46,32 @@ def test_ai_repair_returns_model_code_without_local_validation(monkeypatch):
 
     assert result["status"] == "runnable"
     assert result["success"] is True
-    assert result["strategy_code"] == "this is intentionally not valid Python"
+    assert result["strategy_code"] == repaired_code
     assert result["changes"] == ["完成最小修正"]
     assert result["warnings"] == []
     assert "class UploadedStrategy: pass" in provider.messages[1]["content"]
     assert "511380.SSE" in provider.messages[1]["content"]
+
+
+def test_ai_repair_rejects_target_size_open_volume(monkeypatch):
+    provider = _FakeProvider(
+        {
+            "status": "runnable",
+            "strategy_code": "class UploadedStrategy:\n    fixed_size = 1\n    target_size = 100\n    def trade(self, price):\n        self.buy(price, self.target_size)\n",
+            "changes": ["已修正策略代码"],
+            "reasons": [],
+            "error": None,
+        }
+    )
+    monkeypatch.setattr(repair_module, "build_provider", lambda options=None: provider)
+
+    result = repair_module.repair_strategy_code(
+        strategy_name="UploadedStrategy",
+        strategy_code="class UploadedStrategy: pass",
+    )
+
+    assert result["status"] == "failed"
+    assert "必须严格使用 self.fixed_size" in result["error"]
 
 
 def test_ai_repair_rejects_empty_model_code(monkeypatch):
@@ -265,15 +287,17 @@ def test_ai_repair_api_returns_repaired_code(monkeypatch):
     assert response.json()["strategy_code"] == "REPAIRED_CODE"
 
 
-def test_manual_baseline_uses_supplied_repaired_code(monkeypatch):
+def test_manual_baseline_uses_registered_executable_code(monkeypatch, tmp_path):
     captured: dict = {}
+    executable_path = tmp_path / "strategy.py"
+    executable_path.write_text("class UploadedStrategy:\n    fixed_size = 1\n", encoding="utf-8")
     monkeypatch.setattr(
         research_workflow_service.strategy_service,
         "register_manual_strategy",
         lambda **kwargs: {
             "strategy_id": "strategy_repaired",
             "class_name": "UploadedStrategy",
-            "code_path": "unused.py",
+            "code_path": str(executable_path),
         },
     )
 
@@ -289,4 +313,5 @@ def test_manual_baseline_uses_supplied_repaired_code(monkeypatch):
     )
 
     assert result["baseline"]["run"]["run_id"] == "run_repaired"
-    assert captured["generated"]["strategy_code"] == "REPAIRED_CODE"
+    assert captured["generated"]["source_text"] == "REPAIRED_CODE"
+    assert captured["generated"]["strategy_code"] == "class UploadedStrategy:\n    fixed_size = 1\n"

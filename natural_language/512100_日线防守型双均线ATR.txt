@@ -1,0 +1,15 @@
+请生成一个适用于 512100.SSE（中证1000ETF）的日线防守型双均线趋势策略，使用 vn.py CTA 策略规范实现。工作台可输入 1 分钟 K 线，由策略内部合成日线；所有信号基于完整收盘日线，不允许使用盘中未完成数据。
+
+策略目标不是频繁交易，而是在中证1000进入明确上升阶段时持有，在趋势恶化或波动风险突然放大时退出。只做多、不做空；固定仓位 fixed_size=1；不加仓、不补仓。
+
+具体规则：
+1. 计算日线 EMA20、EMA60、EMA120、ATR(20)，以及 ATR 占收盘价的比例 atr_ratio=ATR(20)/close。至少预热 150 根完整日线。
+2. 入场趋势条件为 EMA20 高于 EMA60、EMA60 高于 EMA120、收盘价高于 EMA20，并且 EMA120 不低于 10 个交易日前的 EMA120。
+3. 为避免在极端波动时追入，当前 atr_ratio 必须低于过去 120 个完整交易日 atr_ratio 的 80%分位数。分位数计算只能使用当前日之前已经确定的数据。
+4. 空仓时，入场趋势条件连续成立 3 个完整交易日后才买入 fixed_size=1。确认期间如果任一条件失效，连续计数清零。
+5. 开仓后记录实际成交价和入场 ATR，并维护持仓后的最高收盘价。初始止损为入场价减去 3 倍入场 ATR。
+6. 持仓后采用分层退出：EMA20 下穿 EMA60时全部平仓；收盘价跌破 EMA120 时全部平仓；收盘价跌破“持仓后最高收盘价减去 3.5 倍当前 ATR”时全部平仓；任一条件成立即可退出。
+7. 增加波动风险退出：如果当前 atr_ratio 高于过去 120 日 atr_ratio 的 95%分位数，并且当前收盘价低于 EMA20，则全部平仓。
+8. 不设固定止盈，让盈利趋势运行。退出后冷却 5 个完整交易日，再重新进行连续 3 日的入场确认。同一根日线不得先平仓再买回。
+9. 参数至少包括 fast_window=20、middle_window=60、slow_window=120、atr_window=20、slope_lookback=10、volatility_lookback=120、entry_vol_percentile=80、risk_exit_percentile=95、confirm_days=3、initial_stop_atr=3.0、trailing_stop_atr=3.5、cooldown_days=5、fixed_size=1。
+10. 正确实现 BarGenerator、ArrayManager 以及全部 vn.py CTA 标准回调，正确维护确认天数、冷却天数、入场 ATR 和最高收盘价。策略类名使用 Csi1000DefensiveEmaAtrStrategy；不得调用外部数据、文件或未来数据。

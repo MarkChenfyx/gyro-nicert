@@ -12,6 +12,7 @@ from backend.core.paths import GENERATED_STRATEGIES_ROOT
 from backend.domain.enums import ArtifactType
 from backend.repositories import artifact_repository, strategy_repository
 from backend.services import natural_language_source_service
+from strategy_generation.validation import validate_open_order_volumes
 
 
 def _strategy_id() -> str:
@@ -168,6 +169,8 @@ def register_generated_strategy(
     source_filename: str | None = None,
     class_name: str | None = None,
 ) -> dict[str, Any]:
+    normalized_code, _, _ = normalize_fixed_size(str(code or ""))
+    validate_open_order_volumes(normalized_code)
     resolved_filename = (
         natural_language_source_service.clean_source_filename(source_filename, append_txt=True)
         if source_filename
@@ -181,7 +184,7 @@ def register_generated_strategy(
     return _register_strategy(
         strategy_name=strategy_name,
         source_text=source_text,
-        code=code,
+        code=normalized_code,
         source_filename=resolved_filename,
         source_type="generated",
         strategy_family=strategy_family,
@@ -201,6 +204,7 @@ def register_manual_strategy(
         raise ValueError("strategy.py 代码不能为空。")
     normalized_code, fixed_size_normalized, fixed_size_message = normalize_fixed_size(resolved_code)
     class_name = extract_class_name_from_code(normalized_code)
+    validate_open_order_volumes(normalized_code)
     strategy_family = _fallback_family(resolved_name)
     source_filename = f"{strategy_family}.py"
     strategy = _register_strategy(

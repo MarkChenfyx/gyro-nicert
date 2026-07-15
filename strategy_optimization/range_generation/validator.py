@@ -39,10 +39,10 @@ def _normalize_numeric(item: dict[str, Any], static: dict[str, Any]) -> dict[str
     if current is not None:
         # Keep the current strategy as a valid baseline candidate.
         low, high = min(low, current), max(high, current)
-        # AI suggestions are proposals, not authority. Keep ordinary ranges
-        # within ±50% of the declared default to avoid accidental explosions.
+        # Keep a broad ±200% first-pass safety rail. The prompt controls the
+        # grid count with coarser steps instead of forcing narrow bounds.
         if current != 0:
-            radius = abs(current) * 0.5
+            radius = abs(current) * 2.0
             low, high = max(low, current - radius), min(high, current + radius)
     name = str(static.get("name") or "").lower()
     if any(token in name for token in ("window", "period", "length", "lookback", "bars")):

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from typing import Any
-from uuid import uuid4
 import json
 
 from common.time_utils import now_iso, timestamp_id
@@ -22,7 +21,7 @@ def _now() -> str:
 
 
 def _pool_item_id() -> str:
-    return f"pool_{timestamp_id()}_{uuid4().hex[:6]}"
+    return f"pool_{timestamp_id()}"
 
 
 def create_pool_item(
@@ -40,10 +39,11 @@ def create_pool_item(
     sharpe: float | None = None,
     calmar: float | None = None,
     tags: list[str] | str | None = None,
+    created_at: str | None = None,
 ) -> dict[str, Any]:
     resolved_pool_item_id = pool_item_id or _pool_item_id()
     tags_text = tags if isinstance(tags, str) else json.dumps(list(tags or []), ensure_ascii=False)
-    created_at = _now()
+    resolved_created_at = str(created_at or _now())
     with get_app_db_connection() as connection:
         connection.execute(
             """
@@ -69,7 +69,7 @@ def create_pool_item(
                 sharpe,
                 calmar,
                 tags_text,
-                created_at,
+                resolved_created_at,
             ),
         )
         connection.commit()

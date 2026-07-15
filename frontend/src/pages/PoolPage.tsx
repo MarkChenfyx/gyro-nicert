@@ -103,21 +103,35 @@ import {
   StrategyGenerationPage
 } from "../app/App";
 
+const POOL_QUICK_LIMIT_STORAGE_KEY = "gyro_nicert.pool_quick_limit";
+
+function loadPoolQuickLimit() {
+  const stored = Number(window.localStorage.getItem(POOL_QUICK_LIMIT_STORAGE_KEY) || 5);
+  return Number.isFinite(stored) ? Math.max(1, Math.min(50, Math.round(stored))) : 5;
+}
+
 export default function PoolPage({
   poolItems,
+  poolNavigation,
+  onPoolNavigationApplied,
   refreshPool,
   refreshTasks,
   onContinueOptimization
 }: {
   poolItems: any[];
+  poolNavigation: { poolItemId: string; vtSymbol: string; requestId: number } | null;
+  onPoolNavigationApplied: (requestId: number) => void;
   refreshPool: () => Promise<void>;
   refreshTasks: () => Promise<void>;
   onContinueOptimization: (runId: string) => void;
 }) {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [displayedCurveIds, setDisplayedCurveIds] = useState<string[]>([]);
   const [selectedSymbol, setSelectedSymbol] = useState("");
   const [searchText, setSearchText] = useState("");
-  const [selectionMode, setSelectionMode] = useState("all");
+  const [selectionMode, setSelectionMode] = useState("recent");
+  const [quickLimit, setQuickLimit] = useState(loadPoolQuickLimit);
+  const [quickLimitDraft, setQuickLimitDraft] = useState<number | null>(() => loadPoolQuickLimit());
   const [poolSortKey, setPoolSortKey] = useState<"created_at" | "total_return" | "sharpe" | "trade_count" | "max_drawdown" | "excess_return">("created_at");
   const [poolSortOrder, setPoolSortOrder] = useState<"asc" | "desc">("desc");
   const [selectedDetailId, setSelectedDetailId] = useState("");
@@ -184,7 +198,7 @@ export default function PoolPage({
     };
   }
 
-  function togglePoolSort(nextKey: "total_return" | "sharpe" | "trade_count" | "max_drawdown" | "excess_return") {
+  function togglePoolSort(nextKey: "created_at" | "total_return" | "sharpe" | "trade_count" | "max_drawdown" | "excess_return") {
     if (poolSortKey === nextKey) {
       setPoolSortOrder((current) => current === "desc" ? "asc" : "desc");
       return;
@@ -193,7 +207,7 @@ export default function PoolPage({
     setPoolSortOrder("desc");
   }
 
-  function sortArrow(key: "total_return" | "sharpe" | "trade_count" | "max_drawdown" | "excess_return") {
+  function sortArrow(key: "created_at" | "total_return" | "sharpe" | "trade_count" | "max_drawdown" | "excess_return") {
     if (poolSortKey !== key) return null;
     return poolSortOrder === "desc" ? "down" : "up";
   }
@@ -228,31 +242,35 @@ export default function PoolPage({
       });
   }, [poolItems, searchText, selectedSymbol]);
 
-  function presetItems(mode = selectionMode, records = candidateItems) {
+  function presetItems(mode = selectionMode, records = candidateItems, limit = quickLimit) {
+    const safeLimit = Math.max(1, Math.min(50, Math.round(Number(limit) || 5)));
     if (mode === "top_sharpe") {
-      return records.slice().sort((a, b) => Number(b.sharpe ?? -Infinity) - Number(a.sharpe ?? -Infinity)).slice(0, 5);
+      return records.slice().sort((a, b) => Number(b.sharpe ?? -Infinity) - Number(a.sharpe ?? -Infinity)).slice(0, safeLimit);
     }
     if (mode === "top_excess") {
       return records
         .slice()
         .sort((a, b) => Number(strategyCurveMetrics(b).excessReturn ?? -Infinity) - Number(strategyCurveMetrics(a).excessReturn ?? -Infinity))
-        .slice(0, 5);
+        .slice(0, safeLimit);
     }
     if (mode === "recent") {
-      return records.slice().sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || ""))).slice(0, 5);
+      return records.slice().sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || ""))).slice(0, safeLimit);
     }
     return records;
   }
 
-  async function applyPreset(mode: string) {
+  async function applyPreset(mode: string, limit = quickLimit) {
     const requestId = ++presetRequestRef.current;
     setSelectionMode(mode);
     if (mode !== "top_excess") {
-      setSelectedIds(presetItems(mode).map((item) => String(item.pool_item_id)));
+      const nextIds = presetItems(mode, candidateItems, limit).map((item) => String(item.pool_item_id));
+      setDisplayedCurveIds(nextIds);
+      setSelectedIds(nextIds);
       return;
     }
     const candidateIds = candidateItems.map((item) => String(item.pool_item_id)).filter(Boolean);
     if (!candidateIds.length) {
+      setDisplayedCurveIds([]);
       setSelectedIds([]);
       return;
     }
@@ -260,14 +278,22 @@ export default function PoolPage({
     try {
       const payload = await comparePool(candidateIds);
       if (requestId !== presetRequestRef.current) return;
-      setSelectedIds(
-        presetItems("top_excess", payload.items || []).map((item) => String(item.pool_item_id))
-      );
+      const nextIds = presetItems("top_excess", payload.items || [], limit).map((item) => String(item.pool_item_id));
+      setDisplayedCurveIds(nextIds);
+      setSelectedIds(nextIds);
     } catch (error) {
       if (requestId === presetRequestRef.current) message.error(String(error));
     } finally {
       if (requestId === presetRequestRef.current) setLoading(false);
     }
+  }
+
+  function commitQuickLimit() {
+    const resolved = Math.max(1, Math.min(50, Math.round(Number(quickLimitDraft) || quickLimit || 5)));
+    setQuickLimit(resolved);
+    setQuickLimitDraft(resolved);
+    window.localStorage.setItem(POOL_QUICK_LIMIT_STORAGE_KEY, String(resolved));
+    if (selectionMode !== "all") void applyPreset(selectionMode, resolved);
   }
 
   function togglePoolItem(poolItemId: string) {
@@ -384,25 +410,57 @@ export default function PoolPage({
   useEffect(() => {
     if (!poolItems.length) {
       setSelectedSymbol("");
+      setDisplayedCurveIds([]);
       setSelectedIds([]);
       return;
     }
     const nextSymbol = selectedSymbol && symbols.includes(selectedSymbol) ? selectedSymbol : symbols[0] || "";
-    if (nextSymbol !== selectedSymbol) setSelectedSymbol(nextSymbol);
+    if (nextSymbol !== selectedSymbol) {
+      setPoolSelectionInitialized(false);
+      setSelectedSymbol(nextSymbol);
+    }
   }, [poolItems, selectedSymbol, symbols]);
 
   useEffect(() => {
+    if (!poolNavigation || !poolItems.length) return;
+    const targetItem = poolItems.find((item) => String(item.pool_item_id || "") === poolNavigation.poolItemId);
+    const targetSymbol = String(poolNavigation.vtSymbol || targetItem?.vt_symbol || "").trim();
+    if (!targetSymbol) return;
+    const symbolItems = poolItems.filter((item) => String(item.vt_symbol || "") === targetSymbol);
+    if (!symbolItems.length) return;
+    const recentItems = presetItems("recent", symbolItems, quickLimit);
+    const selected = [
+      ...(targetItem ? [targetItem] : []),
+      ...recentItems.filter((item) => String(item.pool_item_id || "") !== poolNavigation.poolItemId)
+    ].slice(0, quickLimit);
+    presetRequestRef.current += 1;
+    setSearchText("");
+    setSelectedSymbol(targetSymbol);
+    setSelectionMode("recent");
+    const selectedPoolIds = selected.map((item) => String(item.pool_item_id));
+    setDisplayedCurveIds(selectedPoolIds);
+    setSelectedIds(selectedPoolIds);
+    setPoolSelectionInitialized(true);
+    onPoolNavigationApplied(poolNavigation.requestId);
+  }, [onPoolNavigationApplied, poolItems, poolNavigation, quickLimit]);
+
+  useEffect(() => {
+    if (poolNavigation) return;
     const candidateIds = candidateItems.map((item) => String(item.pool_item_id));
+    const displayed = displayedCurveIds.filter((id) => candidateIds.includes(id));
     const kept = selectedIds.filter((id) => candidateIds.includes(id));
-    if (kept.length !== selectedIds.length) {
+    if (displayed.length !== displayedCurveIds.length || kept.length !== selectedIds.length) {
+      setDisplayedCurveIds(displayed);
       setSelectedIds(kept);
       return;
     }
-    if (!poolSelectionInitialized && !kept.length && candidateItems.length) {
-      setSelectedIds(presetItems(selectionMode, candidateItems).map((item) => String(item.pool_item_id)));
+    if (!poolSelectionInitialized && !displayed.length && candidateItems.length) {
+      const nextIds = presetItems(selectionMode, candidateItems).map((item) => String(item.pool_item_id));
+      setDisplayedCurveIds(nextIds);
+      setSelectedIds(nextIds);
       setPoolSelectionInitialized(true);
     }
-  }, [candidateItems, poolSelectionInitialized, selectedIds, selectionMode]);
+  }, [candidateItems, displayedCurveIds, poolNavigation, poolSelectionInitialized, selectedIds, selectionMode]);
 
   useEffect(() => {
     if (!selectedIds.length) {
@@ -420,7 +478,7 @@ export default function PoolPage({
     const items = [...(comparison?.items || [])];
     const direction = poolSortOrder === "desc" ? -1 : 1;
     if (poolSortKey === "created_at") {
-      items.sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")) * direction);
+      items.sort((a, b) => String(a.created_at || "").localeCompare(String(b.created_at || "")) * direction);
       return items;
     }
     items.sort((a, b) => {
@@ -474,15 +532,19 @@ export default function PoolPage({
   );
   const compareLabels = useMemo(() => Object.fromEntries(compareItems.map((item: any) => [item.pool_item_id, compareItemLabel(item)])), [compareItems]);
   const poolVisibleKeys = useMemo(() => [...selectedIds, ...(showBenchmark ? ["buy_hold"] : [])], [selectedIds, showBenchmark]);
+  const displayedCurveItems = useMemo(() => {
+    const candidateById = new Map(candidateItems.map((item) => [String(item.pool_item_id), item]));
+    return displayedCurveIds.map((id) => candidateById.get(id)).filter(Boolean);
+  }, [candidateItems, displayedCurveIds]);
   const poolCurveControlItems = useMemo<CurveControlItem[]>(() =>
-    candidateItems.map((item) => ({
+    displayedCurveItems.map((item: any) => ({
       key: String(item.pool_item_id),
       label: poolItemLabel(item),
       type: "strategy" as const,
       value: curveSummary(item?.curve || []).strategy?.totalReturn,
       detail: `${item.vt_symbol || "-"} · ${formatReturnPct(curveSummary(item?.curve || []).strategy?.totalReturn, 2)}`
     })),
-  [candidateItems]);
+  [displayedCurveItems]);
 
   function applyPoolCurveShortcut(range: "3m" | "6m" | "1y" | "all") {
     const next = shortcutDateRange(poolCurveDateBounds, range);
@@ -494,12 +556,23 @@ export default function PoolPage({
       {
         title: "池内名称",
         dataIndex: "strategy_name",
+        width: 330,
         render: (value, record) => (
           <div className="strategy-pool-name-cell">
             <strong>{strategyLabel(record)}</strong>
-            <span>{record.source_run_id || record.pool_item_id}</span>
+            <span>{record.pool_item_id}</span>
           </div>
         )
+      },
+      {
+        title: (
+          <button type="button" className="table-sort-button" onClick={() => togglePoolSort("created_at")}>
+            入池时间 <SortCaret state={sortArrow("created_at")} />
+          </button>
+        ),
+        dataIndex: "created_at",
+        width: 136,
+        render: (value) => formatDate(value).slice(0, 16)
       },
       {
         title: (
@@ -507,6 +580,7 @@ export default function PoolPage({
             累计收益 <SortCaret state={sortArrow("total_return")} />
           </button>
         ),
+        width: 104,
         render: (_, record) => formatReturnPct(strategyCurveMetrics(record).totalReturn)
       },
       {
@@ -515,6 +589,7 @@ export default function PoolPage({
             交易数 <SortCaret state={sortArrow("trade_count")} />
           </button>
         ),
+        width: 82,
         render: (_, record) => formatNumber(strategyCurveMetrics(record).tradeCount, 0)
       },
       {
@@ -523,6 +598,7 @@ export default function PoolPage({
             {zh.sharpe} <SortCaret state={sortArrow("sharpe")} />
           </button>
         ),
+        width: 96,
         render: (_, record) => formatNumber(metricValue(record.metrics, "sharpe", "sharpe_ratio"))
       },
       {
@@ -531,6 +607,7 @@ export default function PoolPage({
             最大回撤 <SortCaret state={sortArrow("max_drawdown")} />
           </button>
         ),
+        width: 104,
         render: (_, record) => formatReturnPct(strategyCurveMetrics(record).maxDrawdown)
       },
       {
@@ -539,10 +616,12 @@ export default function PoolPage({
             超额收益 <SortCaret state={sortArrow("excess_return")} />
           </button>
         ),
+        width: 104,
         render: (_, record) => formatReturnPct(strategyCurveMetrics(record).excessReturn)
       },
       {
         title: "操作",
+        width: 86,
         render: (_, record) => (
           <div className="strategy-pool-action-stack">
             <Button size="small" danger onClick={() => handleDeletePoolItem(String(record.pool_item_id))}>移除</Button>
@@ -674,17 +753,33 @@ export default function PoolPage({
         <div className="strategy-pool-filter-grid">
           <label className="field library-folder-field">
             <span>标的</span>
-            <Select value={selectedSymbol || undefined} onChange={(value) => { presetRequestRef.current += 1; setSelectedSymbol(value); setSelectedIds([]); }} options={symbols.map((item) => ({ value: item, label: item }))} />
+            <Select value={selectedSymbol || undefined} onChange={(value) => { presetRequestRef.current += 1; setSelectionMode("recent"); setPoolSelectionInitialized(false); setSelectedSymbol(value); setDisplayedCurveIds([]); setSelectedIds([]); }} options={symbols.map((item) => ({ value: item, label: item }))} />
           </label>
           <label className="field library-folder-field">
             <span>策略搜索</span>
-            <Input value={searchText} onChange={(event) => { presetRequestRef.current += 1; setSearchText(event.target.value); setSelectedIds([]); }} placeholder="策略 / run / 变体 / 标签" />
+            <Input value={searchText} onChange={(event) => { presetRequestRef.current += 1; setPoolSelectionInitialized(false); setSearchText(event.target.value); setDisplayedCurveIds([]); setSelectedIds([]); }} placeholder="策略 / run / 变体 / 标签" />
           </label>
           <div className="field library-folder-field strategy-pool-preset-field">
-            <span>快捷选择</span>
+            <div className="strategy-pool-preset-head">
+              <span>快捷选择</span>
+              <div className="strategy-pool-limit-control">
+                <span>条数</span>
+                <InputNumber
+                  size="small"
+                  min={1}
+                  max={50}
+                  precision={0}
+                  controls={false}
+                  value={quickLimitDraft}
+                  onChange={(value) => setQuickLimitDraft(value === null ? null : Number(value))}
+                  onKeyDown={(event) => { if (event.key === "Enter") commitQuickLimit(); }}
+                />
+                <Button type="text" size="small" onClick={commitQuickLimit}>确定</Button>
+              </div>
+            </div>
             <div className="strategy-pool-preset-buttons">
               {([
-                ["all", "全部"],
+                ["all", `全部（${candidateItems.length}）`],
                 ["top_sharpe", "最高夏普"],
                 ["top_excess", "最高超额"],
                 ["recent", "最近"]
@@ -733,7 +828,7 @@ export default function PoolPage({
           endDate={curveEndDate}
           bounds={poolCurveDateBounds}
           onToggle={togglePoolItem}
-          onSelectAll={() => setSelectedIds(candidateItems.map((item) => String(item.pool_item_id)))}
+          onSelectAll={() => setSelectedIds(displayedCurveIds)}
           onClear={() => setSelectedIds([])}
           onStartDateChange={setCurveStartDate}
           onEndDateChange={setCurveEndDate}
@@ -753,13 +848,13 @@ export default function PoolPage({
       <section className="band library-shell">
         <div className="library-section-head"><div><h3>表现明细</h3><p>这里展示当前参与对比策略的核心指标。</p></div></div>
         <div className="library-table-wrap">
-          <Table rowKey="pool_item_id" columns={comparisonColumns} dataSource={compareItems} pagination={{ pageSize: 8 }} loading={loading} scroll={{ x: 960 }} className="workbench-table strategy-pool-detail-table" rowClassName={(record) => (record.pool_item_id === selectedDetailId ? "is-selected" : "")} />
+          <Table rowKey="pool_item_id" columns={comparisonColumns} dataSource={compareItems} pagination={{ pageSize: 8 }} loading={loading} tableLayout="fixed" scroll={{ x: 1042 }} className="workbench-table strategy-pool-detail-table" rowClassName={(record) => (record.pool_item_id === selectedDetailId ? "is-selected" : "")} />
         </div>
       </section>
 
       {detail && (
         <section className="band library-shell">
-          <div className="library-section-head"><div><h3>{strategyLabel(detail.pool_item)}</h3><p>{detail.pool_item?.pool_item_id}</p></div><div className="detail-head-actions"><span className="status-pill status-completed">completed</span><Button size="small" loading={continuingPoolItemId === String(detail.pool_item?.pool_item_id)} onClick={continueOptimizationFromPool}>继续参数优化</Button><Button size="small" danger disabled={Boolean(continuingPoolItemId)} onClick={() => handleDeletePoolItem(String(detail.pool_item?.pool_item_id))}>从池中移除</Button></div></div>
+          <div className="library-section-head"><div><h3>{strategyLabel(detail.pool_item)}</h3><p className="pool-detail-identity"><span>入池时间：{formatDate(detail.pool_item?.created_at).slice(0, 16)}</span><span>快照编号：{detail.pool_item?.pool_item_id || "-"}</span></p></div><div className="detail-head-actions"><span className="status-pill status-completed">completed</span><Button size="small" loading={continuingPoolItemId === String(detail.pool_item?.pool_item_id)} onClick={continueOptimizationFromPool}>继续参数优化</Button><Button size="small" danger disabled={Boolean(continuingPoolItemId)} onClick={() => handleDeletePoolItem(String(detail.pool_item?.pool_item_id))}>从池中移除</Button></div></div>
           <div className="library-metric-grid">
             <div className="library-metric-card"><span>{zh.sharpe}</span><strong>{formatNumber(detail.pool_item?.sharpe ?? metrics.sharpe ?? metrics.sharpe_ratio)}</strong></div>
             <div className="library-metric-card positive"><span>策略累计收益</span><strong>{detailCurveSummary.strategy ? formatReturnPct(detailCurveSummary.strategy.totalReturn, 2) : "-"}</strong></div>

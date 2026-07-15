@@ -53,6 +53,7 @@ class ManualGridOptimizer:
 
         candidate_results: list[dict[str, Any]] = []
         grid_summary: list[dict[str, Any]] = []
+        top_candidate_curves: list[dict[str, Any]] = []
         best_result: dict[str, Any] | None = None
         for index, candidate in enumerate(candidates, start=1):
             result = backtesting.run_backtest(
@@ -62,10 +63,8 @@ class ManualGridOptimizer:
                 parameters=dict(candidate["parameters"]),
                 config=dict(backtest_config or {}),
             )
-            metrics = enrich_metrics_with_curve_returns(
-                dict(result.get("metrics") or {}),
-                list(result.get("daily_results") or []),
-            )
+            daily_results = list(result.get("daily_results") or [])
+            metrics = enrich_metrics_with_curve_returns(dict(result.get("metrics") or {}), daily_results)
             score = score_metrics(metrics, objective) if result.get("success") else float("-inf")
             candidate_payload = {
                 "label": candidate["label"],
@@ -93,6 +92,16 @@ class ManualGridOptimizer:
             )
             if result.get("success") and (best_result is None or score > float(best_result["candidate"]["score"])):
                 best_result = {"candidate": candidate_payload, "backtest": result}
+            if result.get("success") and daily_results:
+                top_candidate_curves.append(
+                    {
+                        "label": str(candidate["label"]),
+                        "score": score,
+                        "daily_results": daily_results,
+                    }
+                )
+                top_candidate_curves.sort(key=lambda item: float(item.get("score", float("-inf"))), reverse=True)
+                del top_candidate_curves[10:]
             diagnostics.append(diagnostic("info", f"candidate {index}/{len(candidates)} evaluated", label=candidate["label"]))
             if progress_callback:
                 progress_callback(index, len(candidates), f"参数优化进行中 {index}/{len(candidates)} 组")
@@ -104,6 +113,7 @@ class ManualGridOptimizer:
                 "recommended": None,
                 "candidates": candidate_results,
                 "grid_summary": grid_summary,
+                "candidate_curves": [],
                 "best_result": None,
                 "diagnostics": diagnostics + [diagnostic("error", "all parameter candidates failed")],
                 "optimizer_name": self.optimizer_name,
@@ -115,6 +125,9 @@ class ManualGridOptimizer:
         for row in grid_summary:
             row["rank"] = rank_by_label.get(str(row["label"]), 0)
         grid_summary.sort(key=lambda item: (item["rank"] == 0, item["rank"] or 999999))
+        for candidate_curve in top_candidate_curves:
+            candidate_curve["rank"] = rank_by_label.get(str(candidate_curve["label"]), 0)
+        top_candidate_curves.sort(key=lambda item: int(item.get("rank") or 999999))
         recommended = dict(successful[0])
         diagnostics.append(diagnostic("info", f"selected {recommended['label']} as best manual grid parameters"))
         return {
@@ -122,6 +135,7 @@ class ManualGridOptimizer:
             "recommended": recommended,
             "candidates": candidate_results,
             "grid_summary": grid_summary,
+            "candidate_curves": top_candidate_curves,
             "best_result": best_result["backtest"],
             "diagnostics": diagnostics,
             "optimizer_name": self.optimizer_name,
@@ -135,6 +149,7 @@ class ManualGridOptimizer:
             "recommended": None,
             "candidates": [],
             "grid_summary": [],
+            "candidate_curves": [],
             "best_result": None,
             "diagnostics": diagnostics + [diagnostic("error", error)],
             "optimizer_name": self.optimizer_name,

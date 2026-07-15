@@ -6,7 +6,7 @@ import csv
 import json
 
 from backend.repositories import artifact_repository, run_repository, strategy_repository, variant_repository
-from backend.services import pool_service
+from backend.services import artifact_service, pool_service
 
 
 def _read_json(path: str | Path) -> dict[str, Any]:
@@ -135,6 +135,25 @@ def get_variant_curve(run_id: str, variant_name: str) -> dict[str, Any]:
         raise FileNotFoundError(f"Run not found: {run_id}")
     run_path = Path(str(run["runtime_path"]))
     return _read_csv(_variant_artifact_path(run_path, variant, "daily_results.csv"))
+
+
+def get_grid_candidate_curve(run_id: str, variant_name: str, candidate_label: str) -> dict[str, Any]:
+    run = run_repository.get_run(run_id)
+    if run is None:
+        raise FileNotFoundError(f"未找到运行记录：{run_id}")
+    variant = variant_repository.get_variant_by_run_and_name(run_id, variant_name)
+    if variant is None:
+        raise FileNotFoundError(f"未找到优化版本：{variant_name}")
+    path = artifact_service.candidate_curve_path(run_id, variant_name, candidate_label)
+    if not path.exists() or not path.is_file():
+        raise FileNotFoundError("该历史参数组合没有保存候选曲线；平台不会自动重新回测，请重新运行一次参数优化后再预览。")
+    payload = _read_csv(path)
+    return {
+        "run_id": run_id,
+        "variant_name": variant_name,
+        "candidate_label": candidate_label,
+        **payload,
+    }
 
 
 def get_variant_trades(run_id: str, variant_name: str) -> dict[str, Any]:

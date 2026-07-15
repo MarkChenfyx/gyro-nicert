@@ -14,6 +14,7 @@ import {
   getNaturalLanguageSource,
   getOptimizationMethods,
   getOptimizationSearchSpace,
+  getGridCandidateCurve,
   suggestOptimizationSearchSpace,
   getPoolItem,
   getVariantCurve,
@@ -102,6 +103,7 @@ import {
 
 
 type RangeField = "low" | "high" | "step";
+const GRID_PREVIEW_CURVE_KEY = "__grid_candidate_preview__";
 
 function parseGridParameters(parameters: unknown): Record<string, unknown> {
   if (parameters && typeof parameters === "object" && !Array.isArray(parameters)) {
@@ -136,6 +138,10 @@ function parseGridParameters(parameters: unknown): Record<string, unknown> {
         : rawValue;
   }
   return result;
+}
+
+function poolNamePrefix(value: unknown) {
+  return String(value || "").split("|", 1)[0].trim();
 }
 
 function parameterDraftValue(value: unknown): string | null {
@@ -258,7 +264,7 @@ export default function ParameterOptimizationPage({
   taskRunNavigation: TaskRunNavigation | null;
   onTaskRunApplied: (requestId: number) => void;
   refreshPool: () => Promise<void>;
-  onOpenPool: () => void;
+  onOpenPool: (poolItemId: string, vtSymbol: string) => void;
   refreshTasks: () => Promise<void>;
 }) {
   const persistedDraft = useMemo(() => loadOptimizeDraft(), []);
@@ -275,6 +281,8 @@ export default function ParameterOptimizationPage({
   const rangesRef = useRef(ranges);
   const [runDetail, setRunDetail] = useState<any>(null);
   const [variantCurves, setVariantCurves] = useState<Record<string, any[]>>({});
+  const [gridCandidatePreview, setGridCandidatePreview] = useState<{ label: string; rank: number; rows: any[] } | null>(null);
+  const [gridCandidateLoadingLabel, setGridCandidateLoadingLabel] = useState("");
   const [visibleCurveKeys, setVisibleCurveKeys] = useState<string[]>(Array.isArray(persistedDraft.visibleCurveKeys) ? persistedDraft.visibleCurveKeys.map(String) : []);
   const [curveStartDate, setCurveStartDate] = useState(String(persistedDraft.curveStartDate || ""));
   const [curveEndDate, setCurveEndDate] = useState(String(persistedDraft.curveEndDate || ""));
@@ -283,10 +291,20 @@ export default function ParameterOptimizationPage({
   const [suggestionLoading, setSuggestionLoading] = useState(false);
   const [suggestionProgress, setSuggestionProgress] = useState(0);
   const [spaceSuggestion, setSpaceSuggestion] = useState<any>(null);
+  const [parameterDetailsCollapsed, setParameterDetailsCollapsed] = useState(Boolean(persistedDraft.parameterDetailsCollapsed));
+  const [performanceDetailsCollapsed, setPerformanceDetailsCollapsed] = useState(Boolean(persistedDraft.performanceDetailsCollapsed));
   const [poolStrategyName, setPoolStrategyName] = useState("");
   const [poolNote, setPoolNote] = useState("");
   const [addingToPool, setAddingToPool] = useState(false);
   const runContextRequestRef = useRef(0);
+  const gridCandidateRequestRef = useRef(0);
+  const mainCurveSectionRef = useRef<HTMLElement | null>(null);
+
+  const clearGridCandidatePreview = useCallback(() => {
+    gridCandidateRequestRef.current += 1;
+    setGridCandidatePreview(null);
+    setGridCandidateLoadingLabel("");
+  }, []);
 
   useEffect(() => {
     rangesRef.current = ranges;
@@ -441,15 +459,16 @@ export default function ParameterOptimizationPage({
 
   useEffect(() => {
     if (!runId) return;
+    clearGridCandidatePreview();
     setOptimizationResult((current: any) => (String(current?.run?.run_id || "") === runId ? current : null));
     loadRunContext(runId).catch((error) => message.error(String(error)));
-  }, [runId]);
+  }, [clearGridCandidatePreview, runId]);
 
   const currentRun = runs.find((item) => item.run_id === runId);
   const runLineage = runDetail?.manifest?.lineage;
   const poolRunLineage = runLineage?.source_type === "pool_item" && runLineage?.operation === "rerun_as_baseline" ? runLineage : null;
   useEffect(() => {
-    setPoolStrategyName(String(currentRun?.strategy_name || runDetail?.strategy?.strategy_name || ""));
+    setPoolStrategyName(poolNamePrefix(currentRun?.strategy_name || runDetail?.strategy?.strategy_name || ""));
   }, [currentRun?.strategy_name, runDetail?.strategy?.strategy_name]);
   useEffect(() => {
     setPoolNote("");
@@ -468,6 +487,13 @@ export default function ParameterOptimizationPage({
     () => Object.fromEntries(Object.entries(variantCurves).map(([name, rows]) => [name, clampDateRange(rows, curveStartDate, curveEndDate)])),
     [curveEndDate, curveStartDate, variantCurves]
   );
+  const chartVariantCurves = useMemo(() => {
+    if (!gridCandidatePreview) return filteredVariantCurves;
+    return {
+      ...filteredVariantCurves,
+      [GRID_PREVIEW_CURVE_KEY]: clampDateRange(gridCandidatePreview.rows, curveStartDate, curveEndDate)
+    };
+  }, [curveEndDate, curveStartDate, filteredVariantCurves, gridCandidatePreview]);
   const primaryVariant = useMemo(
     () => curveVariantNames.find((name) => name !== "baseline") || curveVariantNames[0] || "baseline",
     [curveVariantNames]
@@ -515,6 +541,23 @@ export default function ParameterOptimizationPage({
   const updateRange = useCallback((name: string, key: RangeField, value: number | null) => {
     const current = rangesRef.current;
     const next = { ...current, [name]: { ...(current[name] || {}), [key]: cleanOptimizationNumber(value) } };
+    rangesRef.current = next;
+    setRanges(next);
+  }, []);
+
+  const updateRangeType = useCallback((name: string, nextType: "int" | "float") => {
+    const current = rangesRef.current;
+    const currentSpec = { ...(current[name] || {}) };
+    const nextSpec = nextType === "int"
+      ? {
+          ...currentSpec,
+          low: Number.isFinite(Number(currentSpec.low)) ? Math.round(Number(currentSpec.low)) : currentSpec.low,
+          high: Number.isFinite(Number(currentSpec.high)) ? Math.round(Number(currentSpec.high)) : currentSpec.high,
+          step: Number.isFinite(Number(currentSpec.step)) ? Math.max(1, Math.round(Number(currentSpec.step))) : 1,
+          type: "int"
+        }
+      : { ...currentSpec, type: "float" };
+    const next = { ...current, [name]: nextSpec };
     rangesRef.current = next;
     setRanges(next);
   }, []);
@@ -575,6 +618,7 @@ export default function ParameterOptimizationPage({
       message.error("请至少选择一个参数");
       return;
     }
+    clearGridCandidatePreview();
     setLoading(true);
     try {
       await refreshTasks();
@@ -621,7 +665,10 @@ export default function ParameterOptimizationPage({
         message.warning(`已加入策略池，但${diagnostic}`);
       }
       setPoolNote("");
-      onOpenPool();
+      onOpenPool(
+        String(payload?.pool_item_id || ""),
+        String(payload?.vt_symbol || currentRun?.vt_symbol || "")
+      );
     } catch (error) {
       message.error(String(error));
     } finally {
@@ -674,8 +721,25 @@ export default function ParameterOptimizationPage({
       dataIndex: "rangeStep",
       render: (value, record) => <ParameterNumberInput parameterName={record.name} field="step" parameterType={record.rangeType} value={value} stepValue={value} onCommit={updateRange} />
     },
-    { title: "类型", dataIndex: "type" }
-  ], [selectedParams, toggleSelectedParam, updateRange]);
+    {
+      title: "类型",
+      dataIndex: "rangeType",
+      width: 96,
+      render: (value, record) => (
+        <span title="默认按策略代码推断，可按本轮优化需要调整">
+          <Select<"int" | "float">
+            size="small"
+            value={value === "int" ? "int" : "float"}
+            onChange={(nextType) => updateRangeType(record.name, nextType)}
+            options={[
+              { value: "int", label: "整数" },
+              { value: "float", label: "小数" }
+            ]}
+          />
+        </span>
+      )
+    }
+  ], [selectedParams, toggleSelectedParam, updateRange, updateRangeType]);
 
   const performanceColumns: ColumnsType<any> = [
     { title: "版本", dataIndex: "label", width: 180 },
@@ -720,7 +784,6 @@ export default function ParameterOptimizationPage({
   const canUseStoredGridSummary = Array.isArray(runDetail?.variant_grid_summaries?.manual_grid)
     && runDetail.variant_grid_summaries.manual_grid.length > 0
     && storedManualGridObjective === objective;
-  const manualGridNeedsRerun = method === "manual_grid" && !canUseOptimizationResultGrid && !canUseStoredGridSummary && objective !== "sharpe";
   const manualGridTopRows = useMemo(() => {
     const rows = canUseOptimizationResultGrid
       ? optimizationResult.grid_summary
@@ -738,6 +801,32 @@ export default function ParameterOptimizationPage({
     })),
     [manualGridTopRows]
   );
+  async function toggleGridCandidatePreview(record: any) {
+    const candidateLabel = String(record?.label || "").trim();
+    const rank = Number(record?.rank || 0);
+    if (!candidateLabel || !runId || rank <= 0 || gridCandidateLoadingLabel === candidateLabel) return;
+    if (gridCandidatePreview?.label === candidateLabel) {
+      clearGridCandidatePreview();
+      return;
+    }
+    const requestId = ++gridCandidateRequestRef.current;
+    setParameterDetailsCollapsed(true);
+    setPerformanceDetailsCollapsed(true);
+    setGridCandidatePreview(null);
+    setGridCandidateLoadingLabel(candidateLabel);
+    try {
+      const payload = await getGridCandidateCurve(runId, "manual_grid", candidateLabel);
+      if (requestId !== gridCandidateRequestRef.current) return;
+      const rows = Array.isArray(payload?.data) ? payload.data : [];
+      if (!rows.length) throw new Error("该参数组合没有可展示的候选曲线。");
+      setGridCandidatePreview({ label: candidateLabel, rank, rows });
+      window.setTimeout(() => mainCurveSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 80);
+    } catch (error) {
+      if (requestId === gridCandidateRequestRef.current) message.warning(String(error));
+    } finally {
+      if (requestId === gridCandidateRequestRef.current) setGridCandidateLoadingLabel("");
+    }
+  }
   const manualGridParameterNames = useMemo(() => {
     const names = new Set<string>();
     for (const row of manualGridTableRows) {
@@ -751,7 +840,12 @@ export default function ParameterOptimizationPage({
       dataIndex: "rank",
       width: 68,
       fixed: "left" as const,
-      render: (value) => <strong className="optimizer-grid-rank">#{value}</strong>
+      render: (value, record) => (
+        <span className="optimizer-grid-rank-cell">
+          <strong className="optimizer-grid-rank">#{value}</strong>
+          {gridCandidateLoadingLabel === String(record?.label || "") && <small>加载中</small>}
+        </span>
+      )
     },
     ...manualGridParameterNames.map((name) => ({
       title: <span className="optimizer-grid-param-name" title={name}>{name}</span>,
@@ -779,7 +873,7 @@ export default function ParameterOptimizationPage({
       onHeaderCell: () => ({ className: objective === "sharpe" ? "optimizer-current-metric" : "" }),
       render: (value) => formatNumber(value, 2)
     }
-  ], [manualGridParameterNames, objective]);
+  ], [gridCandidateLoadingLabel, manualGridParameterNames, objective]);
   const manualGridTableWidth = 68 + manualGridParameterNames.length * 124 + 218;
 
   useEffect(() => {
@@ -829,6 +923,21 @@ export default function ParameterOptimizationPage({
     return rows;
   }, [curveVariantNames, filteredVariantCurves, primaryVariant]);
   const orderedCurveKeys = useMemo(() => curveSelectorItems.map((item) => item.key), [curveSelectorItems]);
+  const chartVisibleCurveKeys = useMemo(
+    () => gridCandidatePreview
+      ? Array.from(new Set([...visibleCurveKeys, GRID_PREVIEW_CURVE_KEY]))
+      : visibleCurveKeys,
+    [gridCandidatePreview, visibleCurveKeys]
+  );
+  const chartOrderedCurveKeys = useMemo(
+    () => gridCandidatePreview ? [...orderedCurveKeys, GRID_PREVIEW_CURVE_KEY] : orderedCurveKeys,
+    [gridCandidatePreview, orderedCurveKeys]
+  );
+  const chartCurveLabels = useMemo<Record<string, string>>(() => {
+    const labels: Record<string, string> = {};
+    if (gridCandidatePreview) labels[GRID_PREVIEW_CURVE_KEY] = `Grid #${gridCandidatePreview.rank}`;
+    return labels;
+  }, [gridCandidatePreview]);
 
   function toggleCurveVisibility(nextKey: string) {
     setVisibleCurveKeys((current) => current.includes(nextKey) ? current.filter((key) => key !== nextKey) : [...current, nextKey]);
@@ -861,7 +970,9 @@ export default function ParameterOptimizationPage({
       visibleCurveKeys,
       curveStartDate,
       curveEndDate,
-    }), [curveEndDate, curveStartDate, method, objective, poolVariant, ranges, runId, selectedFamily, selectedParams, visibleCurveKeys]);
+      parameterDetailsCollapsed,
+      performanceDetailsCollapsed,
+    }), [curveEndDate, curveStartDate, method, objective, parameterDetailsCollapsed, performanceDetailsCollapsed, poolVariant, ranges, runId, selectedFamily, selectedParams, visibleCurveKeys]);
   const latestOptimizeDraftRef = useRef(optimizeDraft);
   latestOptimizeDraftRef.current = optimizeDraft;
 
@@ -923,11 +1034,11 @@ export default function ParameterOptimizationPage({
           </label>
         </div>
         {poolRunLineage && (
-          <p className="band-note">来自策略池 · 原版本：{poolRunLineage.source_variant_name || poolRunLineage.source_variant_id || "-"} · 已重跑为 Baseline</p>
+          <p className="band-note">来自策略池 · 原版本：{poolRunLineage.source_variant || poolRunLineage.source_variant_name || poolRunLineage.source_variant_id || "-"} · 已重跑为 Baseline</p>
         )}
       </section>
 
-      <section className="band library-shell">
+      <section ref={mainCurveSectionRef} className="band library-shell">
         <div className="library-section-head">
           <div>
             <h3>累计收益对比</h3>
@@ -947,8 +1058,8 @@ export default function ParameterOptimizationPage({
           onEndDateChange={setCurveEndDate}
           onShortcut={applyCurveShortcut}
         />
-        {visibleCurveKeys.length > 0 && curveVariantNames.length > 0 ? (
-          <div className="library-curve-panel unified-curve-panel"><MultiVariantCurveChart curves={filteredVariantCurves} visibleKeys={visibleCurveKeys} orderedKeys={orderedCurveKeys} showLegend={false} height={420} /></div>
+        {chartVisibleCurveKeys.length > 0 && curveVariantNames.length > 0 ? (
+          <div className="library-curve-panel unified-curve-panel"><MultiVariantCurveChart curves={chartVariantCurves} visibleKeys={chartVisibleCurveKeys} labels={chartCurveLabels} orderedKeys={chartOrderedCurveKeys} showLegend={false} height={420} /></div>
         ) : curveVariantNames.length > 0 ? (
           <div className="empty-state">当前没有展示的曲线，可在上方重新勾选。</div>
         ) : (
@@ -962,19 +1073,31 @@ export default function ParameterOptimizationPage({
             <h3>绩效明细</h3>
             <p>这里统一展示当前 run 下各个 variant 的核心表现，不再显示参数列。</p>
           </div>
+          <Button type="text" size="small" className="section-collapse-toggle" onClick={() => setPerformanceDetailsCollapsed((current) => !current)}>
+            {performanceDetailsCollapsed ? "展开明细" : "收起明细"}
+          </Button>
         </div>
-        <Table rowKey="key" columns={performanceColumns} dataSource={performanceRows} pagination={false} scroll={{ x: 900 }} className="workbench-table performance-detail-table" />
+        {!performanceDetailsCollapsed && (
+          <Table rowKey="key" columns={performanceColumns} dataSource={performanceRows} pagination={false} scroll={{ x: 900 }} className="workbench-table performance-detail-table" />
+        )}
       </section>
 
       <section className="band library-shell">
         <div className="library-section-head optimization-mode-head">
           <div className="optimization-title-block">
-            <h3>参数优化</h3>
-            <p>生成或调整参数范围，确认后再运行所选优化器。</p>
-            <div className="optimization-suggestion-actions">
-              <Button loading={suggestionLoading} disabled={!runId} onClick={generateSpaceSuggestion}>AI 生成参数范围</Button>
-              <Button disabled={!runId || suggestionLoading} onClick={restoreStaticSpace}>恢复默认</Button>
+            <div className="collapsible-section-title">
+              <h3>参数优化</h3>
+              <Button type="text" size="small" className="section-collapse-toggle" onClick={() => setParameterDetailsCollapsed((current) => !current)}>
+                {parameterDetailsCollapsed ? "展开参数" : "收起参数"}
+              </Button>
             </div>
+            <p>生成或调整参数范围，确认后再运行所选优化器。</p>
+            {!parameterDetailsCollapsed && (
+              <div className="optimization-suggestion-actions">
+                <Button loading={suggestionLoading} disabled={!runId} onClick={generateSpaceSuggestion}>AI 生成参数范围</Button>
+                <Button disabled={!runId || suggestionLoading} onClick={restoreStaticSpace}>恢复默认</Button>
+              </div>
+            )}
           </div>
           <div className="optimization-mode-inline">
             <label>
@@ -1001,7 +1124,7 @@ export default function ParameterOptimizationPage({
             </span>
           </div>
         </div>
-        {suggestionProgress > 0 && (
+        {!parameterDetailsCollapsed && suggestionProgress > 0 && (
           <div className="optimization-ai-progress">
             <div>
               <strong>{suggestionProgress >= 100 ? "参数范围已生成" : "AI 正在分析策略参数"}</strong>
@@ -1010,36 +1133,37 @@ export default function ParameterOptimizationPage({
             <Progress percent={suggestionProgress} status={suggestionProgress >= 100 ? "success" : "active"} showInfo={false} />
           </div>
         )}
-        <div className="parameter-frame">
-          <Table rowKey="name" columns={parameterColumns} dataSource={parameterRows} pagination={false} className="workbench-table parameter-table" />
-        </div>
-        {(spaceSuggestion?.virtual_parameters || []).length > 0 && (
-          <div className="detail-grid optimizer-preview">
-            {(spaceSuggestion.virtual_parameters || []).map((item: any) => (
-              <div key={item.name}>
-                <Checkbox
-                  checked={selectedParams.includes(item.name)}
-                  onChange={(event) => setSelectedParams((current) => event.target.checked ? [...current, item.name] : current.filter((name) => name !== item.name))}
-                >{item.name}</Checkbox>
-                <div className="meta-inline">{(item.choices || []).join(" / ")}</div>
-                <div className="meta-inline">{item.reason}</div>
+        {!parameterDetailsCollapsed && (
+          <>
+            <div className="parameter-frame">
+              <Table rowKey="name" columns={parameterColumns} dataSource={parameterRows} pagination={false} className="workbench-table parameter-table" />
+            </div>
+            {(spaceSuggestion?.virtual_parameters || []).length > 0 && (
+              <div className="detail-grid optimizer-preview">
+                {(spaceSuggestion.virtual_parameters || []).map((item: any) => (
+                  <div key={item.name}>
+                    <Checkbox
+                      checked={selectedParams.includes(item.name)}
+                      onChange={(event) => setSelectedParams((current) => event.target.checked ? [...current, item.name] : current.filter((name) => name !== item.name))}
+                    >{item.name}</Checkbox>
+                    <div className="meta-inline">{(item.choices || []).join(" / ")}</div>
+                    <div className="meta-inline">{item.reason}</div>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
+            )}
+          </>
         )}
         <div className="action-row optimization-run-row">
           <Button type="primary" loading={loading} disabled={!runId || (method === "manual_grid" && !selectedParams.length)} onClick={submitOptimization}>
             运行优化
           </Button>
         </div>
-        {manualGridNeedsRerun && (
-          <div className="empty-state">当前这个 run 还没有按“超额收益”生成过手动网格排名，切换评分方式后需要重新运行一次手动优化。</div>
-        )}
         {method === "manual_grid" && manualGridTopRows.length > 0 && (
           <div className="optimizer-grid-results">
             <div className="optimizer-grid-results-head">
               <strong>参数组合 Top 10</strong>
-              <span>按当前评分方式排列</span>
+              <span>按当前评分方式排列 · 点击行预览曲线</span>
             </div>
             <Table
               rowKey="key"
@@ -1048,7 +1172,20 @@ export default function ParameterOptimizationPage({
               pagination={false}
               size="small"
               scroll={{ x: manualGridTableWidth }}
-              rowClassName={(record) => Number(record.rank) === 1 ? "optimizer-grid-first" : ""}
+              rowClassName={(record) => [
+                Number(record.rank) === 1 ? "optimizer-grid-first" : "",
+                gridCandidatePreview?.label === String(record.label || "") ? "optimizer-grid-preview-selected" : ""
+              ].filter(Boolean).join(" ")}
+              onRow={(record) => ({
+                tabIndex: 0,
+                onClick: () => toggleGridCandidatePreview(record),
+                onKeyDown: (event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    toggleGridCandidatePreview(record);
+                  }
+                }
+              })}
               className="workbench-table optimizer-grid-table"
             />
           </div>
@@ -1078,8 +1215,9 @@ export default function ParameterOptimizationPage({
             />
           </div>
           <div className="viewer-summary-card">
-            <span className="summary-label">入池名称</span>
-            <Input value={poolStrategyName} onChange={(event) => setPoolStrategyName(event.target.value)} placeholder="用于策略池展示的名称" />
+            <span className="summary-label">入池名称前缀</span>
+            <Input value={poolStrategyName} onChange={(event) => setPoolStrategyName(poolNamePrefix(event.target.value))} placeholder="只填写名称，版本由入池时间生成" />
+            <small className="pool-version-hint">入池后自动显示为“名称 | 快照版本”</small>
           </div>
           <div className="viewer-summary-card"><span className="summary-label">版本 Sharpe</span><strong>{formatNumber(poolVariantMetrics.sharpe ?? poolVariantMetrics.sharpe_ratio)}</strong></div>
           <div className="viewer-summary-card"><span className="summary-label">版本交易数</span><strong>{Number.isFinite(Number(poolVariantTradeCount)) ? String(poolVariantTradeCount) : "-"}</strong></div>

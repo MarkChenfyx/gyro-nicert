@@ -5,6 +5,7 @@ import json
 import re
 
 from strategy_generation.providers import build_provider
+from strategy_generation.validation import validate_open_order_volumes
 
 
 REPAIR_SYSTEM_PROMPT = """You repair Python vn.py CTA strategy code for the GYRO_NICERT research platform.
@@ -17,7 +18,9 @@ Platform compatibility rules:
 - The strategy class inherits CtaTemplate and remains a complete single-file strategy.
 - The returned class name must be a valid Python identifier and the code must be directly usable for backtesting.
 - Use fixed_size = 1 for orders. If use_dynamic_size exists, set it to 0.
-- Keep order volume based on fixed_size instead of account capital or target notional.
+- Every self.buy and self.short opening order must use exactly self.fixed_size as its volume argument.
+- Never use target_size, low_size, medium_size, a numeric literal, account capital, target notional, arithmetic, or another variable as the volume for self.buy or self.short.
+- If position sizing is part of the original logic, preserve its signal/filtering intent but convert every opening order to one unit with self.fixed_size.
 - Market data is supplied through on_bar. Do not add network, RQData, database, or backtesting-engine calls.
 - Do not invent missing trading logic. If an external dependency cannot be removed safely, keep the original logic and report a warning.
 
@@ -191,6 +194,7 @@ def repair_strategy_code(
                 "blocking_issues": reasons,
                 "error": error,
             }
+        validate_open_order_volumes(repaired_code)
         return {
             "status": "runnable",
             "success": True,

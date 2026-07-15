@@ -16,3 +16,4 @@ frontend/dist/
 *.tsbuildinfo
 *.log
 outputs/
+lab/

@@ -152,6 +152,39 @@ def _text(value: Any, default: str = "") -> str:
     return text or default
 
 
+def _pool_name_prefix(value: Any, default: str = "") -> str:
+    resolved = _text(value, default)
+    return resolved.split("|", 1)[0].strip()
+
+
+def _pool_version(item: dict[str, Any], manifest: dict[str, Any] | None = None) -> str:
+    explicit = _text(dict(manifest or {}).get("pool_version"))
+    if explicit:
+        return explicit
+    item_id = _text(item.get("pool_item_id"))
+    strategy_version = _text(item.get("strategy_version"))
+    if strategy_version and item_id == f"pool_{strategy_version}":
+        return strategy_version
+    return ""
+
+
+def _pool_item_view(item: dict[str, Any], manifest: dict[str, Any] | None = None) -> dict[str, Any]:
+    resolved = dict(item)
+    pool_version = _pool_version(resolved, manifest)
+    if not pool_version:
+        return {**resolved, "pool_strategy_name": resolved.get("strategy_name")}
+    name_prefix = _pool_name_prefix(resolved.get("strategy_name"), resolved.get("strategy_family") or "策略")
+    return {
+        **resolved,
+        "strategy_name": name_prefix,
+        "pool_strategy_name": name_prefix,
+        "strategy_version": pool_version,
+        "pool_version": pool_version,
+        "display_name": f"{name_prefix} | {pool_version}",
+        "source_strategy_version": _text(dict(manifest or {}).get("source_strategy_version")),
+    }
+
+
 def _validated_note(note: str | None) -> str:
     text = str(note or "")
     if len(text) > 500:
@@ -273,6 +306,8 @@ def _compare_item(detail: dict[str, Any]) -> dict[str, Any]:
         "pool_strategy_name": item.get("strategy_name") or manifest.get("pool_strategy_name"),
         "strategy_family": item.get("strategy_family"),
         "strategy_version": item.get("strategy_version"),
+        "pool_version": item.get("pool_version"),
+        "display_name": item.get("display_name"),
         "vt_symbol": item.get("vt_symbol"),
         "variant_name": variant_name,
         "created_at": item.get("created_at"),
@@ -298,6 +333,8 @@ def _compare_payload_from_parts(detail: dict[str, Any], *, metrics: dict[str, An
         "pool_strategy_name": item.get("strategy_name") or manifest.get("pool_strategy_name"),
         "strategy_family": item.get("strategy_family"),
         "strategy_version": item.get("strategy_version"),
+        "pool_version": item.get("pool_version"),
+        "display_name": item.get("display_name"),
         "vt_symbol": item.get("vt_symbol"),
         "variant_name": variant_name,
         "created_at": item.get("created_at"),
@@ -444,10 +481,15 @@ def add_variant_to_pool(
     result = _read_json(pool_path / "result.json")
     metrics = dict(result.get("metrics") or result)
     strategy = strategy_repository.get_strategy(str(run["strategy_id"])) or {}
-    resolved_strategy_name = _text(strategy_name) or str(strategy.get("strategy_name") or run.get("strategy_id") or "")
+    resolved_strategy_name = _pool_name_prefix(
+        strategy_name,
+        _pool_name_prefix(strategy.get("strategy_name"), run.get("strategy_id") or "策略"),
+    )
+    pool_version = _text(snapshot.get("pool_version"))
     manifest_path = pool_path / "manifest.json"
     manifest = _read_json(manifest_path)
     manifest["pool_strategy_name"] = resolved_strategy_name
+    manifest["strategy_name"] = f"{resolved_strategy_name} | {pool_version}"
     _write_json_atomic(manifest_path, manifest)
 
     pool_item = pool_repository.create_pool_item(
@@ -458,13 +500,14 @@ def add_variant_to_pool(
         pool_path=str(pool_path),
         strategy_name=resolved_strategy_name,
         strategy_family=str(strategy.get("strategy_family") or ""),
-        strategy_version=str(strategy.get("strategy_version") or ""),
+        strategy_version=pool_version,
         vt_symbol=vt_symbol,
         annual_return=_metric(metrics, "annual_return"),
         max_drawdown=_metric(metrics, "max_drawdown_pct", "max_ddpercent", "max_drawdown"),
         sharpe=_metric(metrics, "sharpe", "sharpe_ratio"),
         calmar=_metric(metrics, "calmar", "return_drawdown_ratio"),
         tags=tags,
+        created_at=_text(snapshot.get("created_at")) or None,
     )
 
     _artifact(pool_item_id, ArtifactType.MANIFEST.value, pool_path / "manifest.json")
@@ -497,23 +540,24 @@ def add_variant_to_pool(
         }
     refreshed_pool_item = pool_repository.get_pool_item(pool_item_id) or pool_item
     return {
-        **refreshed_pool_item,
+        **_pool_item_view(dict(refreshed_pool_item), manifest),
         "rerun": rerun,
         "rerun_succeeded": bool(rerun.get("items")),
     }
 
 
 def get_pool_item_detail(pool_item_id: str) -> dict[str, Any]:
-    item = pool_repository.get_pool_item(pool_item_id)
-    if item is None:
+    stored_item = pool_repository.get_pool_item(pool_item_id)
+    if stored_item is None:
         raise FileNotFoundError(f"Pool item not found: {pool_item_id}")
-    pool_path = Path(str(item["pool_path"]))
+    pool_path = Path(str(stored_item["pool_path"]))
     manifest_path = pool_path / "manifest.json"
     manifest = _read_json(manifest_path)
-    pool_strategy_name = _text(item.get("strategy_name"))
+    pool_strategy_name = _text(stored_item.get("strategy_name"))
     if pool_strategy_name and manifest.get("pool_strategy_name") != pool_strategy_name:
         manifest["pool_strategy_name"] = pool_strategy_name
         _write_json_atomic(manifest_path, manifest)
+    item = _pool_item_view(dict(stored_item), manifest)
     detail = {
         "pool_item": item,
         "pool_path": str(pool_path),
@@ -608,12 +652,13 @@ def continue_optimization_from_pool(pool_item_id: str) -> dict[str, Any]:
         manifest.get("source_variant_name") or manifest.get("variant_name") or item.get("source_variant_id"),
         "baseline",
     )
+    source_pool_version = _pool_version(item, manifest) or (pool_item_id[5:] if pool_item_id.startswith("pool_") else "")
     lineage = {
         "source_type": "pool_item",
-        "pool_item_id": pool_item_id,
-        "source_run_id": _text(item.get("source_run_id")),
-        "source_variant_id": _text(item.get("source_variant_id")),
-        "source_variant_name": original_variant,
+        "source_pool_item_id": pool_item_id,
+        "source_pool_version": source_pool_version,
+        "source_strategy_version": _text(manifest.get("source_strategy_version") or item.get("source_strategy_version") or item.get("strategy_version")),
+        "source_variant": original_variant,
         "operation": "rerun_as_baseline",
     }
     result_payload = dict(backtest_result)
@@ -662,7 +707,7 @@ def list_pool_items(
         order=order,
         limit=limit,
     )
-    return [{**item, "pool_strategy_name": item.get("strategy_name")} for item in items]
+    return [_pool_item_view(dict(item)) for item in items]
 
 
 def compare_pool_items(pool_item_ids: list[str] | None) -> dict[str, Any]:

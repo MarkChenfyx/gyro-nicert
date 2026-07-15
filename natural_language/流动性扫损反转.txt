@@ -1,0 +1,17 @@
+请生成一个 vn.py CTA 策略，使用平台传入的 1 分钟 K 线，在策略内部通过 BarGenerator 合成 15 分钟完整 K 线。策略支持多空双向、单位仓位，风格偏激进，核心是社区里常说的 Turtle Soup、流动性扫损和假突破反转。
+
+具体规则：
+
+1. 所有信号只能使用已经完成的 15 分钟 K 线，不得使用未来数据。滚动高低点必须排除当前 K 线。
+2. 计算 ATR(14)、EMA(40)、RSI(7)，以及此前 20 根完整 K 线的最低价 prior_low 和最高价 prior_high。
+3. 定义向下流动性扫损：当前最低价跌破 prior_low 至少 0.10 倍 ATR，但当前收盘价重新收回 prior_low 上方，且当前收盘价位于本根 K 线振幅的上半部分。
+4. 向下扫损出现后进入多头准备状态，只保留 2 根 K 线。准备状态期间，只要收盘价突破扫损 K 线最高价、RSI(7) 上穿 35，并且收盘价不低于 EMA(40) 超过 0.6 倍 ATR，就立即开多。
+5. 镜像定义向上流动性扫损：当前最高价突破 prior_high 至少 0.10 倍 ATR，但收盘价重新跌回 prior_high 下方，且收盘价位于本根振幅下半部分。随后 2 根内，收盘价跌破扫损 K 线最低价、RSI 下穿 65，并且收盘价不高于 EMA(40) 超过 0.6 倍 ATR时开空。
+6. 不要求长期均线绝对多头或空头，允许快速下跌后的反抽和快速上涨后的回落，以提高信号频率。
+7. 开仓时记录实际成交价和入场 ATR。多头止损/止盈为入场价减 1.2 ATR、加 1.8 ATR；空头镜像为入场价加 1.2 ATR、减 1.8 ATR。
+8. 多头还在 RSI 升至72后重新跌破65时退出；空头在 RSI 跌至28后重新升破35时退出；任一方向持仓超过12根 K 线也退出。
+9. 平仓后冷却 2 根 K 线。任何时候只允许一个方向的单位仓位，不加仓。
+10. 参数至少包括 sweep_lookback=20、atr_window=14、sweep_atr_buffer=0.10、ema_window=40、rsi_window=7、rsi_confirm=35、stop_atr=1.2、target_atr=1.8、max_holding_bars=12、cooldown_bars=2、bar_window=15、fixed_size=1。
+11. 开多使用 self.buy(..., self.fixed_size)，开空使用 self.short(..., self.fixed_size)；平多和平空分别使用 self.sell 和 self.cover，数量为 abs(self.pos)。不得读取外部文件、网络、CSV、Parquet 或历史信号表。
+
+策略类名使用 LiquiditySweepReversalStrategy，并完整实现 vn.py CTA 标准回调、BarGenerator、ArrayManager、准备状态、成交价和持仓计数。

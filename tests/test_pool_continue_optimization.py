@@ -89,10 +89,10 @@ def test_continue_optimization_reruns_pool_snapshot_as_new_baseline(tmp_path, mo
     assert captured["baseline"]["related_pool_item_id"] == "pool_1"
     assert captured["baseline"]["manifest_lineage"] == {
         "source_type": "pool_item",
-        "pool_item_id": "pool_1",
-        "source_run_id": "run_deleted",
-        "source_variant_id": "variant_manual_grid",
-        "source_variant_name": "manual_grid",
+        "source_pool_item_id": "pool_1",
+        "source_pool_version": "1",
+        "source_strategy_version": "",
+        "source_variant": "manual_grid",
         "operation": "rerun_as_baseline",
     }
 

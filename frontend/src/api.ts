@@ -162,6 +162,10 @@ export function getVariantCurve(runId: string, variantName: string) {
   return request<any>(`/api/runs/${encodeURIComponent(runId)}/variants/${encodeURIComponent(variantName)}/curve`);
 }
 
+export function getGridCandidateCurve(runId: string, variantName: string, candidateLabel: string) {
+  return request<any>(`/api/runs/${encodeURIComponent(runId)}/variants/${encodeURIComponent(variantName)}/candidates/${encodeURIComponent(candidateLabel)}/curve`);
+}
+
 export function addToPool(runId: string, variantName = "baseline", vtSymbol?: string, strategyName?: string, note?: string) {
   return request<any>("/api/pool/add", {
     method: "POST",

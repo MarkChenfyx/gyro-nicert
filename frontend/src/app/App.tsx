@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Button, Checkbox, ConfigProvider, Drawer, Input, InputNumber, Modal, Progress, Select, Table, Tag, message } from "antd";
+import { AutoComplete, Button, Checkbox, ConfigProvider, Drawer, Input, InputNumber, Modal, Progress, Select, Table, Tag, message } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import * as echarts from "echarts/core";
 import { LineChart } from "echarts/charts";
@@ -39,9 +39,16 @@ import {
 
 export type PageKey = "launch" | "generate" | "optimize" | "pool";
 export type TaskRunNavigation = { runId: string; requestId: number };
+export type PoolNavigation = { poolItemId: string; vtSymbol: string; requestId: number };
 export const PAGE_STORAGE_KEY = "gyro_nicert.active_page";
 export const OPTIMIZE_DRAFT_STORAGE_KEY = "gyro_nicert.optimize_draft";
 export const BENCHMARK_CURVE_COLOR = "#475569";
+export const LAUNCH_SYMBOL_OPTIONS = [
+  { value: "511380.SSE", slippage: 0.002 },
+  { value: "510300.SSE", slippage: 0.001 },
+  { value: "510500.SSE", slippage: 0.001 },
+  { value: "512100.SSE", slippage: 0.001 }
+] as const;
 
 echarts.use([
   LineChart,
@@ -327,6 +334,98 @@ export type LocalStrategyFile = {
   repairWarnings?: string[];
 };
 
+export const LAUNCH_DRAFT_STORAGE_KEY = "gyro_nicert.launch_draft.v1";
+export const SOURCE_SORT_STORAGE_KEY = "gyro_nicert.source_sort.v1";
+export type SourceSortMode = "name" | "modified";
+
+const SOURCE_SEARCH_ALIASES: Array<[string[], string]> = [
+  [["布林"], "bulin bulindai bollinger band"],
+  [["流动性", "扫损"], "liudongxing saosun liquidity sweep turtle soup"],
+  [["挤压"], "jiya squeeze ttm"],
+  [["释放"], "shifang release"],
+  [["混沌"], "hundun choppiness"],
+  [["指数"], "zhishu index"],
+  [["双状态"], "shuangzhuangtai dual regime"],
+  [["母线"], "muxian mother bar inside bar"],
+  [["压缩"], "yasuo compression"],
+  [["放量"], "fangliang volume"],
+  [["突破"], "tupo breakout"],
+  [["极值"], "jizhi extreme"],
+  [["弹射"], "tanshe bounce"],
+  [["波动率"], "bodonglv volatility"],
+  [["收敛"], "shoulian contraction squeeze"],
+  [["线性回归"], "xianxinghuigui linear regression"],
+  [["斜率"], "xielv slope"],
+  [["均线"], "junxian moving average ma"],
+  [["回踩"], "huicai pullback"],
+  [["唐奇安"], "tangqian donchian"],
+  [["趋势"], "qushi trend"],
+  [["日线"], "rixian daily"],
+  [["防守"], "fangshou defensive"],
+  [["超跌"], "chaodie oversold"],
+  [["反弹"], "fantan rebound"],
+  [["择时"], "zeshi timing"],
+  [["日内"], "rinei intraday"],
+  [["九转"], "jiuzhuan td sequential"],
+  [["两仪四象"], "liangyisixiang"],
+  [["开盘区间"], "kaipan qujian opening range orb"],
+  [["海龟"], "haigui turtle"]
+];
+
+function sourceSearchCorpus(filename: string): string {
+  const normalizedName = filename.toLocaleLowerCase();
+  const aliases = SOURCE_SEARCH_ALIASES
+    .filter(([terms]) => terms.some((term) => normalizedName.includes(term)))
+    .map(([, value]) => value);
+  return [normalizedName, ...aliases].join(" ");
+}
+
+function loadSourceSortMode(): SourceSortMode {
+  try {
+    return window.localStorage.getItem(SOURCE_SORT_STORAGE_KEY) === "modified" ? "modified" : "name";
+  } catch {
+    return "name";
+  }
+}
+
+type LaunchDraft = {
+  inputMode: "natural_language" | "manual_code" | "local_code";
+  selectedFile: string;
+  manualStrategyName: string;
+  manualStrategyCode: string;
+  localStrategyFiles: LocalStrategyFile[];
+  selectedLocalPath: string;
+  vtSymbolInput: string;
+  interval: string;
+  startDate: string;
+  endDate: string;
+  rate: number | null;
+  slippage: number | null;
+};
+
+function loadLaunchDraft(): Partial<LaunchDraft> {
+  try {
+    const payload = JSON.parse(window.localStorage.getItem(LAUNCH_DRAFT_STORAGE_KEY) || "{}");
+    if (!payload || typeof payload !== "object") return {};
+    const localStrategyFiles = Array.isArray(payload.localStrategyFiles)
+      ? payload.localStrategyFiles.filter((file: any) =>
+          file && typeof file.name === "string" && typeof file.relativePath === "string" && typeof file.code === "string"
+        ).slice(0, 1)
+      : [];
+    return { ...payload, localStrategyFiles };
+  } catch {
+    return {};
+  }
+}
+
+function saveLaunchDraft(payload: LaunchDraft) {
+  try {
+    window.localStorage.setItem(LAUNCH_DRAFT_STORAGE_KEY, JSON.stringify(payload));
+  } catch {
+    // Storage may be disabled or full. The launch page must remain usable.
+  }
+}
+
 export type StrategyRepairUiStatus = "runnable" | "warning" | "failed";
 
 export function normalizeStrategyRepairResponse(payload: any): {
@@ -336,25 +435,44 @@ export function normalizeStrategyRepairResponse(payload: any): {
 } {
   const status = String(payload?.status || "").trim().toLowerCase();
   const strategyCode = typeof payload?.strategy_code === "string" ? payload.strategy_code : "";
-  const changes = Array.isArray(payload?.changes) ? payload.changes.map(String).filter(Boolean) : [];
-  const reasons = Array.isArray(payload?.reasons) ? payload.reasons.map(String).filter(Boolean) : [];
+  const uniqueItems = (...groups: any[]) => Array.from(new Set(
+    groups.flatMap((group) => Array.isArray(group) ? group : []).map((item) => String(item).trim()).filter(Boolean)
+  ));
+  const changes = uniqueItems(payload?.changes);
+  const reasons = uniqueItems(payload?.reasons, payload?.warnings, payload?.blocking_issues);
+  const error = String(payload?.error || "").trim();
+  const detailSections = (sections: Array<[string, string[]]>) => sections
+    .filter(([, items]) => items.length)
+    .map(([label, items]) => `${label}\n${items.map((item) => `• ${item}`).join("\n")}`)
+    .join("\n");
   if (status === "runnable" && strategyCode.trim()) {
     return {
       status: "runnable",
-      detail: changes.length ? changes.slice(0, 2).join("；") : "修正后的代码已可在平台独立运行",
+      detail: changes.length
+        ? detailSections([["已完成修改：", changes]])
+        : "修正后的代码已可在平台独立运行",
       strategyCode
     };
   }
   if (status === "warning") {
     return {
       status: "warning",
-      detail: reasons.length ? reasons.join("；") : "AI 判断代码仍需人工处理",
+      detail: detailSections([
+        ["已尝试修改：", changes],
+        ["仍需人工处理：", reasons.length ? reasons : ["AI 判断代码仍需人工处理"]]
+      ]),
       strategyCode: ""
     };
   }
+  const failureReasons = uniqueItems(reasons, error ? [error] : []);
   return {
     status: "failed",
-    detail: String(payload?.error || reasons[0] || (status === "runnable" ? "AI 修正没有返回可用代码" : "AI 返回格式错误或修正失败")),
+    detail: detailSections([
+      ["已尝试修改：", changes],
+      ["失败原因：", failureReasons.length
+        ? failureReasons
+        : [status === "runnable" ? "AI 修正没有返回可用代码" : "AI 返回格式错误或修正失败"]]
+    ]),
     strategyCode: ""
   };
 }
@@ -402,7 +520,11 @@ export function strategyVersion(item: any) {
 }
 
 export function strategyLabel(item: any) {
+  const displayName = String(item?.display_name || "").trim();
+  if (displayName) return displayName;
   const explicitName = String(item?.pool_strategy_name || item?.strategy_name || "").trim();
+  const poolVersion = String(item?.pool_version || "").trim();
+  if (explicitName && poolVersion) return `${explicitName} | ${poolVersion}`;
   if (explicitName) return explicitName;
   const family = strategyFamily(item);
   const version = strategyVersion(item);
@@ -800,15 +922,25 @@ export function buildCumulativeChartOption(series: NormalizedCurveSeries[], date
         return point ? point.value : null;
       })
       })),
-      ...series.filter((item) => item.type === "strategy").map((item, index) => ({
+      ...[...series]
+        .sort((left, right) => Number(left.type === "strategy") - Number(right.type === "strategy"))
+        .map((item, index) => ({
         name: `${item.label} 回撤`,
         type: "line",
         xAxisIndex: 1,
         yAxisIndex: 1,
         showSymbol: false,
         smooth: false,
-        lineStyle: { color: curveColorForKey(item.key, item.label, item.type, orderedKeys, index), width: 1.5, opacity: 0.7 },
-        areaStyle: { color: "rgba(220,38,38,0.14)" },
+        z: item.type === "benchmark" ? 1 : 2,
+        lineStyle: {
+          color: curveColorForKey(item.key, item.label, item.type, orderedKeys, index),
+          width: item.type === "benchmark" ? 1.2 : 1.5,
+          type: item.type === "benchmark" ? "dashed" : "solid",
+          opacity: 0.72
+        },
+        areaStyle: {
+          color: item.type === "benchmark" ? "rgba(71,85,105,0.12)" : "rgba(220,38,38,0.14)"
+        },
         data: dates.map((date) => {
           const point = item.drawdownPoints.find((entry) => entry.date === date);
           return point ? point.value : null;
@@ -845,7 +977,7 @@ export function CurveChart({ rows, height = 340, showLegend = true }: { rows: an
     <div className="curve-chart-shell">
       <div className="curve-chart-heading">
         <div><strong>单位仓位累计收益</strong><span>固定数量 · 非复利</span></div>
-        <span>下方为策略回撤</span>
+        <span>下方为策略与 B&amp;H 回撤</span>
       </div>
       <div ref={ref} className="curve-canvas" style={{ height }} />
       {showLegend && series.length > 0 && (
@@ -955,7 +1087,7 @@ function MultiVariantCurveChartComponent({
     <div className="curve-chart-shell">
       <div className="curve-chart-heading">
         <div><strong>单位仓位累计收益</strong><span>固定数量 · 非复利</span></div>
-        <span>下方为策略回撤</span>
+        <span>下方为策略与 B&amp;H 回撤</span>
       </div>
       <div ref={ref} className="curve-canvas" style={{ height }} />
       {showLegend && series.length > 0 && (
@@ -1228,31 +1360,44 @@ export function LaunchFlowPage({
   onWorkflowChange: (patch: Partial<WorkflowUiState>) => void;
   refreshTasks: () => Promise<void>;
 }) {
+  const restoredLaunchDraft = useMemo(loadLaunchDraft, []);
   const fallbackSourceFiles = SOURCE_FILES.map((name) => ({ name }));
   const [sourceFiles, setSourceFiles] = useState<SourceFile[]>(fallbackSourceFiles);
-  const [inputMode, setInputMode] = useState<"natural_language" | "manual_code" | "local_code">("natural_language");
-  const [selectedFile, setSelectedFile] = useState(SOURCE_FILES[0] || "");
+  const [sourceSortMode, setSourceSortMode] = useState<SourceSortMode>(loadSourceSortMode);
+  const [sourceSearch, setSourceSearch] = useState("");
+  const [inputMode, setInputMode] = useState<"natural_language" | "manual_code" | "local_code">(() =>
+    ["natural_language", "manual_code", "local_code"].includes(String(restoredLaunchDraft.inputMode))
+      ? restoredLaunchDraft.inputMode as "natural_language" | "manual_code" | "local_code"
+      : "natural_language"
+  );
+  const [selectedFile, setSelectedFile] = useState(() => String(restoredLaunchDraft.selectedFile || SOURCE_FILES[0] || ""));
   const [sourceText, setSourceText] = useState("");
   const [savedSourceText, setSavedSourceText] = useState("");
   const [isCreatingSource, setIsCreatingSource] = useState(false);
   const [newSourceFilename, setNewSourceFilename] = useState("");
-  const [manualStrategyName, setManualStrategyName] = useState("");
-  const [manualStrategyCode, setManualStrategyCode] = useState("");
-  const [localStrategyFiles, setLocalStrategyFiles] = useState<LocalStrategyFile[]>([]);
-  const [selectedLocalPath, setSelectedLocalPath] = useState("");
+  const [manualStrategyName, setManualStrategyName] = useState(() => String(restoredLaunchDraft.manualStrategyName || ""));
+  const [manualStrategyCode, setManualStrategyCode] = useState(() => String(restoredLaunchDraft.manualStrategyCode || ""));
+  const [localStrategyFiles, setLocalStrategyFiles] = useState<LocalStrategyFile[]>(() => restoredLaunchDraft.localStrategyFiles || []);
+  const [selectedLocalPath, setSelectedLocalPath] = useState(() => String(restoredLaunchDraft.selectedLocalPath || restoredLaunchDraft.localStrategyFiles?.[0]?.relativePath || ""));
   const localFolderInputRef = useRef<HTMLInputElement>(null);
-  const [vtSymbolInput, setVtSymbolInput] = useState("511380.SSE");
-  const [interval, setInterval] = useState("1m");
-  const [startDate, setStartDate] = useState("2025-01-02");
-  const [endDate, setEndDate] = useState("2026-06-25");
-  const [rate, setRate] = useState<number | null>(0.000045);
-  const [slippage, setSlippage] = useState<number | null>(0.002);
+  const [vtSymbolInput, setVtSymbolInput] = useState(() => String(restoredLaunchDraft.vtSymbolInput || "511380.SSE"));
+  const [interval, setInterval] = useState(() => String(restoredLaunchDraft.interval || "1m"));
+  const [startDate, setStartDate] = useState(() => String(restoredLaunchDraft.startDate || "2025-01-02"));
+  const [endDate, setEndDate] = useState(() => String(restoredLaunchDraft.endDate || "2026-06-25"));
+  const [rate, setRate] = useState<number | null>(() => typeof restoredLaunchDraft.rate === "number" ? restoredLaunchDraft.rate : 0.000045);
+  const [slippage, setSlippage] = useState<number | null>(() => typeof restoredLaunchDraft.slippage === "number" ? restoredLaunchDraft.slippage : 0.002);
   const [loadingResearch, setLoadingResearch] = useState(false);
   const [loadingSources, setLoadingSources] = useState(false);
   const [savingSource, setSavingSource] = useState(false);
   const [repairingLocalCode, setRepairingLocalCode] = useState(false);
   const [localRepairProgress, setLocalRepairProgress] = useState(0);
   const [localRepairFeedback, setLocalRepairFeedback] = useState<{
+    status: StrategyRepairUiStatus;
+    detail: string;
+  } | null>(null);
+  const [repairingManualCode, setRepairingManualCode] = useState(false);
+  const [manualRepairProgress, setManualRepairProgress] = useState(0);
+  const [manualRepairFeedback, setManualRepairFeedback] = useState<{
     status: StrategyRepairUiStatus;
     detail: string;
   } | null>(null);
@@ -1265,13 +1410,75 @@ export function LaunchFlowPage({
   const canRunSource = inputMode === "natural_language"
     ? canRunNaturalLanguage
     : inputMode === "local_code" ? canRunLocalCode : canRunManualCode;
+  const sortedSourceFiles = useMemo(() => [...sourceFiles].sort((left, right) => {
+    if (sourceSortMode === "modified") {
+      const modifiedDifference = Date.parse(right.modified_at || "") - Date.parse(left.modified_at || "");
+      if (Number.isFinite(modifiedDifference) && modifiedDifference !== 0) return modifiedDifference;
+    }
+    return left.name.localeCompare(right.name, "zh-CN", { numeric: true, sensitivity: "base" });
+  }), [sourceFiles, sourceSortMode]);
+  const visibleSourceFiles = useMemo(() => {
+    const keywords = sourceSearch.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
+    if (keywords.length === 0) return sortedSourceFiles;
+    return sortedSourceFiles.filter((file) => {
+      const searchCorpus = sourceSearchCorpus(file.name);
+      return keywords.every((keyword) => searchCorpus.includes(keyword));
+    });
+  }, [sortedSourceFiles, sourceSearch]);
   const mountedRef = useRef(true);
+  const latestLaunchDraftRef = useRef<LaunchDraft>({
+    inputMode,
+    selectedFile,
+    manualStrategyName,
+    manualStrategyCode,
+    localStrategyFiles,
+    selectedLocalPath,
+    vtSymbolInput,
+    interval,
+    startDate,
+    endDate,
+    rate,
+    slippage
+  });
+  latestLaunchDraftRef.current = {
+    inputMode,
+    selectedFile,
+    manualStrategyName,
+    manualStrategyCode,
+    localStrategyFiles,
+    selectedLocalPath,
+    vtSymbolInput,
+    interval,
+    startDate,
+    endDate,
+    rate,
+    slippage
+  };
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(SOURCE_SORT_STORAGE_KEY, sourceSortMode);
+    } catch {
+      // Sorting remains usable when local storage is unavailable.
+    }
+  }, [sourceSortMode]);
 
   useEffect(() => {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
     };
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => saveLaunchDraft(latestLaunchDraftRef.current), 500);
+    return () => window.clearTimeout(timer);
+  }, [inputMode, selectedFile, manualStrategyName, manualStrategyCode, localStrategyFiles, selectedLocalPath, vtSymbolInput, interval, startDate, endDate, rate, slippage]);
+
+  useEffect(() => {
+    const saveLatestDraft = () => saveLaunchDraft(latestLaunchDraftRef.current);
+    window.addEventListener("beforeunload", saveLatestDraft);
+    return () => window.removeEventListener("beforeunload", saveLatestDraft);
   }, []);
 
   useEffect(() => {
@@ -1283,6 +1490,16 @@ export function LaunchFlowPage({
     }, 500);
     return () => window.clearInterval(timer);
   }, [repairingLocalCode]);
+
+  useEffect(() => {
+    if (!repairingManualCode) return;
+    const timer = window.setInterval(() => {
+      setManualRepairProgress((current) => current >= 100
+        ? 100
+        : Math.min(92, current + Math.max(1, Math.ceil((92 - current) * 0.12))));
+    }, 500);
+    return () => window.clearInterval(timer);
+  }, [repairingManualCode]);
 
   async function refreshSourceFiles(preferredSelection?: string) {
     setLoadingSources(true);
@@ -1349,7 +1566,9 @@ export function LaunchFlowPage({
 
   function selectSourceFile(filename: string) {
     if (isCreatingSource) {
-      message.warning("切换前请先保存或取消当前新建文本");
+      setIsCreatingSource(false);
+      setNewSourceFilename("");
+      void loadSourceText(filename);
       return;
     }
     if (isSourceDirty) {
@@ -1483,6 +1702,44 @@ export function LaunchFlowPage({
       message.error(detail);
     } finally {
       setRepairingLocalCode(false);
+    }
+  }
+
+  async function repairManualStrategyCode() {
+    if (!manualStrategyCode.trim()) {
+      message.warning("请先粘贴需要修正的策略代码");
+      return;
+    }
+    setManualRepairProgress(6);
+    setManualRepairFeedback(null);
+    setRepairingManualCode(true);
+    try {
+      const payload = await repairStrategyCode({
+        strategy_name: manualStrategyName.trim() || "粘贴策略",
+        strategy_code: manualStrategyCode,
+        vt_symbol: vtSymbolInput.trim(),
+        interval
+      });
+      const feedback = normalizeStrategyRepairResponse(payload);
+      setManualRepairProgress(100);
+      setManualRepairFeedback({ status: feedback.status, detail: feedback.detail });
+      if (feedback.status === "warning") {
+        message.warning("AI 判断代码仍需人工处理，已保留原回测代码");
+        return;
+      }
+      if (feedback.status === "failed") {
+        message.error(`AI 修正失败：${feedback.detail}`);
+        return;
+      }
+      setManualStrategyCode(feedback.strategyCode);
+      message.success("AI 修正完成，启动回测时将使用修正后的代码");
+    } catch (error) {
+      const detail = "AI 修正请求失败，请检查接口配置或网络后重试";
+      setManualRepairProgress(100);
+      setManualRepairFeedback({ status: "failed", detail });
+      message.error(detail);
+    } finally {
+      setRepairingManualCode(false);
     }
   }
 
@@ -1688,14 +1945,33 @@ export function LaunchFlowPage({
             {inputMode === "natural_language" && (
               <>
                 <section className="field span-2">
-                  <div className="field-head">
+                  <div className="field-head source-file-head">
                     <span>{zh.sourceFiles}</span>
-                    <div className="field-actions">
-                      <button className="mini-button" type="button" onClick={startCreateSource}>{zh.newSource}</button>
+                    <div className="field-actions source-file-actions">
+                      <Input
+                        allowClear
+                        className="source-search-input"
+                        size="small"
+                        value={sourceSearch}
+                        onChange={(event) => setSourceSearch(event.target.value)}
+                        placeholder="搜索文件名 / 拼音 / 英文"
+                      />
+                      <Select<SourceSortMode>
+                        aria-label="自然语言文本排序"
+                        className="source-sort-select"
+                        size="small"
+                        value={sourceSortMode}
+                        onChange={setSourceSortMode}
+                        options={[
+                          { value: "name", label: "按名称" },
+                          { value: "modified", label: "最近编辑" }
+                        ]}
+                      />
+                      <button className="mini-button source-new-button" type="button" onClick={startCreateSource}>{zh.newSource}</button>
                     </div>
                   </div>
                   <div className="source-checklist" aria-busy={loadingSources}>
-                    {sourceFiles.map((file) => (
+                    {visibleSourceFiles.map((file) => (
                       <button
                         type="button"
                         key={file.name}
@@ -1707,6 +1983,7 @@ export function LaunchFlowPage({
                         <small>{file.size ? `${file.size} 字节` : "本地 txt"}</small>
                       </button>
                     ))}
+                    {visibleSourceFiles.length === 0 && <div className="source-search-empty">没有匹配的文本</div>}
                   </div>
                 </section>
 
@@ -1741,9 +2018,35 @@ export function LaunchFlowPage({
                 <section className="field span-2">
                   <div className="field-head">
                     <span>{zh.strategyCodeInput}</span>
-                    <span className="meta-inline">直接粘贴完整 strategy.py</span>
+                    <div className="inline-input-row">
+                      <span className="meta-inline">直接粘贴完整 strategy.py</span>
+                      <Button size="small" disabled={!manualStrategyCode.trim()} loading={repairingManualCode} onClick={repairManualStrategyCode}>AI 修正代码</Button>
+                    </div>
                   </div>
-                  <Input.TextArea rows={12} value={manualStrategyCode} onChange={(event) => setManualStrategyCode(event.target.value)} placeholder="from vnpy_ctastrategy import CtaTemplate ..." />
+                  <Input.TextArea rows={12} value={manualStrategyCode} onChange={(event) => { setManualStrategyCode(event.target.value); setManualRepairProgress(0); setManualRepairFeedback(null); }} placeholder="from vnpy_ctastrategy import CtaTemplate ..." />
+                  {(repairingManualCode || manualRepairFeedback) && (
+                    <div className={`ai-repair-mini ${manualRepairFeedback ? `is-${manualRepairFeedback.status}` : ""}`}>
+                      <span className="ai-repair-mini-label">
+                        {repairingManualCode
+                          ? "AI 正在修正"
+                          : manualRepairFeedback?.status === "runnable"
+                            ? "修正成功"
+                            : manualRepairFeedback?.status === "warning"
+                              ? "需要人工处理"
+                              : "修正失败"}
+                      </span>
+                      <Progress
+                        percent={manualRepairProgress}
+                        status={manualRepairFeedback?.status === "failed" ? "exception" : manualRepairFeedback?.status === "runnable" ? "success" : "active"}
+                        strokeColor={manualRepairFeedback?.status === "warning" ? "#d97706" : undefined}
+                        showInfo={false}
+                        strokeWidth={3}
+                      />
+                      <span className="ai-repair-mini-result">
+                        {repairingManualCode ? `${manualRepairProgress}%` : manualRepairFeedback?.detail}
+                      </span>
+                    </div>
+                  )}
                 </section>
               </>
             )}
@@ -1818,7 +2121,7 @@ export function LaunchFlowPage({
                 <span className="meta-inline">仅支持单一标的</span>
               </div>
               <div className="pipeline-config-grid">
-                <label className="field"><span>{zh.symbol}</span><Input value={vtSymbolInput} onChange={(event) => setVtSymbolInput(event.target.value)} placeholder="510300.SSE" /></label>
+                <label className="field"><span>{zh.symbol}</span><AutoComplete value={vtSymbolInput} options={LAUNCH_SYMBOL_OPTIONS.map(({ value }) => ({ value }))} onChange={(value) => { setVtSymbolInput(value); const matched = LAUNCH_SYMBOL_OPTIONS.find((item) => item.value === value.trim().toUpperCase()); if (matched) setSlippage(matched.slippage); }} placeholder="SYMBOL.EXCHANGE" /></label>
                 <label className="field"><span>{zh.interval}</span><Input value={interval} onChange={(event) => setInterval(event.target.value)} /></label>
                 <label className="field"><span>{zh.rate}</span><InputNumber min={0} step={0.000001} value={rate} onChange={(value) => setRate(typeof value === "number" ? value : null)} /></label>
                 <label className="field"><span>{zh.startDate}</span><Input type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} /></label>
@@ -1964,6 +2267,7 @@ export function StrategyGenerationPage({
   const [visibleCurveKeys, setVisibleCurveKeys] = useState<string[]>(["baseline", "buy_hold"]);
   const [curveStartDate, setCurveStartDate] = useState("");
   const [curveEndDate, setCurveEndDate] = useState("");
+  const [diagnosticsExpanded, setDiagnosticsExpanded] = useState(false);
   const workflowRunId = lastResearch?.baseline?.run?.run_id || "";
   const generationPayload = lastResearch?.generation || lastGenerated;
   const generation = generationPayload?.generation || {};
@@ -1973,6 +2277,9 @@ export function StrategyGenerationPage({
     ...(Array.isArray(generation?.diagnostics) ? generation.diagnostics : []),
     ...(Array.isArray(lastResearch?.backtest?.diagnostics) ? lastResearch.backtest.diagnostics : [])
   ];
+  const hasDiagnosticError = diagnostics.some((item: any) =>
+    ["error", "failed", "fatal"].includes(String(item?.level || item?.status || "").toLowerCase())
+  );
   const selectedStrategy = selectedRunDetail?.strategy || strategy;
   const selectedMetrics = selectedRunDetail?.baseline_result?.metrics || fallbackMetrics;
   const code = selectedRunDetail?.strategy_code || generation?.strategy_code || "";
@@ -2014,6 +2321,10 @@ export function StrategyGenerationPage({
       : (baselineFailed ? "failed" : (baselineDone ? "completed" : "pending"));
   const selectedStatus = selectedRunDetail?.run?.status || (lastResearch?.error ? "failed" : generationPayload?.task?.status || "completed");
   const showDiagnostics = Boolean(generationPayload && (!selectedRunId || selectedRunId === workflowRunId));
+
+  useEffect(() => {
+    setDiagnosticsExpanded(hasDiagnosticError);
+  }, [hasDiagnosticError, selectedRunId, workflowRunId]);
 
   useEffect(() => {
     let active = true;
@@ -2076,23 +2387,25 @@ export function StrategyGenerationPage({
         </div>
       </div>
 
-      <section className="band progress-band compact-progress-band">
-        <div className="compact-progress-row">
-          <span className="compact-progress-label">{zh.currentProgress}</span>
-          <span className="compact-progress-stage">{stageLabel}</span>
-          <div className="progress-track compact-progress-track">
-          <div className="progress-fill" style={{ width: `${Math.round(workflowProgress * 100)}%` }} />
+      {workflowUi.startedAt && (
+        <section className="band progress-band compact-progress-band">
+          <div className="compact-progress-row">
+            <span className="compact-progress-label">{zh.currentProgress}</span>
+            <span className="compact-progress-stage">{stageLabel}</span>
+            <div className="progress-track compact-progress-track">
+              <div className="progress-fill" style={{ width: `${Math.round(workflowProgress * 100)}%` }} />
+            </div>
+            <span className="compact-progress-percent">{Math.round(workflowProgress * 100)}%</span>
+            <span className={statusClass(statusLabel)}>{statusLabel}</span>
           </div>
-          <span className="compact-progress-percent">{Math.round(workflowProgress * 100)}%</span>
-          <span className={statusClass(statusLabel)}>{statusLabel}</span>
-        </div>
-        <div className="compact-progress-note">{workflowUi.message || "当前没有活动任务。"}</div>
-        <div className="job-meta compact-job-meta">
-          <span>{workflowUi.startedAt ? `开始时间 ${formatDate(workflowUi.startedAt)}` : "尚未启动新流程"}</span>
-          <span>{workflowRunId ? `运行 ${workflowRunId}` : "运行待创建"}</span>
-          <span>{workflowUi.isRunning ? "流程进行中" : baselineDone ? "流程已完成" : "等待启动"}</span>
-        </div>
-      </section>
+          <div className="compact-progress-note">{workflowUi.message}</div>
+          <div className="job-meta compact-job-meta">
+            <span>{`开始时间 ${formatDate(workflowUi.startedAt)}`}</span>
+            <span>{workflowRunId ? `运行 ${workflowRunId}` : "运行待创建"}</span>
+            <span>{workflowUi.isRunning ? "流程进行中" : baselineDone ? "流程已完成" : "等待启动"}</span>
+          </div>
+        </section>
+      )}
 
       {researchError && (
         <section className="band error-band">
@@ -2192,8 +2505,16 @@ export function StrategyGenerationPage({
               <h3>诊断信息</h3>
               <p>{diagnostics.length} 条记录</p>
             </div>
+            <Button
+              type="text"
+              size="small"
+              className="section-collapse-toggle"
+              onClick={() => setDiagnosticsExpanded((current) => !current)}
+            >
+              {diagnosticsExpanded ? "收起" : "展开"}
+            </Button>
           </div>
-          {diagnostics.length ? (
+          {diagnosticsExpanded && (diagnostics.length ? (
             <div className="diagnostic-list">
               {diagnostics.map((item: any, index: number) => (
                 <div className="diagnostic-item" key={`${item.message || "diag"}-${index}`}>
@@ -2204,7 +2525,7 @@ export function StrategyGenerationPage({
             </div>
           ) : (
             <div className="empty-state">没有返回诊断信息。</div>
-          )}
+          ))}
         </section>
       )}
 
@@ -2231,6 +2552,8 @@ export default function App() {
   const [page, setPage] = useState<PageKey>(() => loadInitialPage());
   const [taskRunNavigation, setTaskRunNavigation] = useState<TaskRunNavigation | null>(null);
   const taskNavigationSequenceRef = useRef(0);
+  const [poolNavigation, setPoolNavigation] = useState<PoolNavigation | null>(null);
+  const poolNavigationSequenceRef = useRef(0);
   const [tasks, setTasks] = useState<WorkbenchTask[]>([]);
   const [taskConnectionError, setTaskConnectionError] = useState(false);
   const [poolItems, setPoolItems] = useState<any[]>([]);
@@ -2304,6 +2627,16 @@ export default function App() {
     taskNavigationSequenceRef.current += 1;
     setTaskRunNavigation({ runId: resolvedRunId, requestId: taskNavigationSequenceRef.current });
     setPage("optimize");
+  }
+
+  function navigateToPool(poolItemId: string, vtSymbol: string) {
+    poolNavigationSequenceRef.current += 1;
+    setPoolNavigation({
+      poolItemId: String(poolItemId || "").trim(),
+      vtSymbol: String(vtSymbol || "").trim(),
+      requestId: poolNavigationSequenceRef.current,
+    });
+    setPage("pool");
   }
 
   function navigateFromTask(task: WorkbenchTask) {
@@ -2408,10 +2741,10 @@ export default function App() {
               onTaskRunApplied={(requestId) => setTaskRunNavigation((current) => current?.requestId === requestId ? null : current)}
               refreshPool={refreshPool}
               refreshTasks={refreshTasks}
-              onOpenPool={() => setPage("pool")}
+              onOpenPool={navigateToPool}
             />
           )}
-          {page === "pool" && <PoolPage poolItems={poolItems} refreshPool={refreshPool} refreshTasks={refreshTasks} onContinueOptimization={navigateToOptimizationRun} />}
+          {page === "pool" && <PoolPage poolItems={poolItems} poolNavigation={poolNavigation} onPoolNavigationApplied={(requestId) => setPoolNavigation((current) => current?.requestId === requestId ? null : current)} refreshPool={refreshPool} refreshTasks={refreshTasks} onContinueOptimization={navigateToOptimizationRun} />}
           </React.Suspense>
         </main>
       </div>

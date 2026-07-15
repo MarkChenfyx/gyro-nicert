@@ -1,4 +1,7 @@
 from backend.services.strategy_service import normalize_fixed_size
+from strategy_generation.validation import validate_open_order_volumes
+
+import pytest
 
 
 def test_normalize_fixed_size_rewrites_existing_value():
@@ -28,3 +31,17 @@ def test_normalize_fixed_size_leaves_unit_position_unchanged():
 
     assert normalized == code
     assert changed is False
+
+
+def test_open_order_volume_accepts_self_fixed_size():
+    code = """class DemoStrategy:\n    fixed_size = 1\n    def trade(self, price):\n        self.buy(price, self.fixed_size)\n        self.short(price=price, volume=self.fixed_size)\n"""
+
+    validate_open_order_volumes(code)
+
+
+@pytest.mark.parametrize("volume", ["self.target_size", "100", "self.fixed_size - self.pos"])
+def test_open_order_volume_rejects_non_fixed_size(volume):
+    code = f"""class DemoStrategy:\n    fixed_size = 1\n    def trade(self, price):\n        self.buy(price, {volume})\n"""
+
+    with pytest.raises(ValueError, match="必须严格使用 self.fixed_size"):
+        validate_open_order_volumes(code)

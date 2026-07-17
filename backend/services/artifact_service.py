@@ -82,6 +82,20 @@ def _copy_optional(source: Path, destination: Path) -> Path | None:
     return destination
 
 
+def _pool_snapshot_parameters(config: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
+    """Resolve the selected variant's parameters for its independent pool snapshot."""
+    recommended = result.get("recommended")
+    for candidate in (
+        recommended.get("parameters") if isinstance(recommended, dict) else None,
+        result.get("params"),
+        result.get("parameters"),
+        config.get("parameters"),
+    ):
+        if isinstance(candidate, dict) and candidate:
+            return dict(candidate)
+    return {}
+
+
 def create_run_artifact(
     run_type: str,
     strategy: dict[str, Any],
@@ -233,6 +247,16 @@ def create_pool_snapshot(
         copied["daily_results_path"] = daily_results_path
     if trades_path is not None:
         copied["trades_path"] = trades_path
+
+    # A run config contains the baseline parameters.  A manual-grid snapshot must
+    # instead make the selected variant's final parameters its canonical config;
+    # all later pool reruns and continued optimization read from this snapshot.
+    pool_config = _read_json(pool_path / "config.json")
+    variant_result = _read_json(pool_path / "result.json")
+    snapshot_parameters = _pool_snapshot_parameters(pool_config, variant_result)
+    if snapshot_parameters:
+        pool_config["parameters"] = snapshot_parameters
+        _write_json(pool_path / "config.json", pool_config)
 
     tags_path = _write_json(
         pool_path / "tags.json",

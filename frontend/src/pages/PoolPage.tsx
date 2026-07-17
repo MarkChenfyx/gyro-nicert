@@ -101,10 +101,15 @@ import {
 } from "../app/ui";
 
 const POOL_QUICK_LIMIT_STORAGE_KEY = "gyro_nicert.pool_quick_limit";
+const POOL_SELECTED_SYMBOL_STORAGE_KEY = "gyro_nicert.pool_selected_symbol";
 
 function loadPoolQuickLimit() {
   const stored = Number(window.localStorage.getItem(POOL_QUICK_LIMIT_STORAGE_KEY) || 5);
   return Number.isFinite(stored) ? Math.max(1, Math.min(50, Math.round(stored))) : 5;
+}
+
+function loadPoolSelectedSymbol() {
+  return window.localStorage.getItem(POOL_SELECTED_SYMBOL_STORAGE_KEY) || "";
 }
 
 export default function PoolPage({
@@ -113,7 +118,8 @@ export default function PoolPage({
   onPoolNavigationApplied,
   refreshPool,
   refreshTasks,
-  onContinueOptimization
+  onContinueOptimization,
+  onOpenResearch
 }: {
   poolItems: any[];
   poolNavigation: { poolItemId: string; vtSymbol: string; requestId: number } | null;
@@ -121,10 +127,11 @@ export default function PoolPage({
   refreshPool: () => Promise<void>;
   refreshTasks: () => Promise<void>;
   onContinueOptimization: (runId: string) => void;
+  onOpenResearch: (poolItemId: string) => void;
 }) {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [displayedCurveIds, setDisplayedCurveIds] = useState<string[]>([]);
-  const [selectedSymbol, setSelectedSymbol] = useState("");
+  const [selectedSymbol, setSelectedSymbol] = useState(loadPoolSelectedSymbol);
   const [searchText, setSearchText] = useState("");
   const [selectionMode, setSelectionMode] = useState("recent");
   const [quickLimit, setQuickLimit] = useState(loadPoolQuickLimit);
@@ -418,6 +425,12 @@ export default function PoolPage({
       setRerunning(false);
     }
   }
+
+  useEffect(() => {
+    if (selectedSymbol) {
+      window.localStorage.setItem(POOL_SELECTED_SYMBOL_STORAGE_KEY, selectedSymbol);
+    }
+  }, [selectedSymbol]);
 
   useEffect(() => {
     if (!poolItems.length) {
@@ -892,7 +905,7 @@ export default function PoolPage({
 
       {detail && (
         <section className="band library-shell">
-          <div className="library-section-head"><div><h3>{strategyLabel(detail.pool_item)}</h3><p className="pool-detail-identity"><span>入池时间：{formatDate(detail.pool_item?.created_at).slice(0, 16)}</span><span>快照编号：{detail.pool_item?.pool_item_id || "-"}</span></p></div><div className="detail-head-actions"><span className="status-pill status-completed">快照已就绪</span><Button size="small" loading={continuingPoolItemId === String(detail.pool_item?.pool_item_id)} onClick={continueOptimizationFromPool}>继续参数优化</Button><Button size="small" danger disabled={Boolean(continuingPoolItemId)} onClick={() => handleDeletePoolItem(String(detail.pool_item?.pool_item_id))}>从池中移除</Button></div></div>
+          <div className="library-section-head"><div><h3>{strategyLabel(detail.pool_item)}</h3><p className="pool-detail-identity"><span>入池时间：{formatDate(detail.pool_item?.created_at).slice(0, 16)}</span><span>快照编号：{detail.pool_item?.pool_item_id || "-"}</span></p></div><div className="detail-head-actions"><span className="status-pill status-completed">快照已就绪</span><Button size="small" onClick={() => onOpenResearch(String(detail.pool_item?.pool_item_id || ""))}>进入策略研究</Button><Button size="small" loading={continuingPoolItemId === String(detail.pool_item?.pool_item_id)} onClick={continueOptimizationFromPool}>继续参数优化</Button><Button size="small" danger disabled={Boolean(continuingPoolItemId)} onClick={() => handleDeletePoolItem(String(detail.pool_item?.pool_item_id))}>从池中移除</Button></div></div>
           <div className="library-metric-grid">
             <div className="library-metric-card"><span>{zh.sharpe}</span><strong>{formatNumber(detail.pool_item?.sharpe ?? metrics.sharpe ?? metrics.sharpe_ratio)}</strong></div>
             <div className="library-metric-card positive"><span>策略累计收益</span><strong>{detailCurveSummary.strategy ? formatReturnPct(detailCurveSummary.strategy.totalReturn, 2) : "-"}</strong></div>

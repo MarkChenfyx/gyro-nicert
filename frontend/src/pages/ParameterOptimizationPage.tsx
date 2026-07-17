@@ -288,14 +288,19 @@ export default function ParameterOptimizationPage({
   const [suggestionLoading, setSuggestionLoading] = useState(false);
   const [suggestionProgress, setSuggestionProgress] = useState(0);
   const [spaceSuggestion, setSpaceSuggestion] = useState<any>(null);
-  const [parameterDetailsCollapsed, setParameterDetailsCollapsed] = useState(Boolean(persistedDraft.parameterDetailsCollapsed));
-  const [performanceDetailsCollapsed, setPerformanceDetailsCollapsed] = useState(Boolean(persistedDraft.performanceDetailsCollapsed));
+  const [parameterDetailsCollapsed, setParameterDetailsCollapsed] = useState(
+    String(persistedDraft.runId || "") === runId && Boolean(persistedDraft.parameterDetailsCollapsed)
+  );
+  const [performanceDetailsCollapsed, setPerformanceDetailsCollapsed] = useState(
+    String(persistedDraft.runId || "") === runId && Boolean(persistedDraft.performanceDetailsCollapsed)
+  );
   const [poolStrategyName, setPoolStrategyName] = useState("");
   const [poolNote, setPoolNote] = useState("");
   const [addingToPool, setAddingToPool] = useState(false);
   const runContextRequestRef = useRef(0);
   const gridCandidateRequestRef = useRef(0);
   const mainCurveSectionRef = useRef<HTMLElement | null>(null);
+  const collapseStateRunIdRef = useRef(runId);
 
   const clearGridCandidatePreview = useCallback(() => {
     gridCandidateRequestRef.current += 1;
@@ -456,6 +461,11 @@ export default function ParameterOptimizationPage({
 
   useEffect(() => {
     if (!runId) return;
+    if (collapseStateRunIdRef.current !== runId) {
+      collapseStateRunIdRef.current = runId;
+      setParameterDetailsCollapsed(false);
+      setPerformanceDetailsCollapsed(false);
+    }
     clearGridCandidatePreview();
     setOptimizationResult((current: any) => (String(current?.run?.run_id || "") === runId ? current : null));
     loadRunContext(runId).catch((error) => message.error(String(error)));

@@ -33,6 +33,37 @@ function gridValueCount(spec?: RangeSpec) {
   return Math.max(1, Math.floor((high - low) / step + 1.0000001));
 }
 
+function compactSearchText(value: unknown) {
+  return String(value || "")
+    .normalize("NFKC")
+    .toLocaleLowerCase()
+    .replace(/[\s_|·./\\:：()（）\[\]【】-]+/g, "");
+}
+
+function fuzzySearchMatch(input: string, source: unknown) {
+  const needle = compactSearchText(input);
+  const haystack = compactSearchText(source);
+  if (!needle) return true;
+  if (haystack.includes(needle)) return true;
+  if (needle.length < 3) return false;
+  let matched = 0;
+  for (const character of haystack) {
+    if (character === needle[matched]) matched += 1;
+    if (matched === needle.length) return true;
+  }
+  return false;
+}
+
+function fuzzySearchScore(input: string, source: unknown) {
+  const needle = compactSearchText(input);
+  const haystack = compactSearchText(source);
+  if (!needle) return 0;
+  if (haystack.startsWith(needle)) return 0;
+  const index = haystack.indexOf(needle);
+  if (index >= 0) return 10 + index;
+  return fuzzySearchMatch(input, source) ? 100 : 1000;
+}
+
 export default function StrategyResearchPage({
   poolItems,
   navigation,
@@ -64,6 +95,39 @@ export default function StrategyResearchPage({
     () => poolItems.find((item) => String(item.pool_item_id) === selectedPoolItemId),
     [poolItems, selectedPoolItemId]
   );
+  const selectedSymbol = selectedPoolItem ? String(selectedPoolItem.vt_symbol || "未标记标的") : undefined;
+  const symbolOptions = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const item of sortedPoolItems) {
+      const symbol = String(item.vt_symbol || "未标记标的");
+      counts.set(symbol, (counts.get(symbol) || 0) + 1);
+    }
+    return Array.from(counts.entries())
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([symbol, count]) => ({ value: symbol, label: `${symbol}（${count}）` }));
+  }, [sortedPoolItems]);
+  const strategyOptions = useMemo(() => sortedPoolItems
+    .filter((item) => String(item.vt_symbol || "未标记标的") === selectedSymbol)
+    .map((item) => ({
+      value: String(item.pool_item_id),
+      label: `${strategyLabel(item)} · ${formatDate(item.created_at)}`,
+      searchText: [
+        strategyLabel(item),
+        item.strategy_name,
+        item.strategy_family,
+        item.pool_item_id,
+        item.pool_version,
+        item.strategy_version,
+        item.source_strategy_version,
+        item.created_at,
+        item.tags
+      ].join(" ")
+    })), [selectedSymbol, sortedPoolItems]);
+
+  function selectSymbol(symbol: string) {
+    const latest = sortedPoolItems.find((item) => String(item.vt_symbol || "未标记标的") === symbol);
+    setSelectedPoolItemId(String(latest?.pool_item_id || ""));
+  }
 
   useEffect(() => {
     if (navigation?.poolItemId && poolItems.some((item) => String(item.pool_item_id) === navigation.poolItemId)) {
@@ -215,18 +279,29 @@ export default function StrategyResearchPage({
       </section>
 
       <section className="band research-selector-band">
+        <label className="field research-symbol-select">
+          <span>研究标的</span>
+          <Select
+            showSearch
+            value={selectedSymbol}
+            onChange={selectSymbol}
+            optionFilterProp="label"
+            placeholder="选择标的"
+            options={symbolOptions}
+          />
+        </label>
         <label className="field research-strategy-select">
           <span>研究策略</span>
           <Select
             showSearch
             value={selectedPoolItemId || undefined}
             onChange={setSelectedPoolItemId}
-            optionFilterProp="label"
-            placeholder="搜索并选择策略池快照"
-            options={sortedPoolItems.map((item) => ({
-              value: String(item.pool_item_id),
-              label: `${strategyLabel(item)} · ${item.vt_symbol || "-"} · ${formatDate(item.created_at)}`
-            }))}
+            filterOption={(input, option) => fuzzySearchMatch(input, (option as any)?.searchText || option?.label)}
+            filterSort={(left, right, info) => fuzzySearchScore(info.searchValue, (left as any)?.searchText || left?.label)
+              - fuzzySearchScore(info.searchValue, (right as any)?.searchText || right?.label)}
+            placeholder={selectedSymbol ? "搜索当前标的下的策略" : "请先选择标的"}
+            disabled={!selectedSymbol}
+            options={strategyOptions}
           />
         </label>
         {selectedPoolItem && (

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { ConfigProvider, message } from "antd";
 import { listPool, listTasks } from "../api";
 import Sidebar from "../components/Sidebar";
@@ -19,8 +19,29 @@ import {
   taskTargetPage
 } from "./shared";
 
+const CachedLaunchFlowPage = memo(LaunchFlowPage);
+const CachedStrategyGenerationPage = memo(StrategyGenerationPage);
+const CachedParameterOptimizationPage = memo(ParameterOptimizationPage);
+const CachedPoolPage = memo(PoolPage);
+const CachedStrategyResearchPage = memo(StrategyResearchPage);
+
+const APP_THEME = {
+  token: {
+    colorPrimary: "#17b8b1",
+    colorText: "#202938",
+    colorTextSecondary: "#667085",
+    borderRadius: 8,
+    controlHeight: 34,
+    controlHeightSM: 30,
+    fontSize: 14,
+    lineHeight: 1.5,
+    fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei UI", "PingFang SC", sans-serif'
+  }
+};
+
 export default function App() {
   const [page, setPage] = useState<PageKey>(() => loadInitialPage());
+  const [visitedPages, setVisitedPages] = useState<Set<PageKey>>(() => new Set([page]));
   const [taskRunNavigation, setTaskRunNavigation] = useState<TaskRunNavigation | null>(null);
   const taskNavigationSequenceRef = useRef(0);
   const [poolNavigation, setPoolNavigation] = useState<PoolNavigation | null>(null);
@@ -44,6 +65,24 @@ export default function App() {
   });
   const [displayWorkflowProgress, setDisplayWorkflowProgress] = useState(0);
   const displayWorkflowStartedAtRef = useRef("");
+
+  const openPage = useCallback((nextPage: PageKey) => {
+    setVisitedPages((current) => {
+      if (current.has(nextPage)) return current;
+      const next = new Set(current);
+      next.add(nextPage);
+      return next;
+    });
+    setPage(nextPage);
+    if (nextPage === "generate") {
+      window.requestAnimationFrame(() => {
+        window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+      });
+    }
+  }, []);
+  const openLaunchPage = useCallback(() => openPage("launch"), [openPage]);
+  const openGenerationPage = useCallback(() => openPage("generate"), [openPage]);
+  const openOptimizationPage = useCallback(() => openPage("optimize"), [openPage]);
 
   useEffect(() => {
     if (!workflowUi.startedAt) {
@@ -78,7 +117,7 @@ export default function App() {
     return () => window.clearInterval(timer);
   }, [workflowUi.isRunning, workflowUi.progress, workflowUi.stageKey, workflowUi.startedAt]);
 
-  async function refreshTasks() {
+  const refreshTasks = useCallback(async () => {
     try {
       const payload = await listTasks({ view: "recent", limit: 50 });
       setTasks(payload.tasks || []);
@@ -87,47 +126,79 @@ export default function App() {
       setTaskConnectionError(true);
       throw error;
     }
-  }
+  }, []);
 
-  async function refreshPool() {
+  const refreshPool = useCallback(async () => {
     const payload = await listPool();
     setPoolItems(payload.items || []);
-  }
+  }, []);
 
-  function navigateToOptimizationRun(runId: string) {
+  const navigateToOptimizationRun = useCallback((runId: string) => {
     const resolvedRunId = String(runId || "").trim();
     if (!resolvedRunId) return;
     taskNavigationSequenceRef.current += 1;
     setTaskRunNavigation({ runId: resolvedRunId, requestId: taskNavigationSequenceRef.current });
-    setPage("optimize");
-  }
+    openPage("optimize");
+  }, [openPage]);
 
-  function navigateToPool(poolItemId: string, vtSymbol: string) {
+  const navigateToPool = useCallback((poolItemId: string, vtSymbol: string) => {
     poolNavigationSequenceRef.current += 1;
     setPoolNavigation({
       poolItemId: String(poolItemId || "").trim(),
       vtSymbol: String(vtSymbol || "").trim(),
       requestId: poolNavigationSequenceRef.current,
     });
-    setPage("pool");
-  }
+    openPage("pool");
+  }, [openPage]);
 
-  function navigateFromTask(task: WorkbenchTask) {
+  const navigateToResearch = useCallback((poolItemId: string) => {
+    const resolvedPoolItemId = String(poolItemId || "").trim();
+    if (!resolvedPoolItemId) return;
+    researchNavigationSequenceRef.current += 1;
+    setResearchNavigation({ poolItemId: resolvedPoolItemId, requestId: researchNavigationSequenceRef.current });
+    openPage("research");
+  }, [openPage]);
+
+  const navigateFromTask = useCallback((task: WorkbenchTask) => {
     const targetPage = taskTargetPage(task);
     const relatedRunId = String(task.related_run_id || "").trim();
     const relatedPoolItemId = String(task.related_pool_item_id || "").trim();
     if (targetPage === "research" && relatedPoolItemId) {
-      researchNavigationSequenceRef.current += 1;
-      setResearchNavigation({ poolItemId: relatedPoolItemId, requestId: researchNavigationSequenceRef.current });
-      setPage("research");
+      navigateToResearch(relatedPoolItemId);
       return;
     }
     if (targetPage === "optimize" && relatedRunId) {
       navigateToOptimizationRun(relatedRunId);
       return;
     }
-    setPage(targetPage);
-  }
+    openPage(targetPage);
+  }, [navigateToOptimizationRun, navigateToResearch, openPage]);
+
+  const handleTaskRunApplied = useCallback((requestId: number) => {
+    setTaskRunNavigation((current) => current?.requestId === requestId ? null : current);
+  }, []);
+
+  const handlePoolNavigationApplied = useCallback((requestId: number) => {
+    setPoolNavigation((current) => current?.requestId === requestId ? null : current);
+  }, []);
+
+  const handleResearchNavigationApplied = useCallback((requestId: number) => {
+    setResearchNavigation((current) => current?.requestId === requestId ? null : current);
+  }, []);
+
+  const handleResearchCreated = useCallback((payload: any) => {
+    setLastResearch(payload);
+    refreshPool().catch((error) => message.error(String(error)));
+  }, [refreshPool]);
+
+  const handleGenerated = useCallback((payload: any) => {
+    setLastGenerated(payload);
+    setLastResearch(null);
+  }, []);
+
+  const handleWorkflowChange = useCallback((patch: Partial<WorkflowUiState>) => {
+    setWorkflowUi((current) => ({ ...current, ...patch }));
+  }, []);
 
   useEffect(() => {
     refreshTasks().catch((error) => message.error(String(error)));
@@ -175,25 +246,11 @@ export default function App() {
   }, [page]);
 
   return (
-    <ConfigProvider
-      theme={{
-        token: {
-          colorPrimary: "#17b8b1",
-          colorText: "#202938",
-          colorTextSecondary: "#667085",
-          borderRadius: 8,
-          controlHeight: 34,
-          controlHeightSM: 30,
-          fontSize: 14,
-          lineHeight: 1.5,
-          fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei UI", "PingFang SC", sans-serif'
-        }
-      }}
-    >
+    <ConfigProvider theme={APP_THEME}>
       <div className="shell">
         <Sidebar
           page={page}
-          onPageChange={setPage}
+          onPageChange={openPage}
           onTaskNavigate={navigateFromTask}
           tasks={tasks}
           onRefreshTasks={refreshTasks}
@@ -202,49 +259,55 @@ export default function App() {
           workflowProgress={displayWorkflowProgress}
         />
         <main className="workspace">
-          {page === "launch" && (
-            <LaunchFlowPage
-              onResearchCreated={(payload) => {
-                setLastResearch(payload);
-                refreshPool().catch((error) => message.error(String(error)));
-              }}
-              onGenerated={(payload) => {
-                setLastGenerated(payload);
-                setLastResearch(null);
-              }}
-              onOpenGenerated={() => setPage("generate")}
-              onWorkflowChange={(patch) => setWorkflowUi((current) => ({ ...current, ...patch }))}
-              refreshTasks={refreshTasks}
-            />
+          {visitedPages.has("launch") && (
+            <div hidden={page !== "launch"}>
+              <CachedLaunchFlowPage
+                onResearchCreated={handleResearchCreated}
+                onGenerated={handleGenerated}
+                onOpenGenerated={openGenerationPage}
+                onWorkflowChange={handleWorkflowChange}
+                refreshTasks={refreshTasks}
+              />
+            </div>
           )}
-          {page === "generate" && (
-            <StrategyGenerationPage
-              lastGenerated={lastGenerated}
-              lastResearch={lastResearch}
-              workflowUi={workflowUi}
-              workflowProgress={displayWorkflowProgress}
-              onBackLaunch={() => setPage("launch")}
-              onGoOptimize={() => setPage("optimize")}
-            />
+          {visitedPages.has("generate") && (
+            <div hidden={page !== "generate"}>
+              <CachedStrategyGenerationPage
+                lastGenerated={lastGenerated}
+                lastResearch={lastResearch}
+                workflowUi={workflowUi}
+                workflowProgress={displayWorkflowProgress}
+                onBackLaunch={openLaunchPage}
+                onGoOptimize={openOptimizationPage}
+              />
+            </div>
           )}
-          {page === "optimize" && (
-            <ParameterOptimizationPage
-              lastResearch={lastResearch}
-              taskRunNavigation={taskRunNavigation}
-              onTaskRunApplied={(requestId) => setTaskRunNavigation((current) => current?.requestId === requestId ? null : current)}
-              refreshPool={refreshPool}
-              refreshTasks={refreshTasks}
-              onOpenPool={navigateToPool}
-            />
+          {visitedPages.has("optimize") && (
+            <div hidden={page !== "optimize"}>
+              <CachedParameterOptimizationPage
+                lastResearch={lastResearch}
+                taskRunNavigation={taskRunNavigation}
+                onTaskRunApplied={handleTaskRunApplied}
+                refreshPool={refreshPool}
+                refreshTasks={refreshTasks}
+                onOpenPool={navigateToPool}
+              />
+            </div>
           )}
-          {page === "pool" && <PoolPage poolItems={poolItems} poolNavigation={poolNavigation} onPoolNavigationApplied={(requestId) => setPoolNavigation((current) => current?.requestId === requestId ? null : current)} refreshPool={refreshPool} refreshTasks={refreshTasks} onContinueOptimization={navigateToOptimizationRun} />}
-          {page === "research" && (
-            <StrategyResearchPage
-              poolItems={poolItems}
-              navigation={researchNavigation}
-              onNavigationApplied={(requestId) => setResearchNavigation((current) => current?.requestId === requestId ? null : current)}
-              refreshTasks={refreshTasks}
-            />
+          {visitedPages.has("pool") && (
+            <div hidden={page !== "pool"}>
+              <CachedPoolPage poolItems={poolItems} poolNavigation={poolNavigation} onPoolNavigationApplied={handlePoolNavigationApplied} refreshPool={refreshPool} refreshTasks={refreshTasks} onContinueOptimization={navigateToOptimizationRun} onOpenResearch={navigateToResearch} />
+            </div>
+          )}
+          {visitedPages.has("research") && (
+            <div hidden={page !== "research"}>
+              <CachedStrategyResearchPage
+                poolItems={poolItems}
+                navigation={researchNavigation}
+                onNavigationApplied={handleResearchNavigationApplied}
+                refreshTasks={refreshTasks}
+              />
+            </div>
           )}
         </main>
       </div>

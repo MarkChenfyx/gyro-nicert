@@ -2142,11 +2142,12 @@ textarea:focus-visible {
 
 .research-selector-band {
   display: grid;
-  grid-template-columns: minmax(360px, 1.2fr) minmax(280px, 0.8fr);
-  gap: 18px;
+  grid-template-columns: minmax(180px, 0.38fr) minmax(340px, 1fr) minmax(280px, 0.7fr);
+  gap: 14px;
   align-items: end;
 }
 
+.research-symbol-select .ant-select-selector,
 .research-strategy-select .ant-select-selector {
   min-height: 40px !important;
   padding-top: 3px !important;

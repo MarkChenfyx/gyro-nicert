@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+from datetime import date
 from pathlib import Path
 from typing import Any, Callable
 from uuid import uuid4
@@ -351,6 +352,7 @@ def _compare_payload_from_parts(detail: dict[str, Any], *, metrics: dict[str, An
 
 def _rerun_payload(
     detail: dict[str, Any],
+    start_date: str | None = None,
     end_date: str | None = None,
     start_mode: str | None = None,
     progress_callback: Callable[[float, str], None] | None = None,
@@ -367,14 +369,24 @@ def _rerun_payload(
     symbol, exchange = split_vt_symbol(vt_symbol)
     interval = _text(config.get("interval"), "1m")
     rerun_end = _date_only(end_date, now_beijing().date().isoformat())
-    normalized_start_mode = _text(start_mode, "saved") or "saved"
     local_coverage = coverage_service.get_data_coverage(symbol, exchange, interval)
-    if normalized_start_mode == "auto_earliest":
-        rerun_start = _date_only(local_coverage.get("local_start")) or _date_only(config.get("start_date"))
+    requested_start = _date_only(start_date)
+    if requested_start:
+        try:
+            date.fromisoformat(requested_start)
+        except ValueError as exc:
+            raise ValueError(f"重跑开始日期格式无效：{requested_start}") from exc
+        rerun_start = requested_start
     else:
-        rerun_start = _date_only(config.get("start_date")) or _date_only(local_coverage.get("local_start"))
+        normalized_start_mode = _text(start_mode, "saved") or "saved"
+        if normalized_start_mode == "auto_earliest":
+            rerun_start = _date_only(local_coverage.get("local_start")) or _date_only(config.get("start_date"))
+        else:
+            rerun_start = _date_only(config.get("start_date")) or _date_only(local_coverage.get("local_start"))
     if not rerun_start:
         raise ValueError(f"local market data unavailable for {vt_symbol} {interval}")
+    if rerun_start > rerun_end:
+        raise ValueError(f"重跑开始日期不能晚于结束日期：{rerun_start} > {rerun_end}")
     requested_coverage = coverage_service.get_data_coverage(
         symbol,
         exchange,
@@ -745,7 +757,13 @@ def compare_pool_items(pool_item_ids: list[str] | None) -> dict[str, Any]:
     }
 
 
-def rerun_pool_items_to_latest(pool_item_ids: list[str] | None, *, end_date: str | None = None, start_mode: str | None = None) -> dict[str, Any]:
+def rerun_pool_items_to_latest(
+    pool_item_ids: list[str] | None,
+    *,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    start_mode: str | None = None,
+) -> dict[str, Any]:
     requested_ids = [_text(item) for item in pool_item_ids or [] if _text(item)]
     requested_end_date = _date_only(end_date, now_beijing().date().isoformat())
     if not requested_ids:
@@ -781,7 +799,13 @@ def rerun_pool_items_to_latest(pool_item_ids: list[str] | None, *, end_date: str
             def report_item_progress(phase: float, message: str) -> None:
                 task_service.mark_progress(task["task_id"], item_start + item_span * phase, message=message)
 
-            items.append(_rerun_payload(detail, end_date=requested_end_date, start_mode=start_mode, progress_callback=report_item_progress))
+            items.append(_rerun_payload(
+                detail,
+                start_date=start_date,
+                end_date=requested_end_date,
+                start_mode=start_mode,
+                progress_callback=report_item_progress,
+            ))
         except Exception as exc:
             diagnostics.append({"level": "warning", "message": f"pool rerun failed: {pool_item_id} | {exc}", "pool_item_id": pool_item_id})
 
@@ -811,6 +835,7 @@ def rerun_pool_items_to_latest(pool_item_ids: list[str] | None, *, end_date: str
         "items": items,
         "benchmark": {"label": "Buy & Hold", "curve": benchmark_rows},
         "diagnostics": diagnostics,
+        "rerun_start": _date_only(start_date) or _text(items[0].get("rerun_start") if items else ""),
         "rerun_end": requested_end_date or _text(items[0].get("rerun_end") if items else ""),
     }
 

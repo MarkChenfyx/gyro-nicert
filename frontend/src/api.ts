@@ -205,10 +205,10 @@ export function comparePool(poolItemIds: string[]) {
   });
 }
 
-export function rerunPool(poolItemIds: string[], endDate?: string, startMode?: string) {
+export function rerunPool(poolItemIds: string[], startDate: string, endDate?: string) {
   return request<any>("/api/pool/rerun", {
     method: "POST",
-    body: JSON.stringify({ pool_item_ids: poolItemIds, end_date: endDate, start_mode: startMode })
+    body: JSON.stringify({ pool_item_ids: poolItemIds, start_date: startDate, end_date: endDate })
   });
 }
 

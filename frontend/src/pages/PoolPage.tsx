@@ -145,7 +145,7 @@ export default function PoolPage({
   const [editingNotes, setEditingNotes] = useState(false);
   const [noteDraft, setNoteDraft] = useState("");
   const [savingNotes, setSavingNotes] = useState(false);
-  const [poolRerunStartMode, setPoolRerunStartMode] = useState("auto_earliest");
+  const [poolRerunStartDate, setPoolRerunStartDate] = useState("");
   const [showBenchmark, setShowBenchmark] = useState(true);
   const [curveStartDate, setCurveStartDate] = useState("");
   const [curveEndDate, setCurveEndDate] = useState("");
@@ -371,6 +371,10 @@ export default function PoolPage({
       message.warning("请至少选择一个策略。");
       return;
     }
+    if (!poolRerunStartDate) {
+      message.warning("请选择重跑开始日期。");
+      return;
+    }
     setRerunning(true);
     setRerunProgress(0.02);
     setRerunMessage("正在创建重跑任务");
@@ -391,7 +395,7 @@ export default function PoolPage({
     }, 700);
     try {
       const today = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Shanghai" });
-      const payload = await rerunPool(selectedIds, today, poolRerunStartMode);
+      const payload = await rerunPool(selectedIds, poolRerunStartDate, today);
       setComparison(payload);
       setRerunProgress(1);
       setRerunMessage("策略池重跑完成");
@@ -791,21 +795,19 @@ export default function PoolPage({
         </div>
         <div className="strategy-pool-date-action">
           <label className="field strategy-pool-rerun-mode-field">
-            <span>重跑起点</span>
-            <Select
-              value={poolRerunStartMode}
-              onChange={setPoolRerunStartMode}
-              options={[
-                { value: "auto_earliest", label: "自动最早" },
-                { value: "saved", label: "沿用入池日期" }
-              ]}
+            <span>重跑开始日期</span>
+            <Input
+              type="date"
+              value={poolRerunStartDate}
+              max={new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Shanghai" })}
+              onChange={(event) => setPoolRerunStartDate(event.target.value)}
             />
           </label>
-          <Button type="primary" disabled={!selectedIds.length} loading={rerunning} onClick={rerunSelectedToToday}>重跑到今天</Button>
+          <Button type="primary" disabled={!selectedIds.length || !poolRerunStartDate} loading={rerunning} onClick={rerunSelectedToToday}>重跑到今天</Button>
           <span>
             {comparison?.rerun_end
-              ? `当前对比结果已重跑到 ${formatDate(comparison.rerun_end)}。${poolRerunStartMode === "auto_earliest" ? "起点使用本地行情最早日期。" : "起点沿用入池时保存的开始日期。"}`
-              : "当前展示的是已保存的策略池快照曲线。"}
+              ? `当前对比结果重跑区间：${formatDate(comparison.rerun_start || poolRerunStartDate)} 至 ${formatDate(comparison.rerun_end)}。`
+              : poolRerunStartDate ? `将从 ${formatDate(poolRerunStartDate)} 重跑到今天。` : "请选择开始日期后重跑。"}
           </span>
           {(rerunning || rerunProgress > 0) && (
             <div className={`pool-rerun-progress ${rerunning ? "is-running" : "is-complete"}`}>

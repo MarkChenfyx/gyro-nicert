@@ -84,6 +84,7 @@ class PoolCompareRequest(BaseModel):
 
 class PoolRerunRequest(BaseModel):
     pool_item_ids: list[str] = Field(default_factory=list)
+    start_date: str | None = None
     end_date: str | None = None
     start_mode: str | None = None
 

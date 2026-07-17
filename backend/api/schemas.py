@@ -84,6 +84,7 @@ class PoolCompareRequest(BaseModel):
 
 class PoolRerunRequest(BaseModel):
     pool_item_ids: list[str] = Field(default_factory=list)
+    start_date: str | None = None
     end_date: str | None = None
     start_mode: str | None = None
 
@@ -136,6 +137,14 @@ class OptimizationRunRequest(BaseModel):
     virtual_parameters: list[dict[str, Any]] = Field(default_factory=list)
     objective: str = "sharpe"
     max_trials: int = Field(default=200, ge=1, le=5000)
+
+
+class StrategyResearchHeatmapRequest(BaseModel):
+    x_parameter: str
+    y_parameter: str
+    parameter_ranges: dict[str, Any] = Field(default_factory=dict)
+    objective: str = "excess_return"
+    max_trials: int = Field(default=100, ge=4, le=100)
 
 
 class TaskArchiveRequest(BaseModel):

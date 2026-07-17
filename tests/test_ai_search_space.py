@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import json
 
-from strategy_optimization.range_generation.api_generator import suggest_search_space
-from strategy_optimization.range_generation.validator import validate_ai_search_space
-from strategy_optimization.search_space import build_parameter_inventory
+from backend.strategy_optimization.range_generation.api_generator import suggest_search_space
+from backend.strategy_optimization.range_generation.validator import validate_ai_search_space
+from backend.strategy_optimization.search_space import build_parameter_inventory
 from backend.services import optimization_service
 
 

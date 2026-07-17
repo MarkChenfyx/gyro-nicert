@@ -8,7 +8,7 @@ from backend.core.hashing import compute_sha256
 from backend.domain.enums import ArtifactType, TaskType
 from backend.repositories import artifact_repository
 from backend.services import natural_language_source_service, strategy_service, task_service
-from strategy_generation import generate_strategy_from_text
+from backend.strategy_generation import generate_strategy_from_text
 
 
 def _write_generation_report(strategy_code_path: str, report: dict[str, Any]) -> Path:

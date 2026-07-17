@@ -1,5 +1,5 @@
-from backtesting.run import _metric_aliases
-from strategy_optimization.optimizers.common import score_metrics
+from backend.backtesting.run import _metric_aliases
+from backend.strategy_optimization.optimizers.common import score_metrics
 
 
 def test_metric_aliases_expose_drawdown_percent_as_canonical_field():

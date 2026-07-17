@@ -4,7 +4,7 @@ from fastapi import APIRouter
 
 from backend.api.schemas import StrategyGenerateRequest, StrategyRepairRequest
 from backend.services import strategy_generation_service
-from strategy_generation import repair_strategy_code
+from backend.strategy_generation import repair_strategy_code
 
 
 router = APIRouter(prefix="/api/strategies", tags=["strategies"])

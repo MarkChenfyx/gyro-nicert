@@ -18,6 +18,7 @@ class TaskType(StrEnum):
     DATA_DOWNLOAD = "data_download"
     POOL_ADD = "pool_add"
     POOL_REBUILD = "pool_rebuild"
+    STRATEGY_RESEARCH = "strategy_research"
 
 
 class RunType(StrEnum):

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from backtesting.run import run_backtest
+from backend.backtesting.run import run_backtest
 from vnpy.trader.constant import Exchange, Interval
 from vnpy.trader.object import BarData
 
@@ -58,7 +58,7 @@ def _bars() -> list[BarData]:
 def test_real_backtest_uses_teacher_engine_and_local_loader(monkeypatch) -> None:
     bars = _bars()
     monkeypatch.setattr(
-        "backtesting.run.coverage_service.get_data_coverage",
+        "backend.backtesting.run.coverage_service.get_data_coverage",
         lambda *args, **kwargs: {
             "status": "covered",
             "local_start": bars[0].datetime.isoformat(),
@@ -72,7 +72,7 @@ def test_real_backtest_uses_teacher_engine_and_local_loader(monkeypatch) -> None
         assert interval == "1m"
         return [bar for bar in bars if start <= bar.datetime <= end]
 
-    monkeypatch.setattr("backtesting.run.local_data_provider.load_bar_data", fake_load)
+    monkeypatch.setattr("backend.backtesting.run.local_data_provider.load_bar_data", fake_load)
 
     result = run_backtest(
         strategy_code=STRATEGY_CODE,

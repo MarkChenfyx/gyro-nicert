@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 from backend.api import strategy_api
 from backend.main import app
 from backend.services import research_workflow_service
-from strategy_generation import repair as repair_module
+from backend.strategy_generation import repair as repair_module
 
 
 class _FakeProvider:

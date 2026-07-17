@@ -1,5 +1,5 @@
 from backend.services.strategy_service import normalize_fixed_size
-from strategy_generation.validation import validate_open_order_volumes
+from backend.strategy_generation.validation import validate_open_order_volumes
 
 import pytest
 

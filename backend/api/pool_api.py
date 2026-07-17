@@ -30,6 +30,7 @@ def compare_pool_items(payload: PoolCompareRequest) -> dict:
 def rerun_pool_items(payload: PoolRerunRequest) -> dict:
     return pool_service.rerun_pool_items_to_latest(
         payload.pool_item_ids,
+        start_date=payload.start_date,
         end_date=payload.end_date,
         start_mode=payload.start_mode,
     )

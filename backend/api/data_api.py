@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Query
 
 from backend.api.schemas import DataDownloadRequest
-from data_manager import coverage_service, download_service
+from backend.data_manager import coverage_service, download_service
 
 
 router = APIRouter(prefix="/api/data", tags=["data"])

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from common.time_utils import now_iso
-from data_manager.database import get_app_db_connection
+from backend.common.time_utils import now_iso
+from backend.data_manager.database import get_app_db_connection
 
 
 def _now() -> str:

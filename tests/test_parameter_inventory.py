@@ -1,4 +1,4 @@
-from strategy_optimization.search_space import build_parameter_inventory
+from backend.strategy_optimization.search_space import build_parameter_inventory
 
 
 STRATEGY_CODE = '''

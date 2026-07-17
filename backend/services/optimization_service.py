@@ -10,13 +10,13 @@ from backend.core.hashing import compute_sha256
 from backend.domain.enums import ArtifactType, TaskStatus, TaskType
 from backend.repositories import artifact_repository, run_repository, strategy_repository, variant_repository
 from backend.services import artifact_service, task_service
-from strategy_optimization import parameter_policy
-from strategy_optimization import optimize_parameters
-from strategy_optimization.optimizers.registry import list_methods, resolve_method, variant_for_method
-from strategy_optimization.search_space import build_parameter_inventory, read_json_file
-from strategy_optimization.range_generation import suggest_search_space
-from strategy_optimization.range_generation.validator import DENYLIST, TIME_RE
-from common.time_utils import now_beijing
+from backend.strategy_optimization import parameter_policy
+from backend.strategy_optimization import optimize_parameters
+from backend.strategy_optimization.optimizers.registry import list_methods, resolve_method, variant_for_method
+from backend.strategy_optimization.search_space import build_parameter_inventory, read_json_file
+from backend.strategy_optimization.range_generation import suggest_search_space
+from backend.strategy_optimization.range_generation.validator import DENYLIST, TIME_RE
+from backend.common.time_utils import now_beijing
 
 
 SEARCH_SPACE_CACHE_VERSION = 1

@@ -94,12 +94,9 @@ import {
   CurveChart,
   buildComparisonSeries,
   MultiVariantCurveChart,
-  Sidebar,
-  LaunchFlowPage,
   CurveControlItem,
-  CurveControls,
-  StrategyGenerationPage
-} from "../app/App";
+  CurveControls
+} from "../app/ui";
 
 
 type RangeField = "low" | "high" | "step";
@@ -744,10 +741,10 @@ export default function ParameterOptimizationPage({
   const performanceColumns: ColumnsType<any> = [
     { title: "版本", dataIndex: "label", width: 180 },
     { title: "策略累计收益", dataIndex: "strategy_return", width: 130, render: (value) => formatReturnPct(value, 2) },
-    { title: "buy & hold", dataIndex: "benchmark_return", width: 120, render: (value) => formatReturnPct(value, 2) },
+    { title: "B&H", dataIndex: "benchmark_return", width: 120, render: (value) => formatReturnPct(value, 2) },
     { title: "超额收益", dataIndex: "excess_return", width: 120, render: (value) => formatReturnPct(value, 2) },
     { title: zh.sharpe, dataIndex: "sharpe", width: 110, render: (value) => formatNumber(value, 2) },
-    { title: "交易数", dataIndex: "trade_count", width: 110, render: (value) => Number.isFinite(Number(value)) ? String(value) : "-" },
+    { title: "交易次数", dataIndex: "trade_count", width: 110, render: (value) => Number.isFinite(Number(value)) ? String(value) : "-" },
     { title: "最大回撤", dataIndex: "max_drawdown", width: 120, render: (value) => formatReturnPct(value, 2) }
   ];
 
@@ -768,7 +765,7 @@ export default function ParameterOptimizationPage({
         : runDetail?.variant_trade_counts?.[variantName] ?? metrics.total_trade_count;
       return {
         key: variantName,
-        label: variantName === "baseline" ? "Baseline" : variantName === "manual_grid" ? "Manual Grid Latest" : variantName,
+        label: variantDisplayLabel(variantName),
         strategy_return: summary.strategy?.totalReturn,
         benchmark_return: summary.buyHold?.totalReturn,
         excess_return: summary.excess,
@@ -995,24 +992,24 @@ export default function ParameterOptimizationPage({
     <section className="view is-active">
       <div className="hero-band compact-hero">
         <div>
-          <p className="eyebrow">Parameter Lab</p>
+          <p className="eyebrow">参数实验</p>
           <h2>{zh.optimize}</h2>
-          <p className="hero-copy">按策略族选择 run，切换不同优化变体，并把最新结果沉淀进策略池。</p>
+          <p className="hero-copy">按策略族选择运行版本，切换不同优化结果，并将最新结果加入策略池。</p>
         </div>
         <div className="hero-metrics">
-          <div className="metric-tile"><div className="metric-value">{runs.length}</div><div className="metric-label">runs</div></div>
-          <div className="metric-tile"><div className="metric-value">{searchSpace?.parameters?.length || 0}</div><div className="metric-label">params</div></div>
-          <div className="metric-tile"><div className="metric-value">{variants.length}</div><div className="metric-label">variants</div></div>
+          <div className="metric-tile"><div className="metric-value">{runs.length}</div><div className="metric-label">运行版本</div></div>
+          <div className="metric-tile"><div className="metric-value">{searchSpace?.parameters?.length || 0}</div><div className="metric-label">可调参数</div></div>
+          <div className="metric-tile"><div className="metric-value">{variants.length}</div><div className="metric-label">结果版本</div></div>
         </div>
       </div>
 
       <section className="band library-shell">
         <div className="library-section-head">
           <div>
-            <h3>{zh.currentSelection}</h3>
-            <p>先选策略族和对应 run，页面会直接展示这个 run 下的全部 variants。</p>
+            <h3>运行版本</h3>
+            <p>先选择策略族和运行版本，页面会直接展示该版本下的全部结果曲线。</p>
           </div>
-          <span className={statusClass(runId ? "completed" : "pending")}>{runId ? "ready" : "pending"}</span>
+          <span className={statusClass(runId ? "completed" : "pending")}>{runId ? "已就绪" : "待选择"}</span>
         </div>
         <div className="form-grid optimization-form-grid">
           <label className="field">
@@ -1034,7 +1031,7 @@ export default function ParameterOptimizationPage({
           </label>
         </div>
         {poolRunLineage && (
-          <p className="band-note">来自策略池 · 原版本：{poolRunLineage.source_variant || poolRunLineage.source_variant_name || poolRunLineage.source_variant_id || "-"} · 已重跑为 Baseline</p>
+          <p className="band-note">来自策略池 · 原版本：{variantDisplayLabel(String(poolRunLineage.source_variant || poolRunLineage.source_variant_name || poolRunLineage.source_variant_id || "-"))} · 已重跑为基线</p>
         )}
       </section>
 
@@ -1042,7 +1039,7 @@ export default function ParameterOptimizationPage({
         <div className="library-section-head">
           <div>
             <h3>累计收益对比</h3>
-            <p>`manual_grid` 只展示最新一条同名结果，先看累计收益曲线，再看绩效表现。</p>
+            <p>手动网格仅展示最新一组同名结果，先看累计收益曲线，再看绩效表现。</p>
           </div>
         </div>
         <CurveControls
@@ -1071,7 +1068,7 @@ export default function ParameterOptimizationPage({
         <div className="library-section-head">
           <div>
             <h3>绩效明细</h3>
-            <p>这里统一展示当前 run 下各个 variant 的核心表现，不再显示参数列。</p>
+            <p>这里统一展示当前运行版本下各结果版本的核心表现，不再重复显示参数列。</p>
           </div>
           <Button type="text" size="small" className="section-collapse-toggle" onClick={() => setPerformanceDetailsCollapsed((current) => !current)}>
             {performanceDetailsCollapsed ? "展开明细" : "收起明细"}
@@ -1091,7 +1088,7 @@ export default function ParameterOptimizationPage({
                 {parameterDetailsCollapsed ? "展开参数" : "收起参数"}
               </Button>
             </div>
-            <p>生成或调整参数范围，确认后再运行所选优化器。</p>
+            <p>生成或调整参数范围，确认后再运行所选优化方式。</p>
             {!parameterDetailsCollapsed && (
               <div className="optimization-suggestion-actions">
                 <Button loading={suggestionLoading} disabled={!runId} onClick={generateSpaceSuggestion}>AI 生成参数范围</Button>
@@ -1119,7 +1116,7 @@ export default function ParameterOptimizationPage({
               {method === "optuna"
                 ? totalGridCount > 0 && totalGridCount <= 200
                   ? `全量 ${totalGridCount} 组`
-                  : "TPE 200 Trials"
+                  : "TPE 试验 200 次"
                 : `网格 ${totalGridCount}`}
             </span>
           </div>
@@ -1162,7 +1159,7 @@ export default function ParameterOptimizationPage({
         {method === "manual_grid" && manualGridTopRows.length > 0 && (
           <div className="optimizer-grid-results">
             <div className="optimizer-grid-results-head">
-              <strong>参数组合 Top 10</strong>
+              <strong>排名前 10 的参数组合</strong>
               <span>按当前评分方式排列 · 点击行预览曲线</span>
             </div>
             <Table
@@ -1196,7 +1193,7 @@ export default function ParameterOptimizationPage({
         <div className="library-section-head">
           <div>
             <h3>加入策略池</h3>
-            <p>曲线和明细会同时展示全部 variants，加入策略池时再单独选择要入池的版本。</p>
+            <p>曲线和绩效明细会同时展示全部结果版本，加入策略池时再选择目标版本。</p>
           </div>
           <Button type="primary" loading={addingToPool} disabled={!runId || !poolVariant} onClick={addSelectedVariantToPool}>加入策略池</Button>
         </div>
@@ -1219,8 +1216,8 @@ export default function ParameterOptimizationPage({
             <Input value={poolStrategyName} onChange={(event) => setPoolStrategyName(poolNamePrefix(event.target.value))} placeholder="只填写名称，版本由入池时间生成" />
             <small className="pool-version-hint">入池后自动显示为“名称 | 快照版本”</small>
           </div>
-          <div className="viewer-summary-card"><span className="summary-label">版本 Sharpe</span><strong>{formatNumber(poolVariantMetrics.sharpe ?? poolVariantMetrics.sharpe_ratio)}</strong></div>
-          <div className="viewer-summary-card"><span className="summary-label">版本交易数</span><strong>{Number.isFinite(Number(poolVariantTradeCount)) ? String(poolVariantTradeCount) : "-"}</strong></div>
+          <div className="viewer-summary-card"><span className="summary-label">版本夏普比率</span><strong>{formatNumber(poolVariantMetrics.sharpe ?? poolVariantMetrics.sharpe_ratio)}</strong></div>
+          <div className="viewer-summary-card"><span className="summary-label">版本交易次数</span><strong>{Number.isFinite(Number(poolVariantTradeCount)) ? String(poolVariantTradeCount) : "-"}</strong></div>
           <div className="viewer-summary-card pool-note-input-card">
             <span className="summary-label">入池备注</span>
             <Input.TextArea

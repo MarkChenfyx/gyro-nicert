@@ -139,5 +139,13 @@ class OptimizationRunRequest(BaseModel):
     max_trials: int = Field(default=200, ge=1, le=5000)
 
 
+class StrategyResearchHeatmapRequest(BaseModel):
+    x_parameter: str
+    y_parameter: str
+    parameter_ranges: dict[str, Any] = Field(default_factory=dict)
+    objective: str = "excess_return"
+    max_trials: int = Field(default=100, ge=4, le=100)
+
+
 class TaskArchiveRequest(BaseModel):
     scope: str = "terminal"

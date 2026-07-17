@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from strategy_optimization.optimizers.optuna_tpe import OptunaOptimizer
-from strategy_optimization.optimizers.registry import get_optimizer, list_methods
+from backend.strategy_optimization.optimizers.optuna_tpe import OptunaOptimizer
+from backend.strategy_optimization.optimizers.registry import get_optimizer, list_methods
 
 
 def test_optuna_is_registered():
@@ -24,7 +24,7 @@ def test_optuna_exhausts_small_discrete_space_without_duplicate_trials(monkeypat
             "error": None,
         }
 
-    monkeypatch.setattr("strategy_optimization.optimizers.optuna_tpe.backtesting.run_backtest", fake_backtest)
+    monkeypatch.setattr("backend.strategy_optimization.optimizers.optuna_tpe.backtesting.run_backtest", fake_backtest)
     result = OptunaOptimizer().optimize(
         strategy_code="class Demo: pass",
         class_name="Demo",
@@ -59,7 +59,7 @@ def test_optuna_maps_virtual_time_parameter_before_backtest(monkeypatch):
         received.append(dict(kwargs["parameters"]))
         return {"success": True, "metrics": {"sharpe": 1.0}, "daily_results": [], "trades": [], "error": None}
 
-    monkeypatch.setattr("strategy_optimization.optimizers.optuna_tpe.backtesting.run_backtest", fake_backtest)
+    monkeypatch.setattr("backend.strategy_optimization.optimizers.optuna_tpe.backtesting.run_backtest", fake_backtest)
     result = OptunaOptimizer().optimize(
         strategy_code="class Demo: pass",
         class_name="Demo",

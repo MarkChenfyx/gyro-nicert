@@ -4,9 +4,9 @@ from datetime import datetime
 from pathlib import Path
 import re
 
+from backend.core.paths import NATURAL_LANGUAGE_ROOT
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-SOURCE_DIR = PROJECT_ROOT / "natural_language"
+SOURCE_DIR = NATURAL_LANGUAGE_ROOT
 
 
 def _clean_source_filename(filename: str, *, append_txt: bool = False) -> str:

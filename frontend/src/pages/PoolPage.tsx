@@ -96,12 +96,9 @@ import {
   CurveChart,
   buildComparisonSeries,
   MultiVariantCurveChart,
-  Sidebar,
-  LaunchFlowPage,
   CurveControlItem,
-  CurveControls,
-  StrategyGenerationPage
-} from "../app/App";
+  CurveControls
+} from "../app/ui";
 
 const POOL_QUICK_LIMIT_STORAGE_KEY = "gyro_nicert.pool_quick_limit";
 
@@ -149,8 +146,10 @@ export default function PoolPage({
   const [showBenchmark, setShowBenchmark] = useState(true);
   const [curveStartDate, setCurveStartDate] = useState("");
   const [curveEndDate, setCurveEndDate] = useState("");
+  const [curveReturnCache, setCurveReturnCache] = useState<Record<string, number>>({});
   const [poolSelectionInitialized, setPoolSelectionInitialized] = useState(false);
   const presetRequestRef = useRef(0);
+  const comparisonRequestRef = useRef(0);
 
   function itemTags(item: any): string[] {
     try {
@@ -325,9 +324,9 @@ export default function PoolPage({
     try {
       const payload = await continuePoolOptimization(poolItemId);
       const newRunId = String(payload?.baseline?.run?.run_id || "");
-      if (!newRunId) throw new Error("重跑完成，但没有返回新的 run");
+      if (!newRunId) throw new Error("重跑完成，但没有返回新的运行版本");
       await refreshTasks();
-      message.success("已重跑为新的 Baseline，正在打开参数优化");
+      message.success("已重跑为新的基线，正在打开参数优化");
       onContinueOptimization(newRunId);
     } catch (error) {
       message.error(`继续参数优化失败：${String(error)}`);
@@ -397,6 +396,15 @@ export default function PoolPage({
       const today = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Shanghai" });
       const payload = await rerunPool(selectedIds, poolRerunStartDate, today);
       setComparison(payload);
+      setCurveReturnCache((current) => {
+        const next = { ...current };
+        for (const item of payload?.items || []) {
+          const poolItemId = String(item?.pool_item_id || "");
+          const totalReturn = curveSummary(item?.curve || []).strategy?.totalReturn;
+          if (poolItemId && Number.isFinite(totalReturn)) next[poolItemId] = Number(totalReturn);
+        }
+        return next;
+      });
       setRerunProgress(1);
       setRerunMessage("策略池重跑完成");
       await refreshTasks();
@@ -413,14 +421,19 @@ export default function PoolPage({
 
   useEffect(() => {
     if (!poolItems.length) {
+      presetRequestRef.current += 1;
       setSelectedSymbol("");
       setDisplayedCurveIds([]);
       setSelectedIds([]);
+      setPoolSelectionInitialized(false);
       return;
     }
     const nextSymbol = selectedSymbol && symbols.includes(selectedSymbol) ? selectedSymbol : symbols[0] || "";
     if (nextSymbol !== selectedSymbol) {
+      presetRequestRef.current += 1;
       setPoolSelectionInitialized(false);
+      setDisplayedCurveIds([]);
+      setSelectedIds([]);
       setSelectedSymbol(nextSymbol);
     }
   }, [poolItems, selectedSymbol, symbols]);
@@ -428,6 +441,7 @@ export default function PoolPage({
   useEffect(() => {
     if (!poolNavigation || !poolItems.length) return;
     const targetItem = poolItems.find((item) => String(item.pool_item_id || "") === poolNavigation.poolItemId);
+    if (poolNavigation.poolItemId && !targetItem) return;
     const targetSymbol = String(poolNavigation.vtSymbol || targetItem?.vt_symbol || "").trim();
     if (!targetSymbol) return;
     const symbolItems = poolItems.filter((item) => String(item.vt_symbol || "") === targetSymbol);
@@ -450,6 +464,7 @@ export default function PoolPage({
 
   useEffect(() => {
     if (poolNavigation) return;
+    if (!selectedSymbol) return;
     const candidateIds = candidateItems.map((item) => String(item.pool_item_id));
     const displayed = displayedCurveIds.filter((id) => candidateIds.includes(id));
     const kept = selectedIds.filter((id) => candidateIds.includes(id));
@@ -464,18 +479,35 @@ export default function PoolPage({
       setSelectedIds(nextIds);
       setPoolSelectionInitialized(true);
     }
-  }, [candidateItems, displayedCurveIds, poolNavigation, poolSelectionInitialized, selectedIds, selectionMode]);
+  }, [candidateItems, displayedCurveIds, poolNavigation, poolSelectionInitialized, selectedIds, selectedSymbol, selectionMode]);
 
   useEffect(() => {
+    const requestId = ++comparisonRequestRef.current;
     if (!selectedIds.length) {
       setComparison({ items: [], benchmark: { curve: [] }, diagnostics: [] });
       return;
     }
     setLoading(true);
     comparePool(selectedIds)
-      .then((payload) => setComparison(payload))
-      .catch((error) => message.error(String(error)))
-      .finally(() => setLoading(false));
+      .then((payload) => {
+        if (requestId !== comparisonRequestRef.current) return;
+        setComparison(payload);
+        setCurveReturnCache((current) => {
+          const next = { ...current };
+          for (const item of payload?.items || []) {
+            const poolItemId = String(item?.pool_item_id || "");
+            const totalReturn = curveSummary(item?.curve || []).strategy?.totalReturn;
+            if (poolItemId && Number.isFinite(totalReturn)) next[poolItemId] = Number(totalReturn);
+          }
+          return next;
+        });
+      })
+      .catch((error) => {
+        if (requestId === comparisonRequestRef.current) message.error(String(error));
+      })
+      .finally(() => {
+        if (requestId === comparisonRequestRef.current) setLoading(false);
+      });
   }, [selectedIds]);
 
   const compareItems = useMemo(() => {
@@ -541,14 +573,18 @@ export default function PoolPage({
     return displayedCurveIds.map((id) => candidateById.get(id)).filter(Boolean);
   }, [candidateItems, displayedCurveIds]);
   const poolCurveControlItems = useMemo<CurveControlItem[]>(() =>
-    displayedCurveItems.map((item: any) => ({
-      key: String(item.pool_item_id),
-      label: poolItemLabel(item),
-      type: "strategy" as const,
-      value: curveSummary(item?.curve || []).strategy?.totalReturn,
-      detail: `${item.vt_symbol || "-"} · ${formatReturnPct(curveSummary(item?.curve || []).strategy?.totalReturn, 2)}`
-    })),
-  [displayedCurveItems]);
+    displayedCurveItems.map((item: any) => {
+      const poolItemId = String(item.pool_item_id);
+      const totalReturn = curveReturnCache[poolItemId] ?? curveSummary(item?.curve || []).strategy?.totalReturn;
+      return {
+        key: poolItemId,
+        label: poolItemLabel(item),
+        type: "strategy" as const,
+        value: totalReturn,
+        detail: `${item.vt_symbol || "-"} · ${formatReturnPct(totalReturn, 2)}`
+      };
+    }),
+  [curveReturnCache, displayedCurveItems]);
 
   function applyPoolCurveShortcut(range: "3m" | "6m" | "1y" | "all") {
     const next = shortcutDateRange(poolCurveDateBounds, range);
@@ -590,7 +626,7 @@ export default function PoolPage({
       {
         title: (
           <button type="button" className="table-sort-button" onClick={() => togglePoolSort("trade_count")}>
-            交易数 <SortCaret state={sortArrow("trade_count")} />
+            交易次数 <SortCaret state={sortArrow("trade_count")} />
           </button>
         ),
         width: 82,
@@ -761,7 +797,7 @@ export default function PoolPage({
           </label>
           <label className="field library-folder-field">
             <span>策略搜索</span>
-            <Input value={searchText} onChange={(event) => { presetRequestRef.current += 1; setPoolSelectionInitialized(false); setSearchText(event.target.value); setDisplayedCurveIds([]); setSelectedIds([]); }} placeholder="策略 / run / 变体 / 标签" />
+            <Input value={searchText} onChange={(event) => { presetRequestRef.current += 1; setPoolSelectionInitialized(false); setSearchText(event.target.value); setDisplayedCurveIds([]); setSelectedIds([]); }} placeholder="策略 / 运行版本 / 结果版本 / 标签" />
           </label>
           <div className="field library-folder-field strategy-pool-preset-field">
             <div className="strategy-pool-preset-head">
@@ -822,7 +858,7 @@ export default function PoolPage({
       </section>
 
       <section className="band library-shell">
-        <div className="library-section-head"><div><h3>累计收益对比</h3><p>已选择 {selectedIds.length} 个策略，展示其按昨收归一并逐日累加后的收益曲线。</p></div><span className={statusClass(compareItems.length ? "completed" : "pending")}>{compareItems.length ? "ready" : "empty"}</span></div>
+        <div className="library-section-head"><div><h3>累计收益对比</h3><p>已选择 {selectedIds.length} 个策略，展示其按昨收归一并逐日累加后的收益曲线。</p></div><span className={statusClass(compareItems.length ? "completed" : "pending")}>{compareItems.length ? "已就绪" : "暂无曲线"}</span></div>
         <CurveControls
           items={poolCurveControlItems}
           visibleKeys={selectedIds}
@@ -840,7 +876,7 @@ export default function PoolPage({
           <label className="pool-benchmark-toggle">
             <input type="checkbox" checked={showBenchmark} onChange={(event) => setShowBenchmark(event.target.checked)} disabled={!selectedIds.length} />
             <span className="curve-swatch is-dashed" style={{ borderLeftColor: BENCHMARK_CURVE_COLOR }} />
-            <span>显示 Buy & Hold</span>
+            <span>显示 B&amp;H</span>
           </label>
         </div>
         {compareItems.length && poolVisibleKeys.length > 0 ? <div className="library-curve-panel unified-curve-panel"><MultiVariantCurveChart curves={filteredCompareCurves} visibleKeys={poolVisibleKeys} labels={compareLabels} orderedKeys={[...poolCurveControlItems.map((item) => item.key), ...(showBenchmark ? ["buy_hold"] : [])]} showLegend={false} height={420} /></div> : compareItems.length ? <div className="empty-state">当前没有展示的曲线，可在上方重新勾选。</div> : <div className="empty-state">请至少选择一个策略。</div>}
@@ -848,7 +884,7 @@ export default function PoolPage({
       </section>
 
       <section className="band library-shell">
-        <div className="library-section-head"><div><h3>表现明细</h3><p>这里展示当前参与对比策略的核心指标。</p></div></div>
+        <div className="library-section-head"><div><h3>绩效明细</h3><p>这里展示当前参与对比策略的核心指标。</p></div></div>
         <div className="library-table-wrap">
           <Table rowKey="pool_item_id" columns={comparisonColumns} dataSource={compareItems} pagination={{ pageSize: 8 }} loading={loading} tableLayout="fixed" scroll={{ x: 1042 }} className="workbench-table strategy-pool-detail-table" rowClassName={(record) => (record.pool_item_id === selectedDetailId ? "is-selected" : "")} />
         </div>
@@ -856,7 +892,7 @@ export default function PoolPage({
 
       {detail && (
         <section className="band library-shell">
-          <div className="library-section-head"><div><h3>{strategyLabel(detail.pool_item)}</h3><p className="pool-detail-identity"><span>入池时间：{formatDate(detail.pool_item?.created_at).slice(0, 16)}</span><span>快照编号：{detail.pool_item?.pool_item_id || "-"}</span></p></div><div className="detail-head-actions"><span className="status-pill status-completed">completed</span><Button size="small" loading={continuingPoolItemId === String(detail.pool_item?.pool_item_id)} onClick={continueOptimizationFromPool}>继续参数优化</Button><Button size="small" danger disabled={Boolean(continuingPoolItemId)} onClick={() => handleDeletePoolItem(String(detail.pool_item?.pool_item_id))}>从池中移除</Button></div></div>
+          <div className="library-section-head"><div><h3>{strategyLabel(detail.pool_item)}</h3><p className="pool-detail-identity"><span>入池时间：{formatDate(detail.pool_item?.created_at).slice(0, 16)}</span><span>快照编号：{detail.pool_item?.pool_item_id || "-"}</span></p></div><div className="detail-head-actions"><span className="status-pill status-completed">快照已就绪</span><Button size="small" loading={continuingPoolItemId === String(detail.pool_item?.pool_item_id)} onClick={continueOptimizationFromPool}>继续参数优化</Button><Button size="small" danger disabled={Boolean(continuingPoolItemId)} onClick={() => handleDeletePoolItem(String(detail.pool_item?.pool_item_id))}>从池中移除</Button></div></div>
           <div className="library-metric-grid">
             <div className="library-metric-card"><span>{zh.sharpe}</span><strong>{formatNumber(detail.pool_item?.sharpe ?? metrics.sharpe ?? metrics.sharpe_ratio)}</strong></div>
             <div className="library-metric-card positive"><span>策略累计收益</span><strong>{detailCurveSummary.strategy ? formatReturnPct(detailCurveSummary.strategy.totalReturn, 2) : "-"}</strong></div>

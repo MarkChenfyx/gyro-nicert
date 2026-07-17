@@ -198,6 +198,23 @@ export function getPoolCurve(poolItemId: string) {
   return request<any>(`/api/pool/${encodeURIComponent(poolItemId)}/curve`);
 }
 
+export function getPoolResearchContext(poolItemId: string) {
+  return request<any>(`/api/strategy-research/pool/${encodeURIComponent(poolItemId)}/context`, { cache: "no-store" });
+}
+
+export function runPoolResearchHeatmap(poolItemId: string, payload: {
+  x_parameter: string;
+  y_parameter: string;
+  parameter_ranges: Record<string, { low: number; high: number; step: number }>;
+  objective: "excess_return" | "sharpe";
+  max_trials?: number;
+}) {
+  return request<any>(`/api/strategy-research/pool/${encodeURIComponent(poolItemId)}/heatmap`, {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
 export function comparePool(poolItemIds: string[]) {
   return request<any>("/api/pool/compare", {
     method: "POST",

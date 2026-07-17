@@ -8,10 +8,10 @@ from uuid import uuid4
 import csv
 import json
 
-from backtesting import run_backtest
-from backtesting.local_data_provider import split_vt_symbol
-from common.time_utils import now_beijing
-from data_manager import coverage_service, download_service
+from backend.backtesting import run_backtest
+from backend.backtesting.local_data_provider import split_vt_symbol
+from backend.common.time_utils import now_beijing
+from backend.data_manager import coverage_service, download_service
 from backend.core.hashing import compute_sha256
 from backend.core.paths import POOL_STRATEGIES_ROOT
 from backend.domain.enums import ArtifactType, TaskType

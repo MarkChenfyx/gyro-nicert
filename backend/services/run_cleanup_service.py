@@ -9,7 +9,7 @@ from uuid import uuid4
 
 from backend.core.paths import RUNS_ROOT
 from backend.repositories import run_repository
-from data_manager.database import get_app_db_connection
+from backend.data_manager.database import get_app_db_connection
 
 
 LOGGER = logging.getLogger(__name__)

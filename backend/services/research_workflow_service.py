@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any
 import json
 
-from backtesting import run_backtest
+from backend.backtesting import run_backtest
 from backend.domain.enums import TaskType
 from backend.repositories import strategy_repository
 from backend.services import run_service, strategy_generation_service, strategy_service, task_service

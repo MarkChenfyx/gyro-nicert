@@ -19,12 +19,16 @@
 
 ```text
 frontend/                 React + Vite + Ant Design + ECharts
-backend/                  FastAPI、API 路由、服务、仓储与领域模型
-backtesting/              本地行情适配与 vn.py CTA 回测边界
-strategy_generation/      自然语言到 vn.py 策略代码的生成边界
-strategy_optimization/    参数清单、自动优化与手动网格优化
-data_manager/             RQData 下载、本地行情 SQLite 与覆盖范围查询
-strategies/               策略生成、校验和模板目录
+backend/                  FastAPI 后端与全部服务端模块
+  api/                    API 路由
+  services/               工作流与业务服务
+  repositories/           SQLite 索引仓储
+  backtesting/            本地行情适配与 vn.py CTA 回测边界
+  data_manager/           RQData 下载、本地行情 SQLite 与覆盖范围查询
+  strategy_generation/    自然语言到 vn.py 策略代码的生成边界
+  strategy_optimization/  参数清单、自动优化与手动网格优化
+storage/natural_language/ 工作台可选择的自然语言策略文本
+storage/strategies/       策略生成、校验和模板目录
 storage/db/               app.sqlite 与 market_data.sqlite
 storage/runtime/          临时 run 产物
 storage/pool/             长期策略池快照
@@ -47,7 +51,7 @@ tests/                    自动化测试
 pip install -e .
 ```
 
-真实回测环境还需要安装与你的 vn.py 部署匹配的 `vnpy` 与 `vnpy_ctastrategy`。工作台实际导入的是 `backtesting/teacher_engine.py`，不会直接使用 site-packages 中的 vn.py CTA 回测引擎。若使用 RQData 下载行情，还需要安装 `rqdatac`。
+真实回测环境还需要安装与你的 vn.py 部署匹配的 `vnpy` 与 `vnpy_ctastrategy`。工作台实际导入的是 `backend/backtesting/teacher_engine.py`，不会直接使用 site-packages 中的 vn.py CTA 回测引擎。若使用 RQData 下载行情，还需要安装 `rqdatac`。
 
 ## 配置
 
@@ -61,18 +65,15 @@ Copy-Item .env.example .env
 
 - `GYRO_LLM_API_KEY`、`GYRO_LLM_BASE_URL`、`GYRO_LLM_MODEL`：自然语言策略生成。
 - `GYRO_RQDATA_USERNAME`、`GYRO_RQDATA_PASSWORD`：RQData 行情下载。
-- `GYRO_VT_SETTING_PATH`：可选的 vn.py `vt_setting.json` 路径。
 
-RQData 凭据查找顺序：
+RQData 凭据统一配置在项目根目录的 `.env`：
 
-1. `GYRO_RQDATA_USERNAME` / `GYRO_RQDATA_PASSWORD`
-2. `RQDATA_USERNAME` / `RQDATA_PASSWORD`
-3. `GYRO_VT_SETTING_PATH`
-4. 项目或用户目录的 `.vntrader/vt_setting.json`
+```text
+GYRO_RQDATA_USERNAME=你的用户名
+GYRO_RQDATA_PASSWORD=你的密码
+```
 
 不要提交 `.env`、RQData 密码或模型 API Key。
-
-项目本地的 vn.py/RQData 配置可放在 `.vntrader/vt_setting.json`。该目录已被 Git 忽略，项目不会读取工作区外的旧工程凭据。
 
 ## 启动
 

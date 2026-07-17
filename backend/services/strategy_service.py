@@ -6,13 +6,13 @@ from typing import Any
 from uuid import uuid4
 import re
 
-from common.time_utils import timestamp_id
+from backend.common.time_utils import timestamp_id
 from backend.core.hashing import compute_sha256
 from backend.core.paths import GENERATED_STRATEGIES_ROOT
 from backend.domain.enums import ArtifactType
 from backend.repositories import artifact_repository, strategy_repository
 from backend.services import natural_language_source_service
-from strategy_generation.validation import validate_open_order_volumes
+from backend.strategy_generation.validation import validate_open_order_volumes
 
 
 def _strategy_id() -> str:

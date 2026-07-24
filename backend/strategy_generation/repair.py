@@ -18,7 +18,7 @@ Platform compatibility rules:
 - The strategy class inherits CtaTemplate and remains a complete single-file strategy.
 - The returned class name must be a valid Python identifier and the code must be directly usable for backtesting.
 - Use fixed_size = 1 for orders. If use_dynamic_size exists, set it to 0.
-- Every self.buy and self.short opening order must use exactly self.fixed_size as its volume argument.
+- Every self.buy and self.short opening order must use exactly self.fixed_size as its volume argument. The sole exception is a self.buy order that restores a fixed base position, which may use exactly abs(self.pos - self.fixed_size).
 - Never use target_size, low_size, medium_size, a numeric literal, account capital, target notional, arithmetic, or another variable as the volume for self.buy or self.short.
 - If position sizing is part of the original logic, preserve its signal/filtering intent but convert every opening order to one unit with self.fixed_size.
 - Market data is supplied through on_bar. Do not add network, RQData, database, or backtesting-engine calls.
@@ -219,4 +219,3 @@ def repair_strategy_code(
             "blocking_issues": [],
             "error": error,
         }
-

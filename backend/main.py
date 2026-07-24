@@ -5,13 +5,23 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from backend.api import data_api, natural_language_api, optimization_api, pool_api, research_api, run_api, strategy_api, strategy_research_api, task_api
+from backend.core.environment import env
 
 
 app = FastAPI(title="gyro_nicert API", version="0.1.0")
 
+cors_origins = [
+    origin.strip()
+    for origin in env(
+        "GYRO_CORS_ORIGINS",
+        "http://localhost:5173,http://127.0.0.1:5173",
+    ).split(",")
+    if origin.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

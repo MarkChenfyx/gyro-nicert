@@ -131,12 +131,24 @@ class OptimizationRunRequest(BaseModel):
     run_id: str
     variant_name: str = "baseline"
     method: str = "manual_grid"
+    base_parameters: dict[str, Any] = Field(default_factory=dict)
     selected_parameters: list[str] = Field(default_factory=list)
     parameter_ranges: dict[str, Any] = Field(default_factory=dict)
     constraints: list[dict[str, Any]] = Field(default_factory=list)
     virtual_parameters: list[dict[str, Any]] = Field(default_factory=list)
     objective: str = "sharpe"
     max_trials: int = Field(default=200, ge=1, le=5000)
+    max_workers: int | None = Field(default=None, ge=1, le=16)
+
+
+class OptimizationCurveSnapshotCreateRequest(BaseModel):
+    run_id: str
+    variant_name: str = "manual_grid"
+    name: str = Field(default="", max_length=48)
+
+
+class OptimizationCurveSnapshotUpdateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=48)
 
 
 class StrategyResearchHeatmapRequest(BaseModel):
@@ -145,6 +157,16 @@ class StrategyResearchHeatmapRequest(BaseModel):
     parameter_ranges: dict[str, Any] = Field(default_factory=dict)
     objective: str = "excess_return"
     max_trials: int = Field(default=100, ge=4, le=100)
+
+
+class StrategyResearchWalkForwardRequest(BaseModel):
+    training_start_date: str | None = None
+    training_months: int = Field(default=24, ge=6, le=120)
+    test_months: int = Field(default=6, ge=1, le=24)
+    selected_parameters: list[str] = Field(default_factory=list, min_length=1, max_length=3)
+    parameter_ranges: dict[str, Any] = Field(default_factory=dict)
+    objective: str = "sharpe"
+    max_trials: int = Field(default=100, ge=2, le=100)
 
 
 class TaskArchiveRequest(BaseModel):

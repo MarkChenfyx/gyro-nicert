@@ -39,6 +39,12 @@ def test_open_order_volume_accepts_self_fixed_size():
     validate_open_order_volumes(code)
 
 
+def test_open_order_volume_accepts_base_position_recovery_buy():
+    code = """class DemoStrategy:\n    fixed_size = 1\n    def trade(self, price):\n        self.buy(price, abs(self.pos - self.fixed_size))\n"""
+
+    validate_open_order_volumes(code)
+
+
 @pytest.mark.parametrize("volume", ["self.target_size", "100", "self.fixed_size - self.pos"])
 def test_open_order_volume_rejects_non_fixed_size(volume):
     code = f"""class DemoStrategy:\n    fixed_size = 1\n    def trade(self, price):\n        self.buy(price, {volume})\n"""

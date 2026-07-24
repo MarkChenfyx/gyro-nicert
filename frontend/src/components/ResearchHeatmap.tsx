@@ -20,7 +20,8 @@ export default function ResearchHeatmap({
   xValues,
   yValues,
   metric,
-  currentParameters
+  currentParameters,
+  visualRange
 }: {
   rows: any[];
   xParameter: string;
@@ -29,6 +30,7 @@ export default function ResearchHeatmap({
   yValues: Array<string | number>;
   metric: "excess_return" | "sharpe";
   currentParameters: Record<string, unknown>;
+  visualRange?: { min: number; max: number };
 }) {
   const chartElementRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<ReturnType<typeof echarts.init> | null>(null);
@@ -37,8 +39,12 @@ export default function ResearchHeatmap({
     const metricValues = successfulRows.map((row) => Number(row[metric]));
     const rawMin = metricValues.length ? Math.min(...metricValues) : 0;
     const rawMax = metricValues.length ? Math.max(...metricValues) : 1;
-    const visualMin = rawMin === rawMax ? rawMin - Math.max(1, Math.abs(rawMin) * 0.1) : rawMin;
-    const visualMax = rawMin === rawMax ? rawMax + Math.max(1, Math.abs(rawMax) * 0.1) : rawMax;
+    const requestedMin = Number(visualRange?.min);
+    const requestedMax = Number(visualRange?.max);
+    const rangeMin = Number.isFinite(requestedMin) ? requestedMin : rawMin;
+    const rangeMax = Number.isFinite(requestedMax) ? requestedMax : rawMax;
+    const visualMin = rangeMin === rangeMax ? rangeMin - Math.max(1, Math.abs(rangeMin) * 0.1) : rangeMin;
+    const visualMax = rangeMin === rangeMax ? rangeMax + Math.max(1, Math.abs(rangeMax) * 0.1) : rangeMax;
     const bestValue = metricValues.length ? rawMax : null;
     const data = successfulRows.map((row) => {
       const parameters = row?.parameters || {};
@@ -116,7 +122,7 @@ export default function ResearchHeatmap({
         emphasis: { itemStyle: { borderColor: "#0f766e", borderWidth: 2 } }
       }]
     };
-  }, [currentParameters, metric, rows, xParameter, xValues, yParameter, yValues]);
+  }, [currentParameters, metric, rows, visualRange, xParameter, xValues, yParameter, yValues]);
 
   useEffect(() => {
     if (!chartElementRef.current) return;

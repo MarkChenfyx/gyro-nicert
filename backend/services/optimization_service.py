@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 import hashlib
 import json
+import math
 import re
 
 from backend.core.hashing import compute_sha256
@@ -241,6 +242,37 @@ def _validate_selected_parameters(search_space: dict[str, Any], selected: list[s
         raise ValueError(f"Missing parameter ranges: {', '.join(missing)}")
 
 
+def _resolve_base_parameters(search_space: dict[str, Any], overrides: dict[str, Any] | None) -> dict[str, Any]:
+    """Merge user-edited defaults without allowing hidden/system parameters to change."""
+    resolved = dict(search_space.get("base_parameters") or {})
+    requested = dict(overrides or {})
+    if not requested:
+        return resolved
+
+    visible = {str(item["name"]): dict(item) for item in search_space.get("parameters") or []}
+    blocked = [name for name in requested if name not in visible]
+    if blocked:
+        raise ValueError(f"Base parameters are not editable: {', '.join(blocked)}")
+
+    for name, raw_value in requested.items():
+        if isinstance(raw_value, bool):
+            numeric_value = int(raw_value)
+        elif isinstance(raw_value, (int, float)):
+            numeric_value = raw_value
+        else:
+            raise ValueError(f"Base parameter must be numeric: {name}")
+        if not math.isfinite(float(numeric_value)):
+            raise ValueError(f"Base parameter must be finite: {name}")
+        if str(visible[name].get("type") or "").lower() == "int":
+            if not float(numeric_value).is_integer():
+                raise ValueError(f"Base parameter must be an integer: {name}")
+            numeric_value = int(numeric_value)
+        else:
+            numeric_value = float(numeric_value)
+        resolved[name] = numeric_value
+    return resolved
+
+
 def _validated_virtual_parameters(search_space: dict[str, Any], items: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     declared = {
         str(item["name"])
@@ -273,6 +305,7 @@ def _result_payload(optimization: dict[str, Any], selected_variant: str, artifac
     return {
         "metrics": metrics,
         "objective": optimization.get("objective"),
+        "base_parameters": optimization.get("base_parameters") or {},
         "recommended": {
             "label": recommended.get("label"),
             "parameters": recommended.get("parameters") or {},
@@ -299,16 +332,19 @@ def run_optimization(
     run_id: str,
     variant_name: str = "baseline",
     method: str = "manual_grid",
+    base_parameters: dict[str, Any] | None = None,
     selected_parameters: list[str] | None = None,
     parameter_ranges: dict[str, Any] | None = None,
     constraints: list[dict[str, Any]] | None = None,
     virtual_parameters: list[dict[str, Any]] | None = None,
     objective: str = "sharpe",
     max_trials: int = 200,
+    max_workers: int | None = None,
 ) -> dict[str, Any]:
     selected = [str(item) for item in list(selected_parameters or []) if str(item).strip()]
     ranges = dict(parameter_ranges or {})
     search_space = get_search_space(run_id, variant_name)
+    resolved_base_parameters = _resolve_base_parameters(search_space, base_parameters)
     resolved_method = resolve_method({"method": method}, {})
     if resolved_method in {"auto", "optuna"} and not selected:
         selected = [str(item["name"]) for item in search_space.get("parameters") or [] if item.get("tunable")]
@@ -342,7 +378,7 @@ def run_optimization(
             strategy_code=str(context["strategy_code"]),
             class_name=str(context["inventory"].get("class_name") or ""),
             vt_symbol=str(context["vt_symbol"]),
-            base_parameters=dict(search_space.get("base_parameters") or {}),
+            base_parameters=resolved_base_parameters,
             parameter_space=ranges,
             backtest_config=config,
             objective=objective,
@@ -350,6 +386,7 @@ def run_optimization(
                 "method": resolved_method,
                 "selected_parameters": selected,
                 "max_trials": max_trials,
+                "max_workers": max_workers,
                 "progress_callback": progress_callback,
                 "constraints": list(constraints or []),
                 "virtual_parameters": list(virtual_by_name.values()),
@@ -383,7 +420,15 @@ def run_optimization(
             "trades_path": str(variant_artifacts["trades_path"] or ""),
             "grid_summary_path": str(grid_summary_path),
         }
-        payload = _result_payload({**optimization, "recommended": optimization.get("recommended") or {}}, selected_variant, artifact_paths)
+        payload = _result_payload(
+            {
+                **optimization,
+                "base_parameters": resolved_base_parameters,
+                "recommended": optimization.get("recommended") or {},
+            },
+            selected_variant,
+            artifact_paths,
+        )
         payload["metrics"] = result_without_rows["metrics"]
         variant_artifacts["result_path"].write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 

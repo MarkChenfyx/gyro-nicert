@@ -1,17 +1,18 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Button, InputNumber, Select, Spin, message } from "antd";
-import { getPoolResearchContext, runPoolResearchHeatmap } from "../api";
+import { Button, InputNumber, Modal, Select, Spin, Table, message } from "antd";
+import { getPoolResearchContext, runPoolResearchHeatmap, runPoolResearchWalkForward, runPoolWalkForwardRankAnalysis } from "../api";
 import ResearchHeatmap from "../components/ResearchHeatmap";
-import { CurveChart, curveSummary, formatDate, strategyLabel } from "../app/ui";
+import { CurveChart, MultiVariantCurveChart, curveSummary, formatDate, strategyLabel } from "../app/ui";
 
 const RESEARCH_POOL_STORAGE_KEY = "gyro_nicert.research_pool_item_id";
 const RESEARCH_TAB_STORAGE_KEY = "gyro_nicert.research_tab";
 
-type ResearchTab = "overview" | "heatmap";
+type ResearchTab = "overview" | "heatmap" | "walk_forward";
 type RangeSpec = { low: number; high: number; step: number };
 
 function initialResearchTab(): ResearchTab {
-  return window.localStorage.getItem(RESEARCH_TAB_STORAGE_KEY) === "heatmap" ? "heatmap" : "overview";
+  const saved = window.localStorage.getItem(RESEARCH_TAB_STORAGE_KEY);
+  return saved === "heatmap" || saved === "walk_forward" ? saved : "overview";
 }
 
 function formatPercent(value: unknown, digits = 2) {
@@ -24,6 +25,15 @@ function formatNumber(value: unknown, digits = 2) {
   return Number.isFinite(number) ? number.toFixed(digits) : "-";
 }
 
+function formatRatio(value: unknown, digits = 0) {
+  const number = Number(value);
+  return Number.isFinite(number) ? `${(number * 100).toFixed(digits)}%` : "-";
+}
+
+function hasFiniteValue(value: unknown) {
+  return value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value));
+}
+
 function gridValueCount(spec?: RangeSpec) {
   if (!spec) return 0;
   const low = Number(spec.low);
@@ -31,6 +41,22 @@ function gridValueCount(spec?: RangeSpec) {
   const step = Number(spec.step);
   if (![low, high, step].every(Number.isFinite) || step <= 0 || high < low) return 0;
   return Math.max(1, Math.floor((high - low) / step + 1.0000001));
+}
+
+function parameterAxisValues(rows: any[], parameterName: string): Array<string | number> {
+  const unique = new Map<string, string | number>();
+  for (const row of rows) {
+    const value = row?.parameters?.[parameterName];
+    if (value === undefined || value === null) continue;
+    const number = Number(value);
+    const normalized = Number.isFinite(number) ? number : String(value);
+    unique.set(`${typeof normalized}:${String(normalized)}`, normalized);
+  }
+  const values = Array.from(unique.values());
+  const numeric = values.every((value) => typeof value === "number");
+  return values.sort((left, right) => numeric
+    ? Number(left) - Number(right)
+    : String(left).localeCompare(String(right)));
 }
 
 function compactSearchText(value: unknown) {
@@ -79,12 +105,22 @@ export default function StrategyResearchPage({
   const [activeTab, setActiveTab] = useState<ResearchTab>(initialResearchTab);
   const [context, setContext] = useState<any>(null);
   const [heatmap, setHeatmap] = useState<any>(null);
+  const [walkForward, setWalkForward] = useState<any>(null);
   const [loadingContext, setLoadingContext] = useState(false);
   const [running, setRunning] = useState(false);
+  const [runningWalkForward, setRunningWalkForward] = useState(false);
+  const [runningRankAnalysis, setRunningRankAnalysis] = useState(false);
   const [xParameter, setXParameter] = useState("");
   const [yParameter, setYParameter] = useState("");
   const [ranges, setRanges] = useState<Record<string, RangeSpec>>({});
   const [metric, setMetric] = useState<"excess_return" | "sharpe">("excess_return");
+  const [trainingStartDate, setTrainingStartDate] = useState("");
+  const [trainingMonths, setTrainingMonths] = useState(24);
+  const [walkObjective, setWalkObjective] = useState<"sharpe">("sharpe");
+  const [walkParameters, setWalkParameters] = useState<string[]>([]);
+  const [walkRanges, setWalkRanges] = useState<Record<string, RangeSpec>>({});
+  const [rankDetailWindowIndex, setRankDetailWindowIndex] = useState(1);
+  const [heatmapWindowIndex, setHeatmapWindowIndex] = useState<number | null>(null);
   const contextRequestRef = useRef(0);
 
   const sortedPoolItems = useMemo(
@@ -145,17 +181,22 @@ export default function StrategyResearchPage({
     if (!selectedPoolItemId) {
       setContext(null);
       setHeatmap(null);
+      setWalkForward(null);
+      setRankDetailWindowIndex(1);
+      setHeatmapWindowIndex(null);
       return;
     }
     window.localStorage.setItem(RESEARCH_POOL_STORAGE_KEY, selectedPoolItemId);
     const requestId = ++contextRequestRef.current;
     setLoadingContext(true);
+    setHeatmapWindowIndex(null);
     getPoolResearchContext(selectedPoolItemId)
       .then((payload) => {
         if (requestId !== contextRequestRef.current) return;
         const parameters = (payload.parameters || []) as any[];
         const parameterNames = new Set(parameters.map((item) => String(item.name)));
         const latest = payload.latest_heatmap || null;
+        const latestWalkForward = payload.latest_walk_forward || null;
         const nextX = parameterNames.has(String(latest?.x_parameter)) ? String(latest.x_parameter) : String(parameters[0]?.name || "");
         const nextY = parameterNames.has(String(latest?.y_parameter)) && String(latest?.y_parameter) !== nextX
           ? String(latest.y_parameter)
@@ -167,15 +208,29 @@ export default function StrategyResearchPage({
         }]));
         setContext(payload);
         setHeatmap(latest);
+        setWalkForward(latestWalkForward);
+        setRankDetailWindowIndex(Number(latestWalkForward?.windows?.[0]?.index || 1));
         setXParameter(nextX);
         setYParameter(nextY);
         setRanges({ ...defaultRanges, ...(latest?.parameter_ranges || {}) });
         setMetric(latest?.objective === "sharpe" ? "sharpe" : "excess_return");
+        const savedWalkParameters = (latestWalkForward?.selected_parameters || [])
+          .map((name: unknown) => String(name))
+          .filter((name: string) => parameterNames.has(name))
+          .slice(0, 3);
+        setWalkParameters(savedWalkParameters.length ? savedWalkParameters : parameters.slice(0, 2).map((item) => String(item.name)));
+        setWalkRanges({ ...defaultRanges, ...(latestWalkForward?.parameter_ranges || {}) });
+        setTrainingStartDate(String(latestWalkForward?.training_start_date || payload.config?.start_date || "").slice(0, 10));
+        setTrainingMonths(Number(latestWalkForward?.training_months || 24));
+        setWalkObjective("sharpe");
       })
       .catch((error) => {
         if (requestId === contextRequestRef.current) {
           setContext(null);
           setHeatmap(null);
+          setWalkForward(null);
+          setRankDetailWindowIndex(1);
+          setHeatmapWindowIndex(null);
           message.error(String(error));
         }
       })
@@ -194,6 +249,11 @@ export default function StrategyResearchPage({
     setRanges((current) => ({ ...current, [name]: { ...(current[name] || { low: 0, high: 0, step: 1 }), [key]: Number(value) } }));
   }
 
+  function updateWalkRange(name: string, key: keyof RangeSpec, value: number | null) {
+    if (value === null) return;
+    setWalkRanges((current) => ({ ...current, [name]: { ...(current[name] || { low: 0, high: 0, step: 1 }), [key]: Number(value) } }));
+  }
+
   const parameterOptions = useMemo(
     () => (context?.parameters || []).map((item: any) => ({ value: String(item.name), label: String(item.name) })),
     [context]
@@ -201,6 +261,9 @@ export default function StrategyResearchPage({
   const xParameterMeta = (context?.parameters || []).find((item: any) => String(item.name) === xParameter);
   const yParameterMeta = (context?.parameters || []).find((item: any) => String(item.name) === yParameter);
   const totalGridCount = gridValueCount(ranges[xParameter]) * gridValueCount(ranges[yParameter]);
+  const walkGridCount = walkParameters.length
+    ? walkParameters.reduce((total, name) => total * gridValueCount(walkRanges[name]), 1)
+    : 0;
 
   async function runHeatmap() {
     if (!selectedPoolItemId || !xParameter || !yParameter) {
@@ -235,6 +298,84 @@ export default function StrategyResearchPage({
     }
   }
 
+  async function runWalkForward() {
+    if (!selectedPoolItemId || !walkParameters.length) {
+      message.warning("请至少选择一个优化参数");
+      return;
+    }
+    if (walkGridCount < 2 || walkGridCount > 100) {
+      message.warning("每个训练窗口的参数组合需要控制在 2～100 组");
+      return;
+    }
+    const configuredStartDate = String(context?.config?.start_date || "").slice(0, 10);
+    const configuredEndDate = String(context?.config?.end_date || "").slice(0, 10);
+    if (!trainingStartDate) {
+      message.warning("请选择训练开始日期");
+      return;
+    }
+    if ((configuredStartDate && trainingStartDate < configuredStartDate) || (configuredEndDate && trainingStartDate > configuredEndDate)) {
+      message.warning(`训练开始日期需要位于 ${configuredStartDate} 至 ${configuredEndDate} 之间`);
+      return;
+    }
+    setRunningWalkForward(true);
+    try {
+      await refreshTasks().catch(() => undefined);
+      const payload = await runPoolResearchWalkForward(selectedPoolItemId, {
+        training_start_date: trainingStartDate,
+        training_months: trainingMonths,
+        test_months: 6,
+        selected_parameters: walkParameters,
+        parameter_ranges: Object.fromEntries(walkParameters.map((name) => [name, walkRanges[name]])),
+        objective: walkObjective,
+        max_trials: 100
+      });
+      setWalkForward(payload);
+      setRankDetailWindowIndex(Number(payload?.windows?.[0]?.index || 1));
+      setHeatmapWindowIndex(null);
+      message.success("Walk Forward 研究完成");
+      await refreshTasks().catch(() => undefined);
+    } catch (error) {
+      message.error(String(error));
+      await refreshTasks().catch(() => undefined);
+    } finally {
+      setRunningWalkForward(false);
+    }
+  }
+
+  async function runRankAnalysis() {
+    const experimentId = String(walkForward?.experiment_id || "");
+    if (!selectedPoolItemId || !experimentId) {
+      message.warning("请先完成一次 Walk Forward");
+      return;
+    }
+    setRunningRankAnalysis(true);
+    try {
+      await refreshTasks().catch(() => undefined);
+      const payload = await runPoolWalkForwardRankAnalysis(selectedPoolItemId, experimentId);
+      setWalkForward(payload);
+      setRankDetailWindowIndex(Number(payload?.windows?.[0]?.index || 1));
+      message.success(payload?.cached ? "已读取全量样本外分析" : "全量样本外分析完成");
+      await refreshTasks().catch(() => undefined);
+    } catch (error) {
+      message.error(String(error));
+      await refreshTasks().catch(() => undefined);
+    } finally {
+      setRunningRankAnalysis(false);
+    }
+  }
+
+  function openWindowHeatmaps(window: any) {
+    if ((walkForward?.selected_parameters || []).length !== 2) {
+      message.info("训练集与测试集双热力图仅支持恰好两个优化参数");
+      return;
+    }
+    if (!(window?.rank_analysis?.rows || []).length) {
+      message.info("请先计算全量样本外参数横截面");
+      return;
+    }
+    setHeatmapWindowIndex(Number(window.index));
+  }
+
   const curveRows = context?.curve || [];
   const summary = useMemo(() => curveSummary(curveRows), [curveRows]);
   const metrics = context?.metrics || {};
@@ -245,9 +386,133 @@ export default function StrategyResearchPage({
   const heatmapRows = heatmap?.grid_summary || [];
   const positiveRows = heatmapRows.filter((row: any) => row?.success && Number.isFinite(Number(row?.[metric])));
   const positiveRatio = positiveRows.length ? positiveRows.filter((row: any) => Number(row[metric]) > 0).length / positiveRows.length : null;
-
-  function renderRangeRow(parameterName: string, parameterMeta: any) {
-    const spec = ranges[parameterName];
+  const walkCurveRows = walkForward?.curve || [];
+  const walkSummary = useMemo(() => curveSummary(walkCurveRows), [walkCurveRows]);
+  const fixedCurveRows = walkForward?.fixed_curve || [];
+  const fixedSummary = useMemo(() => curveSummary(fixedCurveRows), [fixedCurveRows]);
+  const fixedComparisonAvailable = fixedCurveRows.length > 0;
+  const walkTradeCount = (walkForward?.windows || []).reduce((total: number, window: any) => {
+    const value = Number(window?.test_metrics?.total_trade_count);
+    return total + (Number.isFinite(value) ? value : 0);
+  }, 0);
+  const fixedTradeCount = (walkForward?.windows || []).reduce((total: number, window: any) => {
+    const value = Number(window?.fixed_test_metrics?.total_trade_count);
+    return total + (Number.isFinite(value) ? value : 0);
+  }, 0);
+  const walkReturnUplift = walkSummary.strategy && fixedSummary.strategy
+    ? walkSummary.strategy.totalReturn - fixedSummary.strategy.totalReturn
+    : null;
+  const predictability = walkForward?.parameter_predictability || {};
+  const rankAnalysisWindows = (walkForward?.windows || [])
+    .filter((window: any) => (window?.rank_analysis?.rows || []).length > 0)
+    .slice()
+    .sort((left: any, right: any) => Number(left.index) - Number(right.index));
+  const rankAnalysisComplete = (walkForward?.windows || []).length > 0
+    && (walkForward?.windows || []).every((window: any) => (window?.rank_analysis?.rows || []).length > 0);
+  const rankDetailWindow = rankAnalysisWindows.find((window: any) => Number(window.index) === rankDetailWindowIndex)
+    || rankAnalysisWindows[0]
+    || null;
+  const walkHeatmapParameters = (walkForward?.selected_parameters || []).map((name: unknown) => String(name));
+  const selectedHeatmapWindow = (walkForward?.windows || []).find((window: any) => Number(window.index) === heatmapWindowIndex) || null;
+  const selectedHeatmapRows = selectedHeatmapWindow?.rank_analysis?.rows || [];
+  const selectedHeatmapRankIc = selectedHeatmapWindow?.rank_analysis?.rank_ic;
+  const selectedHeatmapHasRankIc = hasFiniteValue(selectedHeatmapRankIc);
+  const heatmapWindowPosition = rankAnalysisWindows.findIndex((window: any) => Number(window.index) === heatmapWindowIndex);
+  const previousHeatmapWindow = heatmapWindowPosition > 0 ? rankAnalysisWindows[heatmapWindowPosition - 1] : null;
+  const nextHeatmapWindow = heatmapWindowPosition >= 0 && heatmapWindowPosition < rankAnalysisWindows.length - 1
+    ? rankAnalysisWindows[heatmapWindowPosition + 1]
+    : null;
+  const dualHeatmapSupported = walkHeatmapParameters.length === 2;
+  const heatmapXParameter = walkHeatmapParameters[0] || "";
+  const heatmapYParameter = walkHeatmapParameters[1] || "";
+  const walkHeatmapXValues = parameterAxisValues(selectedHeatmapRows, heatmapXParameter);
+  const walkHeatmapYValues = parameterAxisValues(selectedHeatmapRows, heatmapYParameter);
+  const trainingHeatmapRows = selectedHeatmapRows.map((row: any) => ({
+    ...row,
+    success: hasFiniteValue(row.training_score),
+    sharpe: row.training_score,
+    excess_return: row.training_excess_return
+  }));
+  const testHeatmapRows = selectedHeatmapRows.map((row: any) => ({
+    ...row,
+    success: hasFiniteValue(row.test_score),
+    sharpe: row.test_score,
+    excess_return: row.test_excess_return
+  }));
+  const sharedHeatmapScores = [
+    ...trainingHeatmapRows.filter((row: any) => row.success).map((row: any) => Number(row.sharpe)),
+    ...testHeatmapRows.filter((row: any) => row.success).map((row: any) => Number(row.sharpe))
+  ];
+  const sharedHeatmapRange = sharedHeatmapScores.length ? {
+    min: Math.min(...sharedHeatmapScores),
+    max: Math.max(...sharedHeatmapScores)
+  } : undefined;
+  const rankGroupRows = predictability.groups || [];
+  const rankWindowColumns = [
+    { title: "窗口", dataIndex: "index", width: 80, render: (value: unknown) => `第 ${value} 期` },
+    {
+      title: "样本外区间",
+      key: "test_period",
+      width: 220,
+      render: (_value: unknown, row: any) => `${row.test_start} 至 ${row.test_end}`
+    },
+    { title: "有效组合", key: "combination_count", width: 100, render: (_value: unknown, row: any) => row.rank_analysis?.combination_count || 0 },
+    { title: "Rank IC", key: "rank_ic", width: 105, render: (_value: unknown, row: any) => formatNumber(row.rank_analysis?.rank_ic, 3) },
+    { title: "Top 20% Lift", key: "top_lift", width: 125, render: (_value: unknown, row: any) => formatNumber(row.rank_analysis?.top_20_lift, 3) },
+    { title: "训练最优测试百分位", key: "best_percentile", width: 170, render: (_value: unknown, row: any) => formatPercent(row.rank_analysis?.training_best_test_percentile, 1) },
+    { title: "分组单调性", key: "monotonicity", width: 120, render: (_value: unknown, row: any) => formatNumber(row.rank_analysis?.monotonicity, 3) }
+  ];
+  const rankDetailColumns = [
+    { title: "训练排名", dataIndex: "training_rank", width: 100, render: (value: unknown) => formatNumber(value, 1) },
+    {
+      title: "参数组合",
+      dataIndex: "parameters",
+      width: 280,
+      render: (parameters: Record<string, unknown>) => (
+        <div className="rank-parameter-cell">
+          {Object.entries(parameters || {}).map(([name, value]) => <em key={name}>{name}={String(value)}</em>)}
+        </div>
+      )
+    },
+    { title: "训练 Sharpe", dataIndex: "training_score", width: 120, render: (value: unknown) => formatNumber(value, 3) },
+    { title: "样本外 Sharpe", dataIndex: "test_score", width: 130, render: (value: unknown) => formatNumber(value, 3) },
+    { title: "样本外排名", dataIndex: "test_rank", width: 110, render: (value: unknown) => formatNumber(value, 1) }
+  ];
+  const walkPerformanceColumns = [
+    { title: "版本", dataIndex: "label", width: 180 },
+    { title: "策略累计收益", dataIndex: "strategy_return", width: 130, render: (value: unknown) => formatPercent(value) },
+    { title: "B&H", dataIndex: "benchmark_return", width: 120, render: (value: unknown) => formatPercent(value) },
+    { title: "超额收益", dataIndex: "excess_return", width: 120, render: (value: unknown) => formatPercent(value) },
+    { title: "Sharpe", dataIndex: "sharpe", width: 110, render: (value: unknown) => formatNumber(value) },
+    { title: "交易次数", dataIndex: "trade_count", width: 110, render: (value: unknown) => Number.isFinite(Number(value)) ? String(value) : "-" },
+    { title: "最大回撤", dataIndex: "max_drawdown", width: 120, render: (value: unknown) => formatPercent(value) }
+  ];
+  const walkPerformanceRows = walkForward ? [{
+    key: "walk_forward",
+    label: "Walk Forward 样本外",
+    strategy_return: walkSummary.strategy?.totalReturn,
+    benchmark_return: walkSummary.buyHold?.totalReturn,
+    excess_return: walkSummary.excess,
+    sharpe: walkForward.metrics?.sharpe,
+    trade_count: walkTradeCount,
+    max_drawdown: walkSummary.strategy?.maxDrawdown
+  }, ...(fixedComparisonAvailable ? [{
+    key: "fixed_parameters",
+    label: "固定参数对照",
+    strategy_return: fixedSummary.strategy?.totalReturn,
+    benchmark_return: fixedSummary.buyHold?.totalReturn,
+    excess_return: fixedSummary.excess,
+    sharpe: walkForward.fixed_metrics?.sharpe,
+    trade_count: fixedTradeCount,
+    max_drawdown: fixedSummary.strategy?.maxDrawdown
+  }] : [])] : [];
+  function renderRangeRow(
+    parameterName: string,
+    parameterMeta: any,
+    sourceRanges: Record<string, RangeSpec> = ranges,
+    onUpdate: (name: string, key: keyof RangeSpec, value: number | null) => void = updateRange
+  ) {
+    const spec = sourceRanges[parameterName];
     if (!parameterName || !spec) return null;
     const integerOnly = String(parameterMeta?.type) === "int";
     return (
@@ -260,7 +525,7 @@ export default function StrategyResearchPage({
               value={spec[key]}
               precision={integerOnly ? 0 : undefined}
               step={integerOnly ? 1 : undefined}
-              onChange={(value) => updateRange(parameterName, key, value === null ? null : Number(value))}
+              onChange={(value) => onUpdate(parameterName, key, value === null ? null : Number(value))}
             />
           </label>
         ))}
@@ -314,7 +579,8 @@ export default function StrategyResearchPage({
 
       <nav className="research-tabs" aria-label="研究功能">
         <button type="button" className={activeTab === "overview" ? "is-active" : ""} onClick={() => switchTab("overview")}>研究概览</button>
-        <button type="button" className={activeTab === "heatmap" ? "is-active" : ""} onClick={() => switchTab("heatmap")}>参数稳定性</button>
+        <button type="button" className={activeTab === "heatmap" ? "is-active" : ""} onClick={() => switchTab("heatmap")}>参数热力图</button>
+        <button type="button" className={activeTab === "walk_forward" ? "is-active" : ""} onClick={() => switchTab("walk_forward")}>Walk Forward</button>
       </nav>
 
       {loadingContext ? (
@@ -358,7 +624,7 @@ export default function StrategyResearchPage({
             ) : <div className="empty-state compact-empty">尚未运行参数稳定性研究。</div>}
           </section>
         </>
-      ) : (
+      ) : activeTab === "heatmap" ? (
         <>
           <section className="band research-settings-band">
             <div className="library-section-head">
@@ -406,6 +672,357 @@ export default function StrategyResearchPage({
             </section>
           ) : (
             <section className="band empty-state">设置两个参数范围并运行研究后，这里会显示热力图。</section>
+          )}
+        </>
+      ) : (
+        <>
+          <section className="band research-settings-band">
+            <div className="library-section-head">
+              <div>
+                <h3>Walk Forward 配置</h3>
+                <p>使用过去一段时间训练选参，再用固定参数运行后续 6 个月样本外回测。</p>
+              </div>
+              <Button
+                type="primary"
+                loading={runningWalkForward}
+                disabled={!walkParameters.length || walkGridCount < 2 || walkGridCount > 100}
+                onClick={runWalkForward}
+              >
+                运行 Walk Forward
+              </Button>
+            </div>
+            <div className="walk-forward-settings-grid">
+              <label className="field">
+                <span>训练开始日期</span>
+                <input
+                  className="research-date-input"
+                  type="date"
+                  min={String(context?.config?.start_date || "").slice(0, 10) || undefined}
+                  max={String(context?.config?.end_date || "").slice(0, 10) || undefined}
+                  value={trainingStartDate}
+                  onChange={(event) => setTrainingStartDate(event.target.value)}
+                />
+              </label>
+              <label className="field">
+                <span>训练窗口</span>
+                <InputNumber
+                  min={6}
+                  max={120}
+                  step={6}
+                  value={trainingMonths}
+                  addonAfter="个月"
+                  onChange={(value) => setTrainingMonths(Number(value || 24))}
+                />
+              </label>
+              <label className="field">
+                <span>样本外窗口</span>
+                <InputNumber value={6} addonAfter="个月" disabled />
+              </label>
+              <label className="field">
+                <span>目标评分函数</span>
+                <Select
+                  value={walkObjective}
+                  onChange={setWalkObjective}
+                  options={[{ value: "sharpe", label: "Sharpe" }]}
+                />
+              </label>
+              <div className="research-grid-count"><span>每期参数组合</span><strong>{walkGridCount || 0} 组</strong></div>
+            </div>
+            <label className="field walk-forward-parameter-select">
+              <span>优化参数（最多 3 个）</span>
+              <Select
+                mode="multiple"
+                value={walkParameters}
+                onChange={(values) => {
+                  if (values.length > 3) {
+                    message.warning("第一版最多同时优化 3 个参数");
+                    return;
+                  }
+                  setWalkParameters(values);
+                }}
+                options={parameterOptions}
+                placeholder="选择需要滚动优化的参数"
+              />
+            </label>
+            <div className="research-range-list">
+              {walkParameters.map((name) => renderRangeRow(
+                name,
+                (context?.parameters || []).find((item: any) => String(item.name) === name),
+                walkRanges,
+                updateWalkRange
+              ))}
+            </div>
+            <p className="walk-forward-note">第一版按 6 个月向前滚动；每个样本外窗口独立冷启动，不继承上一窗口的持仓与内部状态。完成后可按需计算完整样本外参数横截面。</p>
+          </section>
+
+          {walkForward ? (
+            <>
+              <section className="band research-walk-forward-results">
+                <div className="library-section-head">
+                  <div>
+                    <h3>Walk Forward 样本外曲线</h3>
+                    <p>{walkForward.training_months} 个月训练 / {walkForward.test_months} 个月测试 · {formatDate(walkForward.created_at)}</p>
+                  </div>
+                </div>
+                <MultiVariantCurveChart
+                  curves={{ walk_forward: walkCurveRows, fixed_parameters: fixedCurveRows }}
+                  visibleKeys={["walk_forward", ...(fixedComparisonAvailable ? ["fixed_parameters"] : []), "buy_hold"]}
+                  labels={{ walk_forward: "Walk Forward", fixed_parameters: "固定参数" }}
+                  orderedKeys={["walk_forward", "fixed_parameters", "buy_hold"]}
+                  height={380}
+                />
+              </section>
+              <section className="band library-shell">
+                <div className="library-section-head">
+                  <div>
+                    <h3>绩效明细</h3>
+                    <p>仅统计所有完整样本外窗口拼接后的表现，不包含训练期。</p>
+                  </div>
+                </div>
+                <Table
+                  rowKey="key"
+                  columns={walkPerformanceColumns}
+                  dataSource={walkPerformanceRows}
+                  pagination={false}
+                  scroll={{ x: 900 }}
+                  className="workbench-table performance-detail-table"
+                />
+              </section>
+              <section className="band research-walk-forward-windows">
+                <div className="library-section-head">
+                  <div>
+                    <h3>各期选参</h3>
+                    <p>参数只由对应训练区间决定；完成全量样本外分析后可查看单期 Rank IC 和训练/测试双热力图。</p>
+                  </div>
+                  <Button
+                    type={rankAnalysisComplete ? "default" : "primary"}
+                    loading={runningRankAnalysis}
+                    disabled={rankAnalysisComplete || !walkForward.experiment_id}
+                    onClick={runRankAnalysis}
+                  >
+                    {rankAnalysisComplete ? "全量样本外已计算" : "计算全量样本外"}
+                  </Button>
+                </div>
+                <div className="walk-forward-window-list">
+                  {(walkForward.windows || []).map((window: any) => {
+                    const rankIc = Number(window?.rank_analysis?.rank_ic);
+                    const hasRankIc = hasFiniteValue(window?.rank_analysis?.rank_ic);
+                    const hasHeatmapRows = (window?.rank_analysis?.rows || []).length > 0;
+                    const canOpenHeatmaps = dualHeatmapSupported && hasHeatmapRows;
+                    const heatmapHint = !dualHeatmapSupported
+                      ? "双热力图仅支持两个参数"
+                      : hasHeatmapRows
+                        ? "点击比较训练 / 测试热力图"
+                        : "完成全量样本外后可查看";
+                    return (
+                      <button
+                        type="button"
+                        className={`walk-forward-window-row ${canOpenHeatmaps ? "is-clickable" : ""}`}
+                        key={window.index}
+                        disabled={!canOpenHeatmaps}
+                        title={heatmapHint}
+                        aria-label={`第 ${window.index} 期，${heatmapHint}`}
+                        onClick={() => openWindowHeatmaps(window)}
+                      >
+                        <div className="walk-forward-window-lead">
+                          <strong>第 {window.index} 期</strong>
+                          <span className={`walk-forward-rank-ic ${hasRankIc ? rankIc >= 0 ? "positive" : "negative" : "pending"}`}>
+                            Rank IC <b>{hasRankIc ? formatNumber(rankIc, 3) : "待计算"}</b>
+                          </span>
+                        </div>
+                        <span>训练 {window.train_start} 至 {window.train_end}<b>Sharpe {formatNumber(window.train_metrics?.sharpe ?? window.train_metrics?.sharpe_ratio)}</b></span>
+                        <span>
+                          测试 {window.test_start} 至 {window.test_end}
+                          <b>滚动 Sharpe {formatNumber(window.test_metrics?.sharpe ?? window.test_metrics?.sharpe_ratio)}</b>
+                          <b>固定 Sharpe {formatNumber(window.fixed_test_metrics?.sharpe ?? window.fixed_test_metrics?.sharpe_ratio)}</b>
+                        </span>
+                        <div className="walk-forward-window-parameters">
+                          <div>{Object.entries(window.selected_parameters || {}).map(([name, value]) => <em key={name}>{name}={String(value)}</em>)}</div>
+                          <small>{heatmapHint}</small>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </section>
+              <section className="library-metric-grid research-metric-grid">
+                <div className="library-metric-card"><span>完整窗口</span><strong>{Number(walkForward.window_count || 0)}</strong></div>
+                <div className="library-metric-card"><span>滚动优化收益</span><strong>{formatPercent(walkSummary.strategy?.totalReturn)}</strong></div>
+                <div className="library-metric-card"><span>固定参数收益</span><strong>{fixedComparisonAvailable ? formatPercent(fixedSummary.strategy?.totalReturn) : "-"}</strong></div>
+                <div className={`library-metric-card ${Number(walkReturnUplift) >= 0 ? "positive" : "negative"}`}><span>相对固定参数</span><strong>{walkReturnUplift === null ? "-" : formatPercent(walkReturnUplift)}</strong></div>
+              </section>
+              {rankAnalysisWindows.length ? (
+                <>
+                  <section className="library-metric-grid research-metric-grid rank-analysis-metrics">
+                    <div className={`library-metric-card ${Number(predictability.mean_rank_ic) >= 0 ? "positive" : "negative"}`}>
+                      <span>平均 Rank IC</span>
+                      <strong>{formatNumber(predictability.mean_rank_ic, 3)}</strong>
+                    </div>
+                    <div className="library-metric-card">
+                      <span>Rank IC 为正窗口</span>
+                      <strong>{formatRatio(predictability.positive_rank_ic_ratio)}</strong>
+                    </div>
+                    <div className="library-metric-card">
+                      <span>ICIR</span>
+                      <strong>{formatNumber(predictability.icir, 3)}</strong>
+                    </div>
+                    <div className={`library-metric-card ${Number(predictability.mean_top_20_lift) >= 0 ? "positive" : "negative"}`}>
+                      <span>平均 Top 20% Lift</span>
+                      <strong>{formatNumber(predictability.mean_top_20_lift, 3)}</strong>
+                    </div>
+                    <div className={`library-metric-card ${Number(predictability.group_monotonicity) >= 0 ? "positive" : "negative"}`}>
+                      <span>分组单调性</span>
+                      <strong>{formatNumber(predictability.group_monotonicity, 3)}</strong>
+                    </div>
+                  </section>
+
+                  <section className="band library-shell research-rank-analysis">
+                    <div className="library-section-head">
+                      <div>
+                        <h3>参数预测能力</h3>
+                        <p>同一参数横截面分别在训练期与紧随其后的样本外期评分；Rank IC 为两期 Sharpe 排名的 Spearman 相关。</p>
+                      </div>
+                    </div>
+                    <div className="rank-group-strip" aria-label="参数分组单调性">
+                      {rankGroupRows.map((group: any) => (
+                        <div className={`rank-group-card ${Number(group.test_score_mean) >= 0 ? "positive" : "negative"}`} key={group.label}>
+                          <span>{group.label}<small>训练排名由低到高</small></span>
+                          <strong>{formatNumber(group.test_score_mean, 3)}</strong>
+                          <em>样本外 Sharpe 均值</em>
+                          <small>训练均值 {formatNumber(group.training_score_mean, 3)} · {group.window_count} 个窗口</small>
+                        </div>
+                      ))}
+                    </div>
+                    <p className="rank-analysis-note">Q 编号越高，训练期排名越靠前。理想情况下样本外 Sharpe 应随 Q1 → Q5 大致上升；分组单调性越接近 1 越好。</p>
+                    <Table
+                      rowKey="index"
+                      columns={rankWindowColumns}
+                      dataSource={rankAnalysisWindows}
+                      pagination={false}
+                      scroll={{ x: 1000 }}
+                      className="workbench-table rank-window-table"
+                      onRow={(row: any) => ({ onClick: () => setRankDetailWindowIndex(Number(row.index)) })}
+                    />
+                  </section>
+
+                  <section className="band library-shell research-rank-detail">
+                    <div className="library-section-head">
+                      <div>
+                        <h3>参数横截面明细</h3>
+                        <p>按训练期排名展示同一组合在样本外期的评分和名次，便于识别孤立高点、排序反转与稳定区域。</p>
+                      </div>
+                      <Select
+                        value={Number(rankDetailWindow?.index || rankDetailWindowIndex)}
+                        onChange={(value) => setRankDetailWindowIndex(Number(value))}
+                        options={rankAnalysisWindows.map((window: any) => ({
+                          value: Number(window.index),
+                          label: `第 ${window.index} 期 · ${window.test_start} 至 ${window.test_end}`
+                        }))}
+                        className="rank-window-select"
+                      />
+                    </div>
+                    <Table
+                      rowKey={(row: any) => `${rankDetailWindow?.index || 0}-${row.label}`}
+                      columns={rankDetailColumns}
+                      dataSource={rankDetailWindow?.rank_analysis?.rows || []}
+                      pagination={{ pageSize: 10, showSizeChanger: true, pageSizeOptions: [10, 20, 50, 100] }}
+                      scroll={{ x: 820 }}
+                      className="workbench-table rank-detail-table"
+                    />
+                  </section>
+                </>
+              ) : (
+                <section className="band empty-state">尚未计算参数 Rank IC。点击“计算全量样本外”后，平台会按需复测完整参数横截面并生成分组单调性。</section>
+              )}
+              <Modal
+                open={selectedHeatmapWindow !== null}
+                onCancel={() => setHeatmapWindowIndex(null)}
+                footer={null}
+                width={1400}
+                centered
+                className="walk-forward-heatmap-modal"
+                title={selectedHeatmapWindow ? (
+                  <div className="walk-forward-heatmap-modal-title">
+                    <strong>第 {selectedHeatmapWindow.index} 期训练 / 测试 Sharpe 热力图</strong>
+                    <small>
+                      训练 {selectedHeatmapWindow.train_start} 至 {selectedHeatmapWindow.train_end}
+                      <i>·</i>
+                      测试 {selectedHeatmapWindow.test_start} 至 {selectedHeatmapWindow.test_end}
+                      <i>·</i>
+                      Rank IC <b className={selectedHeatmapHasRankIc ? Number(selectedHeatmapRankIc) >= 0 ? "positive" : "negative" : "pending"}>
+                        {selectedHeatmapHasRankIc ? formatNumber(selectedHeatmapRankIc, 3) : "待计算"}
+                      </b>
+                    </small>
+                  </div>
+                ) : "训练 / 测试 Sharpe 热力图"}
+                destroyOnHidden
+              >
+                {selectedHeatmapWindow && (
+                  <>
+                    <nav className="walk-forward-heatmap-period-nav" aria-label="切换 Walk-forward 期数">
+                      <button
+                        type="button"
+                        disabled={!previousHeatmapWindow}
+                        onClick={() => previousHeatmapWindow && setHeatmapWindowIndex(Number(previousHeatmapWindow.index))}
+                        aria-label={previousHeatmapWindow ? `查看第 ${previousHeatmapWindow.index} 期` : "已经是第一期"}
+                        title={previousHeatmapWindow ? `上一期：第 ${previousHeatmapWindow.index} 期` : "已经是第一期"}
+                      >
+                        ‹
+                      </button>
+                      <span>第 {heatmapWindowPosition + 1} / {rankAnalysisWindows.length} 期</span>
+                      <button
+                        type="button"
+                        disabled={!nextHeatmapWindow}
+                        onClick={() => nextHeatmapWindow && setHeatmapWindowIndex(Number(nextHeatmapWindow.index))}
+                        aria-label={nextHeatmapWindow ? `查看第 ${nextHeatmapWindow.index} 期` : "已经是最后一期"}
+                        title={nextHeatmapWindow ? `下一期：第 ${nextHeatmapWindow.index} 期` : "已经是最后一期"}
+                      >
+                        ›
+                      </button>
+                    </nav>
+                    <div className="walk-forward-dual-heatmap-grid">
+                      <section className="walk-forward-heatmap-panel">
+                        <div>
+                          <h4>训练集 Sharpe</h4>
+                          <p>★ 为训练集最优，● 为该期最终选中的参数。</p>
+                        </div>
+                        <ResearchHeatmap
+                          rows={trainingHeatmapRows}
+                          xParameter={heatmapXParameter}
+                          yParameter={heatmapYParameter}
+                          xValues={walkHeatmapXValues}
+                          yValues={walkHeatmapYValues}
+                          metric="sharpe"
+                          currentParameters={selectedHeatmapWindow.selected_parameters || {}}
+                          visualRange={sharedHeatmapRange}
+                        />
+                      </section>
+                      <section className="walk-forward-heatmap-panel">
+                        <div>
+                          <h4>测试集 Sharpe</h4>
+                          <p>★ 为测试集最优，● 仍标记训练期选中的参数。</p>
+                        </div>
+                        <ResearchHeatmap
+                          rows={testHeatmapRows}
+                          xParameter={heatmapXParameter}
+                          yParameter={heatmapYParameter}
+                          xValues={walkHeatmapXValues}
+                          yValues={walkHeatmapYValues}
+                          metric="sharpe"
+                          currentParameters={selectedHeatmapWindow.selected_parameters || {}}
+                          visualRange={sharedHeatmapRange}
+                        />
+                      </section>
+                    </div>
+                    <p className="walk-forward-heatmap-shared-note">
+                      两图横纵轴和颜色范围完全一致；失败的参数组合保留为空白格，便于直接比较样本内外的稳定性。
+                    </p>
+                  </>
+                )}
+              </Modal>
+            </>
+          ) : (
+            <section className="band empty-state">设置训练窗口和优化参数后运行，这里会显示拼接后的样本外曲线。</section>
           )}
         </>
       )}

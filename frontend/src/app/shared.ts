@@ -39,7 +39,7 @@ export const TASK_TYPE_LABELS: Record<string, string> = {
   data_download: "行情下载",
   pool_add: "加入策略池",
   pool_rebuild: "策略池重跑",
-  strategy_research: "参数稳定性研究"
+  strategy_research: "策略研究"
 };
 
 export const TASK_STATUS_LABELS: Record<string, string> = {
@@ -57,15 +57,20 @@ export function taskTypeLabel(taskType?: string) {
 
 export function taskDisplayLabel(task: WorkbenchTask) {
   const relatedSourceName = String(task.source_filename || "").trim();
+  const taskMessage = String(task.message || "");
+  if (task.task_type === "strategy_research") {
+    if (/walk forward/i.test(taskMessage)) return "Walk Forward";
+    if (taskMessage.includes("参数热力图") || taskMessage.includes("参数稳定性研究")) return "参数热力图";
+    return "策略研究";
+  }
   if (task.task_type === "research_workflow") {
     return relatedSourceName ? `${relatedSourceName} · 研究流程` : "研究流程";
   }
   if (relatedSourceName && task.task_type === "backtest") return `${relatedSourceName} · 基线回测`;
   if (relatedSourceName && task.task_type === "strategy_generation") return `${relatedSourceName} · 策略生成`;
   if (task.task_type !== "strategy_generation") return taskTypeLabel(task.task_type);
-  const message = String(task.message || "");
-  const separator = message.indexOf(" · ");
-  const sourceName = separator > 0 ? message.slice(0, separator).trim() : "";
+  const separator = taskMessage.indexOf(" · ");
+  const sourceName = separator > 0 ? taskMessage.slice(0, separator).trim() : "";
   return sourceName ? `${sourceName} · 策略生成` : taskTypeLabel(task.task_type);
 }
 

@@ -124,6 +124,8 @@ def _latest_heatmap(pool_item_id: str) -> dict[str, Any] | None:
 
 
 def get_pool_research_context(pool_item_id: str) -> dict[str, Any]:
+    from backend.services.walk_forward_research_service import latest_walk_forward_result
+
     detail = pool_service.get_pool_item_detail(pool_item_id)
     _safe_pool_path(detail)
     inventory, parameters = _parameter_inventory(detail)
@@ -138,6 +140,7 @@ def get_pool_research_context(pool_item_id: str) -> dict[str, Any]:
         "curve": list(daily_results.get("data") or []),
         "notes": str(detail.get("notes") or ""),
         "latest_heatmap": _latest_heatmap(pool_item_id),
+        "latest_walk_forward": latest_walk_forward_result(pool_item_id),
     }
 
 
@@ -215,11 +218,11 @@ def run_pool_parameter_heatmap(
 
     task = task_service.create_task(
         TaskType.STRATEGY_RESEARCH.value,
-        message=f"参数稳定性研究排队中 · {total} 组",
+        message=f"参数热力图排队中 · {total} 组",
         related_strategy_id=str(item.get("strategy_id") or "") or None,
         related_pool_item_id=pool_item_id,
     )
-    task_service.mark_running(task["task_id"], message=f"参数稳定性研究进行中 0/{total} 组")
+    task_service.mark_running(task["task_id"], message=f"参数热力图进行中 0/{total} 组")
     try:
         def progress_callback(current: int, count: int, message: str) -> None:
             task_service.mark_progress(task["task_id"], current / max(1, count), message=message.replace("参数优化", "参数研究"))
@@ -246,7 +249,7 @@ def run_pool_parameter_heatmap(
             },
         )
         if not optimization.get("success"):
-            raise RuntimeError(str(optimization.get("error") or "参数稳定性研究失败"))
+            raise RuntimeError(str(optimization.get("error") or "参数热力图失败"))
 
         created_at = now_beijing().isoformat()
         experiment_id = f"research_{now_beijing().strftime('%Y%m%d_%H%M%S')}_{uuid4().hex[:6]}"
@@ -268,8 +271,8 @@ def run_pool_parameter_heatmap(
         }
         experiment_dir = _safe_research_dir(pool_item_id) / experiment_id
         _write_json_atomic(experiment_dir / "result.json", payload)
-        completed = task_service.mark_completed(task["task_id"], message=f"参数稳定性研究完成 · {total} 组")
+        completed = task_service.mark_completed(task["task_id"], message=f"参数热力图完成 · {total} 组")
         return {**payload, "task": completed}
     except Exception as exc:
-        task_service.mark_failed(task["task_id"], error=str(exc), message="参数稳定性研究失败")
+        task_service.mark_failed(task["task_id"], error=str(exc), message="参数热力图失败")
         raise

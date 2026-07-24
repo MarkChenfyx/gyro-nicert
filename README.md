@@ -1,6 +1,6 @@
 # gyro_nicert
 
-本地量化研究工作台。它将策略代码生成、市场数据、vn.py CTA 回测、参数优化与策略池放在同一条工作流中。
+本地量化研究工作台。它将策略代码生成、市场数据、vn.py CTA 回测、参数优化、策略池与参数稳定性研究放在同一条工作流中。
 
 当前版本面向本地单用户研究：浏览器前端只通过 FastAPI 调用后端；行情和业务索引使用 SQLite；真实回测从本地行情库读取，不会在回测过程中访问 RQData。
 
@@ -13,6 +13,7 @@
 - 真实回测：使用项目内适配的老师版 CTA `BacktestingEngine` 与本地 SQLite K 线数据运行回测。
 - 参数优化：支持 Optuna 自适应优化和手动网格搜索；手动网格保留 Top 10 候选的轻量日度曲线，可在结果表中点击临时预览。
 - 策略池：将代码、参数、配置、结果、曲线和成交记录保存为独立快照，支持备注、比较、重跑，以及从池快照重新回测为 baseline 后继续优化。
+- 策略研究：从策略池快照运行双参数稳定性热力图和 Walk-forward 样本外检验，对比滚动选参与固定参数表现，不修改原快照。
 - 任务与产物：记录策略、任务、run、variant、曲线、成交和池快照的索引关系。
 
 ## 技术结构
@@ -31,6 +32,7 @@ storage/natural_language/ 工作台可选择的自然语言策略文本
 storage/strategies/       策略生成、校验和模板目录
 storage/db/               app.sqlite 与 market_data.sqlite
 storage/runtime/          临时 run 产物
+storage/runtime/research/ 参数热力图与 Walk-forward 研究结果
 storage/pool/             长期策略池快照
 scripts/                  运维脚本，例如初始化数据库
 tests/                    自动化测试
@@ -38,12 +40,16 @@ tests/                    自动化测试
 
 ## 环境要求
 
+本地开发：
+
 - Python 3.11+
 - Node.js 18+
 - npm
 - 可选：vn.py CTA 及其运行依赖（真实回测需要）
 - 可选：RQData 凭据和 `rqdatac`（自动下载行情需要）
 - 可选：兼容 OpenAI 的模型 API Key（自然语言生成需要）
+
+容器部署只要求 Docker Engine 或 Docker Desktop，并启用 Docker Compose v2。
 
 安装 Python 基础依赖：
 
@@ -65,6 +71,10 @@ Copy-Item .env.example .env
 
 - `GYRO_LLM_API_KEY`、`GYRO_LLM_BASE_URL`、`GYRO_LLM_MODEL`：自然语言策略生成。
 - `GYRO_RQDATA_USERNAME`、`GYRO_RQDATA_PASSWORD`：RQData 行情下载。
+- `GYRO_CORS_ORIGINS`：允许直接访问后端 API 的浏览器来源，多个来源用逗号分隔。
+- `GYRO_WEB_BIND`、`GYRO_WEB_PORT`：Compose 部署的工作台监听地址和端口。
+- `GYRO_BACKEND_BIND`、`GYRO_BACKEND_PORT`：Compose 部署的后端监听地址和端口。
+- `GYRO_TASK_STALE_AFTER_HOURS`：运行中或排队任务连续多久未更新后自动取消并归档，默认 `6` 小时；设为 `0` 可关闭。
 
 RQData 凭据统一配置在项目根目录的 `.env`：
 
@@ -75,9 +85,17 @@ GYRO_RQDATA_PASSWORD=你的密码
 
 不要提交 `.env`、RQData 密码或模型 API Key。
 
-## 启动
+## 本地开发
 
-在项目根目录初始化数据库：
+最简单的方式是在项目根目录双击 `start.bat`，或只运行一条命令：
+
+```powershell
+python scripts/dev.py
+```
+
+它会自动初始化数据库、在首次运行时安装前端依赖，并同时启动前后端。按 `Ctrl+C` 可一起关闭。下面是分别启动前后端的手动方式。
+
+以下命令均从项目根目录运行。先初始化数据库：
 
 ```powershell
 python scripts/init_db.py
@@ -86,8 +104,6 @@ python scripts/init_db.py
 启动后端：
 
 ```powershell
-cd C:\Users\24084\Desktop\test2\gyro_nicert
-python scripts\init_db.py
 python -m uvicorn backend.main:app --reload
 ```
 
@@ -97,12 +113,52 @@ python -m uvicorn backend.main:app --reload
 另开一个终端启动前端：
 
 ```powershell
-cd C:\Users\24084\Desktop\test2\gyro_nicert\frontend
-npm install
-npm run dev
+npm --prefix frontend install
+npm --prefix frontend run dev
 ```
 
-默认前端地址通常为 <http://localhost:5173>。后端不在 `http://127.0.0.1:8000` 时，设置 `VITE_API_BASE_URL`。
+默认工作台地址为 <http://127.0.0.1:5173>。开发服务器会将 `/api` 代理到 `http://127.0.0.1:8000`；只有后端位于其他地址时，才需要在构建前设置 `VITE_API_BASE_URL`。
+
+## Docker Compose 部署
+
+Compose 会构建两个服务：FastAPI 后端，以及负责托管前端静态文件并将 `/api` 转发给后端的 Nginx。浏览器不需要知道容器内的后端地址。
+
+1. 在项目根目录创建本地配置：
+
+   ```powershell
+   Copy-Item .env.example .env
+   ```
+
+   Linux 或 macOS 使用 `cp .env.example .env`。按需填写模型服务与 RQData 凭据，不要提交 `.env`。
+
+2. 构建并启动：
+
+   ```powershell
+   docker compose up -d --build
+   ```
+
+3. 检查服务：
+
+   ```powershell
+   docker compose ps
+   docker compose logs -f
+   ```
+
+默认地址：
+
+- 工作台：<http://127.0.0.1:8080>
+- 健康检查：<http://127.0.0.1:8080/api/health>
+- API 文档：<http://127.0.0.1:8000/docs>
+
+停止服务：
+
+```powershell
+docker compose down
+```
+
+代码升级后重新执行 `docker compose up -d --build`。`storage/` 会挂载到后端容器并保留数据库、行情、运行产物和策略池；迁移服务器或升级前应备份整个 `storage/` 目录与 `.env`。
+
+默认只监听宿主机回环地址。如果确实需要局域网访问，可将 `.env` 中的 `GYRO_WEB_BIND` 改为 `0.0.0.0`。本项目没有多用户权限控制，而且会加载用户提供的策略代码；不要直接暴露到公网。公网部署前应在外层反向代理中配置 HTTPS、身份认证和访问限制。
 
 ## 工作台使用流程
 
@@ -147,13 +203,39 @@ npm run dev
 
 Optuna 默认最多评估 200 次。若所有已选参数都是离散范围且唯一组合不足 200 组，平台会自动使用 Optuna `GridSampler` 将每个组合只回测一次，不会用重复参数补足 200 次；组合超过 200 组或包含连续分布时使用 TPE 抽样 200 次。
 
-AI 生成的参数范围会按 run 和 baseline 版本缓存，包含参数分类、是否启用、范围、步长、解释、约束、虚拟参数和风险提示。重新进入参数优化页面时会恢复缓存内容；再次点击“AI 生成参数范围”会重新请求并覆盖旧缓存。手动网格结果使用高密度 Top 10 表格，点击候选行会按需读取已缓存的 `daily_results` 并临时叠加曲线，不会创建正式 variant，也不会保存完整候选成交记录。
+AI 生成的参数范围会按 run 和 baseline 版本缓存，包含参数分类、是否启用、范围、步长、解释、约束、虚拟参数和风险提示。重新进入参数优化页面时会恢复缓存内容；再次点击“AI 生成参数范围”会重新请求并覆盖旧缓存。手动网格结果使用高密度 Top 10 表格，点击候选行会按需读取已缓存的 `daily_results` 并临时叠加曲线；行末“诊断”抽屉展示候选与 Baseline 的核心指标及轻量交易结构摘要，不会创建正式 variant，也不会保存完整候选成交记录。
+
+参数表中的“本次默认值”可以直接编辑：未选中的参数会在本次优化中固定为该值，选中的参数仍按配置范围搜索。编辑只影响本次优化及其候选回测，不会改写策略源码、已有 baseline 或历史结果；隐藏的仓位和系统参数不可从该入口覆盖。
 
 ### 5. 加入策略池
 
 接受某个 baseline 或优化变体后，可将其加入策略池。新快照以北京时间入池时刻生成 `pool_version` 和 `pool_item_id`，名称统一显示为“名称 | pool_version”。池快照会复制策略代码、配置、最终参数、结果、曲线、成交记录和用户备注，因此原 runtime run 被保留策略清理后，列表、详情、比较和重跑仍可独立工作。
 
 从策略池选择“继续参数优化”时，平台读取池快照中的代码和最终参数，重新回测并创建一个新的 baseline run，再跳转到参数优化页；不会复制旧 run 的 variants。新 run 的 `manifest.lineage` 只记录系统来源关系，和用户可编辑的 `notes.md` 备注相互独立。
+
+### 6. 策略研究
+
+将候选策略加入策略池后，可在“策略研究”页面选择一个池快照进行分析。页面会读取快照中的策略代码、回测配置、固定参数、收益曲线和备注；研究结果单独保存，不会修改策略池快照或原参数优化结果。
+
+**参数热力图**用于观察两个参数附近是否存在连续的有效区域：
+
+- 横轴和纵轴选择两个不同的数值参数，并分别设置最小值、最大值和步长。
+- 每个参数至少需要两个有效取值，两个维度的组合总数最多为 100 组。
+- 评分指标可选择超额收益或 Sharpe；平台使用真实回测逐一评估组合。
+- 热力图会标记当前参数与当前指标最优组合，并按指标为正的组合比例给出“较稳定 / 一般 / 较敏感”的提示。该提示是当前网格内的启发式摘要，不代表未来收益保证。
+
+**Walk-forward**用于检查滚动选参的样本外表现：
+
+- 选择 1～3 个参数；每个训练窗口的参数组合总数必须在 2～100 组之间。
+- 训练窗口可设置为 6～120 个月，默认 24 个月；样本外测试窗口固定为 6 个月，并每 6 个月向前滚动。
+- 每个窗口只使用训练期数据按 Sharpe 选参，再将选出的参数用于紧随其后的 6 个月样本外回测。
+- Walk-forward 主流程会保存每个窗口的训练期完整参数网格；结果生成后，可点击“计算全量样本外”按需复测相同参数横截面，无需每次运行 Walk-forward 都承担这部分计算。
+- 全量样本外分析会计算训练 Sharpe 与样本外 Sharpe 排名的 Spearman Rank IC；结果写回当前实验并缓存，重复进入页面不会重新计算。
+- 参数横截面按训练排名从低到高分为最多五组，展示各组样本外 Sharpe、分组单调性、训练前 20% 参数的样本外提升，以及训练最优参数的样本外百分位。
+- 页面会将所有完整样本外窗口拼接成曲线，并与策略池快照中的固定参数在相同测试区间进行对照。
+- 每个样本外窗口均独立冷启动，不继承上一窗口的持仓或策略内部状态；汇总指标不包含训练期表现。
+
+研究前应确保整个训练和测试区间的本地行情完整。常规 Walk-forward 的主要计算量约为“窗口数 × 参数组合数”，另加滚动选中参数与固定参数对照；点击“计算全量样本外”后，再增加约“窗口数 × 参数组合数”的计算。旧实验没有保存训练网格时，第一次全量分析还会补算训练横截面。每个实验保存到 `storage/runtime/research/<pool_item_id>/<experiment_id>/result.json`，重新进入页面时会恢复最近一次热力图和 Walk-forward 结果。
 
 ## 曲线与最大回撤口径
 
@@ -184,6 +266,10 @@ DD(t) = C(t) - max(C(0...t))
 | run、正式曲线、候选曲线、成交 | `/api/runs` |
 | 参数优化 | `/api/optimization/methods`、`/api/optimization/search-space`、`/api/optimization/suggest-space`、`/api/optimization/run` |
 | 策略池、备注、继续优化 | `/api/pool` |
+| 策略研究上下文 | `GET /api/strategy-research/pool/{pool_item_id}/context` |
+| 参数稳定性热力图 | `POST /api/strategy-research/pool/{pool_item_id}/heatmap` |
+| Walk-forward 检验 | `POST /api/strategy-research/pool/{pool_item_id}/walk-forward` |
+| Walk-forward 全量样本外分析 | `POST /api/strategy-research/pool/{pool_item_id}/walk-forward/{experiment_id}/rank-analysis` |
 | 任务 | `/api/tasks` |
 
 完整请求与响应结构以运行中的 <http://127.0.0.1:8000/docs> 为准。
@@ -193,6 +279,7 @@ DD(t) = C(t) - max(C(0...t))
 - `storage/db/app.sqlite`：策略、任务、run、variant、策略池和产物索引。
 - `storage/db/market_data.sqlite`：本地 K 线、覆盖范围和下载任务。
 - `storage/runtime/runs/<run_id>/`：临时运行产物，包括 `strategy.py`、`config.json`、`result.json`、曲线与成交 CSV。
+- `storage/runtime/research/<pool_item_id>/<experiment_id>/`：参数热力图与 Walk-forward 实验结果。
 - `storage/pool/strategies/<pool_item_id>/`：长期池快照。
 
 `scripts/init_db.py` 使用 `CREATE TABLE IF NOT EXISTS`，可重复运行，不会删除已有表。

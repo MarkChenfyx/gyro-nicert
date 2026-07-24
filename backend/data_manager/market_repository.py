@@ -250,4 +250,3 @@ def get_download_task(download_task_id: str) -> dict[str, Any] | None:
             (download_task_id,),
         ).fetchone()
     return dict(row) if row is not None else None
-

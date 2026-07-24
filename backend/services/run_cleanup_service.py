@@ -14,7 +14,7 @@ from backend.data_manager.database import get_app_db_connection
 
 LOGGER = logging.getLogger(__name__)
 TERMINAL_RUN_STATUSES = {"completed", "failed", "cancelled"}
-DEFAULT_RUN_RETENTION = 50
+DEFAULT_RUN_RETENTION = 20
 
 
 def configured_retention() -> int:

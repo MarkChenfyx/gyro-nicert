@@ -1,4 +1,6 @@
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
+// Production uses the current origin and lets the web server proxy /api.
+// Set VITE_API_BASE_URL only when the API intentionally lives on another origin.
+const API_BASE_URL = String(import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
@@ -215,6 +217,27 @@ export function runPoolResearchHeatmap(poolItemId: string, payload: {
   });
 }
 
+export function runPoolResearchWalkForward(poolItemId: string, payload: {
+  training_start_date: string;
+  training_months: number;
+  test_months: 6;
+  selected_parameters: string[];
+  parameter_ranges: Record<string, { low: number; high: number; step: number }>;
+  objective: "sharpe";
+  max_trials?: number;
+}) {
+  return request<any>(`/api/strategy-research/pool/${encodeURIComponent(poolItemId)}/walk-forward`, {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function runPoolWalkForwardRankAnalysis(poolItemId: string, experimentId: string) {
+  return request<any>(`/api/strategy-research/pool/${encodeURIComponent(poolItemId)}/walk-forward/${encodeURIComponent(experimentId)}/rank-analysis`, {
+    method: "POST"
+  });
+}
+
 export function comparePool(poolItemIds: string[]) {
   return request<any>("/api/pool/compare", {
     method: "POST",
@@ -272,5 +295,29 @@ export function runOptimization(payload: any) {
   return request<any>("/api/optimization/run", {
     method: "POST",
     body: JSON.stringify(payload)
+  });
+}
+
+export function listOptimizationCurveSnapshots() {
+  return request<any>("/api/optimization/curve-snapshots", { cache: "no-store" });
+}
+
+export function createOptimizationCurveSnapshot(runId: string, variantName: string, name: string) {
+  return request<any>("/api/optimization/curve-snapshots", {
+    method: "POST",
+    body: JSON.stringify({ run_id: runId, variant_name: variantName, name })
+  });
+}
+
+export function renameOptimizationCurveSnapshot(snapshotId: string, name: string) {
+  return request<any>(`/api/optimization/curve-snapshots/${encodeURIComponent(snapshotId)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ name })
+  });
+}
+
+export function deleteOptimizationCurveSnapshot(snapshotId: string) {
+  return request<any>(`/api/optimization/curve-snapshots/${encodeURIComponent(snapshotId)}`, {
+    method: "DELETE"
   });
 }

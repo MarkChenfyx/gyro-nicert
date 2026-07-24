@@ -22,18 +22,37 @@ echarts.use([
   CanvasRenderer
 ]);
 
+function observeChartResize(element: HTMLDivElement, chart: ReturnType<typeof echarts.init>) {
+  let animationFrame = 0;
+  const resize = () => {
+    window.cancelAnimationFrame(animationFrame);
+    animationFrame = window.requestAnimationFrame(() => {
+      if (element.clientWidth > 0 && element.clientHeight > 0) chart.resize();
+    });
+  };
+  const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(resize);
+  observer?.observe(element);
+  window.addEventListener("resize", resize);
+  resize();
+  return () => {
+    window.cancelAnimationFrame(animationFrame);
+    observer?.disconnect();
+    window.removeEventListener("resize", resize);
+  };
+}
+
 export function CurveChart({ rows, height = 340, showLegend = true }: { rows: any[]; height?: number; showLegend?: boolean }) {
   const ref = useRef<HTMLDivElement | null>(null);
   const series = useMemo(() => buildNormalizedCurveSeries(rows), [rows]);
   const dates = useMemo(() => rows.map(rowDate), [rows]);
   useEffect(() => {
     if (!ref.current) return;
-    const chart = echarts.init(ref.current);
+    const element = ref.current;
+    const chart = echarts.init(element);
     chart.setOption(buildCumulativeChartOption(series, dates), true);
-    const resize = () => chart.resize();
-    window.addEventListener("resize", resize);
+    const stopObserving = observeChartResize(element, chart);
     return () => {
-      window.removeEventListener("resize", resize);
+      stopObserving();
       chart.dispose();
     };
   }, [dates, series]);
@@ -132,12 +151,12 @@ function MultiVariantCurveChartComponent({
 
   useEffect(() => {
     if (!ref.current) return;
-    const chart = echarts.init(ref.current);
+    const element = ref.current;
+    const chart = echarts.init(element);
     chartRef.current = chart;
-    const resize = () => chart.resize();
-    window.addEventListener("resize", resize);
+    const stopObserving = observeChartResize(element, chart);
     return () => {
-      window.removeEventListener("resize", resize);
+      stopObserving();
       chart.dispose();
       chartRef.current = null;
     };

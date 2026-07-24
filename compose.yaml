@@ -1,0 +1,33 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    env_file:
+      - .env
+    volumes:
+      - ./storage:/app/storage
+    ports:
+      - "${GYRO_BACKEND_BIND:-127.0.0.1}:${GYRO_BACKEND_PORT:-8000}:8000"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=2)"
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 20s
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "${GYRO_WEB_BIND:-127.0.0.1}:${GYRO_WEB_PORT:-8080}:80"
+    restart: unless-stopped

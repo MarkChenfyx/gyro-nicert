@@ -86,6 +86,8 @@ def update_task_status(
 ) -> dict[str, Any]:
     updates = ["status = ?", "updated_at = ?"]
     values: list[Any] = [str(status), _now()]
+    if str(status) in {TaskStatus.RUNNING.value, TaskStatus.QUEUED.value}:
+        updates.append("archived_at = NULL")
     if progress is not None:
         updates.append("progress = ?")
         values.append(float(progress))
@@ -172,6 +174,36 @@ def archive_terminal_tasks() -> int:
             WHERE archived_at IS NULL AND status IN (?, ?, ?)
             """,
             (archived_at, archived_at, *TERMINAL_STATUSES),
+        )
+        connection.commit()
+        return int(cursor.rowcount)
+
+
+def reclaim_stale_tasks(stale_before: str, *, stale_hours: float) -> int:
+    reclaimed_at = _now()
+    hours_label = f"{stale_hours:g}"
+    message = "任务长时间无更新，已自动清理"
+    error = f"任务连续 {hours_label} 小时没有更新，可能因服务重启或执行进程中断，已自动取消并归档。"
+    with get_app_db_connection() as connection:
+        _ensure_archived_column(connection)
+        cursor = connection.execute(
+            """
+            UPDATE tasks
+            SET status = ?, message = ?, error = ?, archived_at = ?, updated_at = ?
+            WHERE archived_at IS NULL
+              AND status IN (?, ?)
+              AND updated_at < ?
+            """,
+            (
+                TaskStatus.CANCELLED.value,
+                message,
+                error,
+                reclaimed_at,
+                reclaimed_at,
+                TaskStatus.RUNNING.value,
+                TaskStatus.QUEUED.value,
+                stale_before,
+            ),
         )
         connection.commit()
         return int(cursor.rowcount)

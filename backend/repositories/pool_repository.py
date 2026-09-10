@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 import json
 
+from backend.core.paths import stored_path, path_fields
 from backend.common.time_utils import now_iso, timestamp_id
 from backend.data_manager.database import get_app_db_connection
 
@@ -59,7 +60,7 @@ def create_pool_item(
                 str(strategy_id),
                 str(source_run_id),
                 str(source_variant_id),
-                str(pool_path),
+                stored_path(pool_path),
                 str(strategy_name),
                 strategy_family,
                 strategy_version,
@@ -85,7 +86,7 @@ def get_pool_item(pool_item_id: str) -> dict[str, Any] | None:
             "SELECT * FROM pool_items WHERE pool_item_id = ?",
             (str(pool_item_id),),
         ).fetchone()
-    return dict(row) if row is not None else None
+    return path_fields(dict(row)) if row is not None else None
 
 
 def update_pool_item_metrics(
@@ -152,7 +153,7 @@ def list_pool_items(
 
     with get_app_db_connection() as connection:
         rows = connection.execute(sql, tuple(values)).fetchall()
-    return [dict(row) for row in rows]
+    return [path_fields(dict(row)) for row in rows]
 
 
 def delete_pool_item(pool_item_id: str) -> bool:

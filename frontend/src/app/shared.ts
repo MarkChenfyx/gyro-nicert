@@ -1,4 +1,6 @@
-export type PageKey = "launch" | "generate" | "optimize" | "pool" | "research";
+import { UI_TEXT, resultVersionLabel } from "./terminology";
+
+export type PageKey = "launch" | "generate" | "optimize" | "pool" | "portfolio" | "research" | "live";
 export type TaskRunNavigation = { runId: string; requestId: number };
 export type PoolNavigation = { poolItemId: string; vtSymbol: string; requestId: number };
 export type ResearchNavigation = { poolItemId: string; requestId: number };
@@ -32,23 +34,24 @@ export type WorkbenchTask = {
 };
 
 export const TASK_TYPE_LABELS: Record<string, string> = {
-  research_workflow: "研究流程",
+  research_workflow: "生成与基线回测",
   strategy_generation: "策略生成",
   backtest: "基线回测",
-  optimization: "参数优化",
+  optimization: UI_TEXT.page.optimize,
   data_download: "行情下载",
   pool_add: "加入策略池",
-  pool_rebuild: "策略池重跑",
-  strategy_research: "策略研究"
+  pool_rebuild: UI_TEXT.action.rerunBacktest,
+  strategy_research: UI_TEXT.page.research
 };
 
 export const TASK_STATUS_LABELS: Record<string, string> = {
-  queued: "排队中",
-  running: "运行中",
-  completed: "已完成",
-  failed: "失败",
-  cancelled: "已取消",
-  ready: "就绪"
+  queued: UI_TEXT.status.queued,
+  running: UI_TEXT.status.running,
+  completed: UI_TEXT.status.completed,
+  failed: UI_TEXT.status.failed,
+  cancelled: UI_TEXT.status.cancelled,
+  ready: UI_TEXT.status.ready,
+  pending: UI_TEXT.status.pending
 };
 
 export function taskTypeLabel(taskType?: string) {
@@ -59,12 +62,12 @@ export function taskDisplayLabel(task: WorkbenchTask) {
   const relatedSourceName = String(task.source_filename || "").trim();
   const taskMessage = String(task.message || "");
   if (task.task_type === "strategy_research") {
-    if (/walk forward/i.test(taskMessage)) return "Walk Forward";
-    if (taskMessage.includes("参数热力图") || taskMessage.includes("参数稳定性研究")) return "参数热力图";
-    return "策略研究";
+    if (/walk[ -]?forward|滚动优化/i.test(taskMessage)) return UI_TEXT.research.walkForward;
+    if (taskMessage.includes("参数热力图") || taskMessage.includes("参数稳定性研究")) return UI_TEXT.research.parameterStabilityAnalysis;
+    return UI_TEXT.page.research;
   }
   if (task.task_type === "research_workflow") {
-    return relatedSourceName ? `${relatedSourceName} · 研究流程` : "研究流程";
+    return relatedSourceName ? `${relatedSourceName} · 生成与基线回测` : "生成与基线回测";
   }
   if (relatedSourceName && task.task_type === "backtest") return `${relatedSourceName} · 基线回测`;
   if (relatedSourceName && task.task_type === "strategy_generation") return `${relatedSourceName} · 策略生成`;
@@ -76,9 +79,11 @@ export function taskDisplayLabel(task: WorkbenchTask) {
 
 export function taskSummary(task: WorkbenchTask) {
   const status = String(task.status || "").toLowerCase();
-  if (status === "failed") return task.error || task.message || task.task_id;
-  if (["running", "queued"].includes(status)) return task.message || task.task_id;
-  if (task.task_type === "research_workflow") return "研究流程已完成";
+  const displayMessage = String(task.message || task.task_id).replace(/walk[ -]?forward/gi, "滚动优化");
+  const displayError = String(task.error || "").replace(/walk[ -]?forward/gi, "滚动优化");
+  if (status === "failed") return displayError || displayMessage;
+  if (["running", "queued"].includes(status)) return displayMessage;
+  if (task.task_type === "research_workflow") return "生成与基线回测已完成";
   return "任务已完成";
 }
 
@@ -193,7 +198,7 @@ export function taskDateGroup(task: WorkbenchTask) {
 }
 
 export function isPageKey(value: string): value is PageKey {
-  return value === "launch" || value === "generate" || value === "optimize" || value === "pool" || value === "research";
+  return value === "launch" || value === "generate" || value === "optimize" || value === "pool" || value === "portfolio" || value === "research" || value === "live";
 }
 
 export function loadInitialPage(): PageKey {
@@ -216,12 +221,14 @@ export function loadOptimizeDraft(): Record<string, any> {
 
 export const zh = {
   workbench: "\u7814\u7a76\u5de5\u4f5c\u53f0",
-  subtitle: "\u81ea\u7136\u8bed\u8a00\u7b56\u7565\u751f\u6210\u3001\u53c2\u6570\u5b9e\u9a8c\u548c\u7b56\u7565\u6c60\u6c89\u6dc0\u7684\u7edf\u4e00\u5165\u53e3\u3002",
-  launchFlow: "\u542f\u52a8\u6d41\u7a0b",
-  generate: "\u7b56\u7565\u751f\u6210",
-  optimize: "\u53c2\u6570\u4f18\u5316",
-  pool: "\u7b56\u7565\u6c60",
-  research: "\u7b56\u7565\u7814\u7a76",
+  subtitle: "策略描述生成、参数优化和策略池沉淀的统一入口。",
+  launchFlow: UI_TEXT.page.launch,
+  generate: UI_TEXT.page.generate,
+  optimize: UI_TEXT.page.optimize,
+  pool: UI_TEXT.page.pool,
+  portfolio: UI_TEXT.page.portfolio,
+  live: UI_TEXT.page.live,
+  research: UI_TEXT.page.research,
   status: "\u5de5\u4f5c\u53f0\u72b6\u6001",
   recentTasks: "\u6700\u8fd1\u4efb\u52a1",
   clearAll: "\u6e05\u9664\u5168\u90e8",
@@ -229,18 +236,18 @@ export const zh = {
   waiting: "\u7b49\u5f85\u4efb\u52a1",
   strategyCodeGeneration: "\u751f\u6210 strategy.py",
   baselineBacktest: "\u57fa\u7ebf\u56de\u6d4b",
-  startConfig: "\u542f\u52a8\u914d\u7f6e",
+  startConfig: "运行配置",
   currentProgress: "\u5f53\u524d\u8fdb\u5ea6",
   resultHub: "\u7ed3\u679c\u5165\u53e3",
-  sourceFiles: "\u81ea\u7136\u8bed\u8a00\u6587\u4ef6",
-  sourceText: "\u81ea\u7136\u8bed\u8a00\u8f93\u5165",
+  sourceFiles: UI_TEXT.term.strategyDescriptionFile,
+  sourceText: UI_TEXT.term.strategyDescription,
   inputMode: "\u8f93\u5165\u65b9\u5f0f",
-  naturalLanguageMode: "\u81ea\u7136\u8bed\u8a00\u751f\u6210",
-  manualCodeMode: "\u76f4\u63a5\u7c98\u8d34\u7b56\u7565\u4ee3\u7801",
-  localCodeMode: "\u4ece\u672c\u5730\u4e0a\u4f20\u7b56\u7565\u4ee3\u7801",
-  backtestConfig: "\u53c2\u6570\u8bbe\u7f6e",
-  symbol: "\u6807\u7684 / \u4ea4\u6613\u6240",
-  interval: "\u5468\u671f",
+  naturalLanguageMode: "输入策略描述",
+  manualCodeMode: "粘贴策略代码",
+  localCodeMode: "上传策略代码",
+  backtestConfig: "回测参数",
+  symbol: UI_TEXT.term.tradingSymbol,
+  interval: UI_TEXT.term.barInterval,
   rate: "\u624b\u7eed\u8d39\u7387",
   startDate: "\u5f00\u59cb\u65e5\u671f",
   endDate: "\u7ed3\u675f\u65e5\u671f",
@@ -252,17 +259,17 @@ export const zh = {
   sourceFilename: "\u6587\u4ef6\u540d",
   strategyNameInput: "\u7b56\u7565\u540d\u79f0",
   strategyCodeInput: "strategy.py \u4ee3\u7801",
-  launchErrorTitle: "\u542f\u52a8\u5931\u8d25",
-  startResearch: "\u542f\u52a8\u7814\u7a76\u6d41\u7a0b",
-  goOptimize: "\u53bb\u53c2\u6570\u4f18\u5316",
+  launchErrorTitle: "创建运行失败",
+  startResearch: "开始生成并回测",
+  goOptimize: "进入参数优化",
   parameterEngineNotConnected: "\u53c2\u6570\u4f18\u5316\u5f15\u64ce\u5c1a\u672a\u63a5\u5165\u3002\u6b64\u5904\u4e0d\u4f7f\u7528 mock \u5047\u88c5\u771f\u5b9e\u4f18\u5316\u3002",
-  currentSelection: "\u8fd0\u884c\u7248\u672c",
+  currentSelection: UI_TEXT.term.run,
   paramName: "\u53c2\u6570\u540d",
   currentValue: "\u5f53\u524d\u503c",
   startOptimization: "\u542f\u52a8\u4f18\u5316",
   poolList: "\u7b56\u7565\u6c60\u5217\u8868",
   strategyName: "\u7b56\u7565\u540d",
-  sharpe: "夏普比率",
+  sharpe: UI_TEXT.metric.sharpe,
   return: "\u6536\u76ca",
   drawdown: "\u6700\u5927\u56de\u64a4",
   createdAt: "\u521b\u5efa\u65f6\u95f4",
@@ -727,7 +734,7 @@ export function buildStrategyCurve(rows: any[]): NormalizedCurveSeries | null {
   const drawdownPoints = buildDrawdownSeries(points);
   return {
     key: "strategy",
-    label: "策略累计收益",
+    label: UI_TEXT.metric.totalReturn,
     type: "strategy",
     points,
     drawdownPoints,
@@ -737,7 +744,10 @@ export function buildStrategyCurve(rows: any[]): NormalizedCurveSeries | null {
   };
 }
 
-export function buildNormalizedCurveSeries(rows: any[]): NormalizedCurveSeries[] {
+export function buildNormalizedCurveSeries(
+  rows: any[],
+  benchmarkLabel = "buy_hold"
+): NormalizedCurveSeries[] {
   const strategyCurve = buildStrategyCurve(rows);
   const buyHoldPoints = cumulativeBuyHoldSeries(rows);
   const series: NormalizedCurveSeries[] = [];
@@ -745,7 +755,7 @@ export function buildNormalizedCurveSeries(rows: any[]): NormalizedCurveSeries[]
   if (buyHoldPoints.length > 1) {
     series.push({
       key: "buy_hold",
-      label: "B&H",
+      label: String(benchmarkLabel || "").trim() || "buy_hold",
       type: "benchmark",
       points: buyHoldPoints,
       drawdownPoints: buildDrawdownSeries(buyHoldPoints),
@@ -758,10 +768,7 @@ export function buildNormalizedCurveSeries(rows: any[]): NormalizedCurveSeries[]
 }
 
 export function variantDisplayLabel(variantName: string) {
-  if (variantName === "baseline") return "Baseline";
-  if (variantName === "manual_grid") return "Manual Grid Latest";
-  if (variantName === "buy_hold") return "B&H";
-  return variantName;
+  return resultVersionLabel(variantName);
 }
 
 export function curveSeriesColor(item: NormalizedCurveSeries, index = 0) {

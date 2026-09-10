@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from backend.core.paths import path_fields
+
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -35,12 +37,12 @@ def _snapshot_dir(snapshot_id: str) -> Path:
 def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     staging = path.with_name(f"{path.name}.tmp_{uuid4().hex[:8]}")
-    staging.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    staging.write_text(json.dumps(path_fields(payload, storing=True), ensure_ascii=False, indent=2), encoding="utf-8")
     staging.replace(path)
 
 
 def _read_json(path: Path) -> dict[str, Any]:
-    return json.loads(path.read_text(encoding="utf-8"))
+    return path_fields(json.loads(path.read_text(encoding="utf-8")))
 
 
 def _read_curve(path: Path) -> list[dict[str, Any]]:

@@ -327,13 +327,13 @@ def run_pool_walk_forward(
 ) -> dict[str, Any]:
     objective = str(objective or "sharpe").strip().lower()
     if objective not in ALLOWED_OBJECTIVES:
-        raise ValueError("Walk Forward 第一版仅支持 Sharpe 评分")
+        raise ValueError("滚动优化第一版仅支持 Sharpe 评分")
     training_months = int(training_months)
     test_months = int(test_months)
     if training_months < 6 or training_months > 120:
         raise ValueError("训练窗口需要控制在 6～120 个月")
     if test_months != 6:
-        raise ValueError("Walk Forward 第一版的样本外窗口固定为 6 个月")
+        raise ValueError("滚动优化第一版的样本外窗口固定为 6 个月")
 
     detail = pool_service.get_pool_item_detail(pool_item_id)
     strategy_research_service._safe_pool_path(detail)
@@ -341,7 +341,7 @@ def run_pool_walk_forward(
     parameter_by_name = {str(item["name"]): item for item in parameters}
     selected = list(dict.fromkeys(str(name).strip() for name in selected_parameters if str(name).strip()))
     if not selected or len(selected) > 3:
-        raise ValueError("请选择 1～3 个 Walk Forward 优化参数")
+        raise ValueError("请选择 1～3 个滚动优化参数")
     missing = [name for name in selected if name not in parameter_by_name]
     if missing:
         raise ValueError(f"不可研究的参数：{', '.join(missing)}")
@@ -353,7 +353,7 @@ def run_pool_walk_forward(
         parameter_space[name] = spec
         combination_count *= len(values)
     if combination_count < 2 or combination_count > min(100, int(max_trials)):
-        raise ValueError(f"Walk Forward 每期参数组合需要控制在 2～{min(100, int(max_trials))} 组")
+        raise ValueError(f"滚动优化每期参数组合需要控制在 2～{min(100, int(max_trials))} 组")
 
     item = dict(detail.get("pool_item") or {})
     config = dict(detail.get("config") or {})
@@ -377,11 +377,11 @@ def run_pool_walk_forward(
 
     task = task_service.create_task(
         TaskType.STRATEGY_RESEARCH.value,
-        message=f"Walk Forward 排队中 · {len(windows)} 个窗口",
+        message=f"滚动优化排队中 · {len(windows)} 个窗口",
         related_strategy_id=str(item.get("strategy_id") or "") or None,
         related_pool_item_id=pool_item_id,
     )
-    task_service.mark_running(task["task_id"], message=f"Walk Forward 进行中 0/{len(windows)} 个窗口")
+    task_service.mark_running(task["task_id"], message=f"滚动优化进行中 0/{len(windows)} 个窗口")
     total_steps = len(windows) * (combination_count + 2)
     completed_steps = 0
     window_results: list[dict[str, Any]] = []
@@ -406,7 +406,7 @@ def run_pool_walk_forward(
                 task_service.mark_progress(
                     task["task_id"],
                     progress,
-                    message=f"Walk Forward 窗口 {window_index}/{len(windows)} · 训练 {current}/{count} 组",
+                    message=f"滚动优化窗口 {window_index}/{len(windows)} · 训练 {current}/{count} 组",
                 )
 
             optimization = optimize_parameters(
@@ -467,7 +467,7 @@ def run_pool_walk_forward(
             task_service.mark_progress(
                 task["task_id"],
                 completed_steps / max(1, total_steps),
-                message=f"Walk Forward 已完成 {window_index}/{len(windows)} 个窗口",
+                message=f"滚动优化已完成 {window_index}/{len(windows)} 个窗口",
             )
 
             test_curve = list(test_result.get("daily_results") or [])
@@ -524,10 +524,10 @@ def run_pool_walk_forward(
         }
         experiment_dir = strategy_research_service._safe_research_dir(pool_item_id) / experiment_id
         strategy_research_service._write_json_atomic(experiment_dir / "result.json", payload)
-        completed = task_service.mark_completed(task["task_id"], message=f"Walk Forward 完成 · {len(window_results)} 个窗口")
+        completed = task_service.mark_completed(task["task_id"], message=f"滚动优化完成 · {len(window_results)} 个窗口")
         return {**payload, "task": completed}
     except Exception as exc:
-        task_service.mark_failed(task["task_id"], error=str(exc), message="Walk Forward 失败")
+        task_service.mark_failed(task["task_id"], error=str(exc), message="滚动优化失败")
         raise
 
 
@@ -537,21 +537,21 @@ def run_walk_forward_rank_analysis(pool_item_id: str, experiment_id: str) -> dic
     try:
         result_path.relative_to(research_root)
     except ValueError as exc:
-        raise ValueError("Walk Forward 研究结果路径不安全") from exc
+        raise ValueError("滚动优化研究结果路径不安全") from exc
     if not result_path.is_file():
-        raise FileNotFoundError(f"Walk Forward 研究结果不存在：{experiment_id}")
+        raise FileNotFoundError(f"滚动优化研究结果不存在：{experiment_id}")
     try:
         payload = json.loads(result_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        raise ValueError("Walk Forward 研究结果无法读取") from exc
+        raise ValueError("滚动优化研究结果无法读取") from exc
     if payload.get("type") != "walk_forward" or str(payload.get("pool_item_id") or "") != pool_item_id:
-        raise ValueError("指定结果不是当前策略的 Walk Forward 实验")
+        raise ValueError("指定结果不是当前策略的滚动优化实验")
 
     windows = [dict(window) for window in list(payload.get("windows") or [])]
     if payload.get("parameter_predictability") and windows and all(window.get("rank_analysis") for window in windows):
         return {**payload, "cached": True}
     if not windows:
-        raise ValueError("Walk Forward 结果没有可分析的完整窗口")
+        raise ValueError("滚动优化结果没有可分析的完整窗口")
 
     detail = pool_service.get_pool_item_detail(pool_item_id)
     strategy_research_service._safe_pool_path(detail)
@@ -559,7 +559,7 @@ def run_walk_forward_rank_analysis(pool_item_id: str, experiment_id: str) -> dic
     parameter_by_name = {str(item["name"]): item for item in parameters}
     selected = list(dict.fromkeys(str(name).strip() for name in list(payload.get("selected_parameters") or []) if str(name).strip()))
     if not selected or len(selected) > 3:
-        raise ValueError("Walk Forward 结果缺少有效的优化参数")
+        raise ValueError("滚动优化结果缺少有效的优化参数")
     missing = [name for name in selected if name not in parameter_by_name]
     if missing:
         raise ValueError(f"不可研究的参数：{', '.join(missing)}")

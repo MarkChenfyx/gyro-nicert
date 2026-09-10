@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 import json
+from types import SimpleNamespace
 import pytest
 
 from backend.services import strategy_research_service, walk_forward_research_service
@@ -256,3 +257,54 @@ def test_walk_forward_optimizes_only_training_period_and_stitches_test_curve(mon
     assert legacy_analysis["parameter_predictability"]["mean_rank_ic"] == 1.0
     assert all(len(window["training_grid_summary"]) == 2 for window in legacy_analysis["windows"])
     assert len(training_configs) == 8
+
+
+def test_ai_research_overview_is_single_line_and_cached(monkeypatch, tmp_path) -> None:
+    calls: list[list[dict[str, str]]] = []
+
+    class FakeProvider:
+        config = SimpleNamespace(model="test-overview-model")
+
+        def complete(self, messages):
+            calls.append(messages)
+            return '{"summary":"策略当前取得正累计收益，但仍需要进一步验证结果是否稳定。"}'
+
+    monkeypatch.setattr(strategy_research_service, "build_provider", lambda options=None: FakeProvider())
+    monkeypatch.setattr(strategy_research_service, "_safe_pool_path", lambda detail: tmp_path)
+    monkeypatch.setattr(strategy_research_service, "_latest_heatmap", lambda pool_item_id: None)
+    monkeypatch.setattr(
+        walk_forward_research_service,
+        "latest_walk_forward_result",
+        lambda pool_item_id: None,
+    )
+    monkeypatch.setattr(
+        strategy_research_service,
+        "_ai_overview_cache_path",
+        lambda pool_item_id: tmp_path / f"{pool_item_id}.json",
+    )
+    monkeypatch.setattr(
+        strategy_research_service.pool_service,
+        "get_pool_item_detail",
+        lambda pool_item_id: {
+            "pool_item": {"pool_item_id": pool_item_id, "strategy_name": "Demo", "vt_symbol": "510300.SSE"},
+            "config": {"interval": "1m", "start_date": "2025-01-01", "end_date": "2025-12-31"},
+            "result": {"metrics": {"sharpe": 0.8, "total_trade_count": 12}},
+            "daily_results": {
+                "data": [
+                    {"date": "2025-01-01", "close_price": 100, "pre_close": 100, "net_pnl": 1},
+                    {"date": "2025-01-02", "close_price": 101, "pre_close": 100, "net_pnl": 2},
+                ]
+            },
+            "trades": {"data": [{"tradeid": str(index)} for index in range(12)]},
+        },
+    )
+
+    first = strategy_research_service.create_pool_ai_overview("pool_demo")
+    cached = strategy_research_service.create_pool_ai_overview("pool_demo")
+
+    assert first["cached"] is False
+    assert cached["cached"] is True
+    assert "策略当前取得正累计收益" in first["summary"]
+    assert first["summary"].endswith(strategy_research_service.AI_OVERVIEW_FIXED_SUGGESTION)
+    assert len(calls) == 1
+    assert '"trade_count": 12' in calls[0][1]["content"]

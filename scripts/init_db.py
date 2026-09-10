@@ -84,6 +84,86 @@ CREATE TABLE IF NOT EXISTS pool_items (
     created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS virtual_portfolios (
+    portfolio_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT,
+    virtual_capital REAL NOT NULL,
+    start_date TEXT NOT NULL,
+    end_date TEXT NOT NULL,
+    alignment_mode TEXT NOT NULL DEFAULT 'intersection',
+    latest_snapshot_id TEXT,
+    archived_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS virtual_portfolio_components (
+    portfolio_id TEXT NOT NULL,
+    pool_item_id TEXT NOT NULL,
+    weight REAL NOT NULL,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (portfolio_id, pool_item_id)
+);
+
+CREATE TABLE IF NOT EXISTS virtual_portfolio_snapshots (
+    snapshot_id TEXT PRIMARY KEY,
+    portfolio_id TEXT NOT NULL,
+    definition_hash TEXT NOT NULL,
+    source_hashes TEXT NOT NULL,
+    metrics TEXT NOT NULL,
+    artifact_path TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS live_sources (
+    source_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    source_kind TEXT NOT NULL,
+    package_path TEXT NOT NULL,
+    package_hash TEXT NOT NULL,
+    first_date TEXT NOT NULL,
+    instance_count INTEGER NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS live_bindings (
+    binding_id TEXT PRIMARY KEY,
+    source_id TEXT NOT NULL,
+    instance_name TEXT NOT NULL,
+    class_name TEXT NOT NULL,
+    module_path TEXT NOT NULL,
+    vt_symbol TEXT NOT NULL,
+    fixed_size REAL NOT NULL,
+    parameters_json TEXT NOT NULL,
+    config_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(source_id, instance_name)
+);
+
+CREATE TABLE IF NOT EXISTS live_snapshots (
+    snapshot_id TEXT PRIMARY KEY,
+    source_id TEXT NOT NULL,
+    trade_date TEXT NOT NULL,
+    setting_hash TEXT NOT NULL,
+    state_hash TEXT NOT NULL,
+    artifact_path TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(source_id, trade_date)
+);
+
+CREATE TABLE IF NOT EXISTS live_daily_records (
+    record_id TEXT PRIMARY KEY,
+    source_id TEXT NOT NULL,
+    trade_date TEXT NOT NULL,
+    summary_json TEXT NOT NULL,
+    artifact_path TEXT NOT NULL,
+    error TEXT,
+    created_at TEXT NOT NULL,
+    UNIQUE(source_id, trade_date)
+);
+
 CREATE TABLE IF NOT EXISTS artifacts (
     artifact_id TEXT PRIMARY KEY,
     owner_type TEXT NOT NULL,
@@ -165,6 +245,13 @@ DROP TABLE IF EXISTS strategies;
 DROP TABLE IF EXISTS runs;
 DROP TABLE IF EXISTS run_variants;
 DROP TABLE IF EXISTS pool_items;
+DROP TABLE IF EXISTS virtual_portfolio_snapshots;
+DROP TABLE IF EXISTS virtual_portfolio_components;
+DROP TABLE IF EXISTS virtual_portfolios;
+DROP TABLE IF EXISTS live_reconciliation_runs;
+DROP TABLE IF EXISTS live_position_snapshots;
+DROP TABLE IF EXISTS live_strategy_bindings;
+DROP TABLE IF EXISTS live_sources;
 DROP TABLE IF EXISTS artifacts;
 """
 

@@ -7,6 +7,7 @@ import signal
 import subprocess
 import sys
 import time
+import tokenize
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -14,6 +15,7 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 FRONTEND_ROOT = PROJECT_ROOT / "frontend"
+BACKEND_ROOT = PROJECT_ROOT / "backend"
 
 
 def command_path(name: str) -> str:
@@ -66,6 +68,41 @@ def url_is_ready(url: str) -> bool:
         return False
 
 
+def wait_for_service(
+    name: str,
+    process: subprocess.Popen[bytes],
+    url: str,
+    timeout_seconds: float = 20,
+) -> None:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        exit_code = process.poll()
+        if exit_code is not None:
+            raise RuntimeError(f"{name}进程提前退出（状态码 {exit_code}）。")
+        if url_is_ready(url):
+            return
+        time.sleep(0.2)
+    raise RuntimeError(f"{name}在 {timeout_seconds:g} 秒内未能就绪：{url}")
+
+
+def backend_source_snapshot() -> dict[str, tuple[int, int]]:
+    snapshot: dict[str, tuple[int, int]] = {}
+    for path in BACKEND_ROOT.rglob("*.py"):
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        snapshot[str(path.relative_to(BACKEND_ROOT))] = (stat.st_mtime_ns, stat.st_size)
+    return snapshot
+
+
+def validate_backend_sources() -> None:
+    for path in BACKEND_ROOT.rglob("*.py"):
+        with tokenize.open(path) as source_file:
+            source = source_file.read()
+        compile(source, str(path), "exec")
+
+
 def main() -> int:
     args = parse_args()
     node = command_path("node")
@@ -83,39 +120,66 @@ def main() -> int:
     else:
         print("[2/3] 前端依赖已就绪。", flush=True)
 
+    # Uvicorn's Windows reloader broadcasts CTRL_C_EVENT and can terminate the
+    # parent batch job.  Keep Uvicorn stable and let this supervisor restart
+    # only the backend child when backend Python sources change.
     backend_command = [sys.executable, "-m", "uvicorn", "backend.main:app"]
-    if not args.no_reload:
-        backend_command.append("--reload")
+    reload_enabled = not args.no_reload
+    reload_snapshot = backend_source_snapshot() if reload_enabled else {}
 
     print("[3/3] 启动前后端…", flush=True)
     backend = start_process(backend_command, PROJECT_ROOT)
-    frontend = start_process([node, str(vite_entry)], FRONTEND_ROOT)
-    processes = [("后端", backend), ("前端", frontend)]
-
-    print("\n服务已启动：", flush=True)
-    print("  工作台  http://127.0.0.1:5173", flush=True)
-    print("  API 文档 http://127.0.0.1:8000/docs", flush=True)
-    print("按 Ctrl+C 可同时关闭前后端。\n", flush=True)
+    processes = [("后端", backend)]
 
     try:
+        wait_for_service("后端", backend, "http://127.0.0.1:8000/api/health")
+        frontend = start_process([node, str(vite_entry)], FRONTEND_ROOT)
+        processes.append(("前端", frontend))
+        wait_for_service("前端", frontend, "http://127.0.0.1:5173")
+
+        print("\n服务已启动：", flush=True)
+        print("  工作台  http://127.0.0.1:5173", flush=True)
+        print("  API 文档 http://127.0.0.1:8000/docs", flush=True)
+        print("按 Ctrl+C 可同时关闭前后端。\n", flush=True)
+
         if args.smoke_test:
-            deadline = time.monotonic() + 20
-            while time.monotonic() < deadline:
-                if backend.poll() is not None or frontend.poll() is not None:
-                    break
-                if url_is_ready("http://127.0.0.1:8000/api/health") and url_is_ready("http://127.0.0.1:5173"):
-                    print("启动检查通过，前后端均可访问。", flush=True)
-                    return 0
-                time.sleep(0.5)
-            print("启动检查失败：20 秒内未能同时访问前后端。", file=sys.stderr)
-            return 1
+            if reload_enabled:
+                print("正在检查后端自动重载…", flush=True)
+                stop_process_tree(backend)
+                backend = start_process(backend_command, PROJECT_ROOT)
+                processes[0] = ("后端", backend)
+                wait_for_service("后端", backend, "http://127.0.0.1:8000/api/health")
+                print("后端自动重载检查通过，前端进程保持运行。", flush=True)
+            print("启动检查通过，前后端均可访问。", flush=True)
+            return 0
 
         while True:
-            for name, process in processes:
-                exit_code = process.poll()
-                if exit_code is not None:
-                    print(f"{name}进程已退出（状态码 {exit_code}）。", file=sys.stderr)
-                    return exit_code or 1
+            frontend_exit_code = frontend.poll()
+            if frontend_exit_code is not None:
+                print(f"前端进程已退出（状态码 {frontend_exit_code}）。", file=sys.stderr)
+                return frontend_exit_code or 1
+
+            if reload_enabled:
+                current_snapshot = backend_source_snapshot()
+                if current_snapshot != reload_snapshot:
+                    reload_snapshot = current_snapshot
+                    try:
+                        validate_backend_sources()
+                    except (OSError, SyntaxError) as exc:
+                        print(f"后端代码校验失败，继续使用当前服务：{exc}", file=sys.stderr, flush=True)
+                    else:
+                        print("检测到后端代码变化，正在自动重载…", flush=True)
+                        stop_process_tree(backend)
+                        backend = start_process(backend_command, PROJECT_ROOT)
+                        processes[0] = ("后端", backend)
+                        wait_for_service("后端", backend, "http://127.0.0.1:8000/api/health")
+                        reload_snapshot = backend_source_snapshot()
+                        print("后端自动重载完成。", flush=True)
+
+            backend_exit_code = backend.poll()
+            if backend_exit_code is not None:
+                print(f"后端进程已退出（状态码 {backend_exit_code}）。", file=sys.stderr)
+                return backend_exit_code or 1
             time.sleep(0.5)
     except KeyboardInterrupt:
         print("\n正在关闭服务…", flush=True)

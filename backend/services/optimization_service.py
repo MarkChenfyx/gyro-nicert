@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from backend.core.paths import path_fields
+
 from pathlib import Path
 from typing import Any
 import hashlib
@@ -44,7 +46,7 @@ def _read_json(path: str | Path | None) -> dict[str, Any]:
     candidate = Path(path)
     if not candidate.exists() or not candidate.is_file():
         return {}
-    return json.loads(candidate.read_text(encoding="utf-8"))
+    return path_fields(json.loads(candidate.read_text(encoding="utf-8")))
 
 
 def _apply_baseline_parameters(inventory: dict[str, Any], parameters: dict[str, Any]) -> dict[str, Any]:
@@ -155,7 +157,7 @@ def _write_cached_suggestion(context: dict[str, Any], variant_name: str, suggest
         "cached_at": cached_at,
         "suggestion": suggestion,
     }
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    path.write_text(json.dumps(path_fields(payload, storing=True), ensure_ascii=False, indent=2), encoding="utf-8")
     return {**suggestion, "cached": False, "cached_at": cached_at}
 
 
@@ -229,7 +231,14 @@ def suggest_optimization_space(
     return {"run_id": run_id, "variant_name": variant_name, **cached}
 
 
-def _validate_selected_parameters(search_space: dict[str, Any], selected: list[str], parameter_ranges: dict[str, Any]) -> None:
+def _validate_selected_parameters(
+    search_space: dict[str, Any],
+    selected: list[str],
+    parameter_ranges: dict[str, Any],
+    *,
+    base_parameters: dict[str, Any] | None = None,
+    allow_default_only: bool = False,
+) -> None:
     visible = {str(item["name"]): item for item in search_space.get("parameters") or []}
     hidden = {str(item["name"]): item for item in search_space.get("hidden_parameters") or []}
     if not selected:
@@ -237,7 +246,12 @@ def _validate_selected_parameters(search_space: dict[str, Any], selected: list[s
     blocked = [name for name in selected if name in hidden or name not in visible]
     if blocked:
         raise ValueError(f"Selected parameters are not tunable or hidden: {', '.join(blocked)}")
-    missing = [name for name in selected if name not in parameter_ranges]
+    defaults = dict(base_parameters or {})
+    missing = [
+        name
+        for name in selected
+        if name not in parameter_ranges and not (allow_default_only and name in defaults)
+    ]
     if missing:
         raise ValueError(f"Missing parameter ranges: {', '.join(missing)}")
 
@@ -354,10 +368,14 @@ def run_optimization(
         }
     virtual_by_name = _validated_virtual_parameters(search_space, list(virtual_parameters or []))
     real_selected = [name for name in selected if name not in virtual_by_name]
-    _validate_selected_parameters(search_space, real_selected, ranges) if real_selected else None
-    unknown_virtual = [name for name in selected if name not in ranges and name not in virtual_by_name]
-    if unknown_virtual:
-        raise ValueError(f"Unknown optimization parameters: {', '.join(unknown_virtual)}")
+    if real_selected:
+        _validate_selected_parameters(
+            search_space,
+            real_selected,
+            ranges,
+            base_parameters=resolved_base_parameters,
+            allow_default_only=resolved_method == "manual_grid",
+        )
 
     context = _run_context(run_id)
     config = {**dict(context["config"]), "mode": dict(context["config"]).get("mode") or "real", "max_trials": max_trials}
@@ -430,7 +448,7 @@ def run_optimization(
             artifact_paths,
         )
         payload["metrics"] = result_without_rows["metrics"]
-        variant_artifacts["result_path"].write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        variant_artifacts["result_path"].write_text(json.dumps(path_fields(payload, storing=True), ensure_ascii=False, indent=2), encoding="utf-8")
 
         variant = variant_repository.create_variant(
             None,

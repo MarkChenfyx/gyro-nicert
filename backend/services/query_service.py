@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from backend.core.paths import path_fields
+
 from pathlib import Path
 from typing import Any
 import csv
@@ -13,7 +15,7 @@ def _read_json(path: str | Path) -> dict[str, Any]:
     candidate = Path(path)
     if not candidate.exists() or not candidate.is_file():
         return {}
-    return json.loads(candidate.read_text(encoding="utf-8"))
+    return path_fields(json.loads(candidate.read_text(encoding="utf-8")))
 
 
 def _read_csv(path: str | Path | None) -> dict[str, Any]:

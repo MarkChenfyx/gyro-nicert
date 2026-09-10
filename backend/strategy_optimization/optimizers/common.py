@@ -74,15 +74,28 @@ def candidate_grid(
     max_trials: int = 200,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     diagnostics: list[dict[str, Any]] = []
-    names = [str(name) for name in (selected_parameters or parameter_space.keys()) if str(name) in parameter_space]
-    unknown = [str(name) for name in (selected_parameters or []) if str(name) not in parameter_space]
+    requested_names = [str(name) for name in (selected_parameters if selected_parameters is not None else parameter_space.keys())]
+    if not requested_names:
+        diagnostics.append(diagnostic("info", "no grid ranges selected; evaluating base parameters once"))
+        return [
+            {
+                "label": "candidate_001",
+                "parameters": dict(base_parameters),
+                "overrides": {},
+            }
+        ], diagnostics
+
+    unknown = [name for name in requested_names if name not in parameter_space and name not in base_parameters]
     if unknown:
         diagnostics.append(diagnostic("warning", f"ignored parameters without range: {', '.join(unknown)}"))
-    value_grid = [
-        (name, values_from_range(parameter_space[name], base_parameters.get(name)))
-        for name in names
-    ]
-    value_grid = [(name, values) for name, values in value_grid if values]
+    value_grid: list[tuple[str, list[Any]]] = []
+    for name in requested_names:
+        values = values_from_range(parameter_space.get(name), base_parameters.get(name))
+        if not values and name in base_parameters:
+            values = [base_parameters[name]]
+            diagnostics.append(diagnostic("info", f"parameter {name} has no grid range; using its base value once"))
+        if values:
+            value_grid.append((name, values))
     if not value_grid:
         return [], diagnostics
     total = 1
@@ -203,4 +216,3 @@ def score_metrics(metrics: dict[str, Any], objective: str) -> float:
     if normalized in {"max_drawdown", "drawdown", "max_ddpercent", "max_drawdown_pct"}:
         return -abs(metric_value(metrics, "drawdown", 0.0))
     return metric_value(metrics, normalized, metric_value(metrics, "sharpe", metric_value(metrics, "total_return", 0.0)))
-

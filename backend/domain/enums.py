@@ -19,6 +19,7 @@ class TaskType(StrEnum):
     POOL_ADD = "pool_add"
     POOL_REBUILD = "pool_rebuild"
     STRATEGY_RESEARCH = "strategy_research"
+    LIVE_RECONCILIATION = "live_reconciliation"
 
 
 class RunType(StrEnum):

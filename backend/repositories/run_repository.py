@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from backend.core.paths import stored_path, path_fields
 from backend.common.time_utils import now_iso
 from backend.data_manager.database import get_app_db_connection
 
@@ -33,7 +34,7 @@ def create_run(
                 task_id,
                 str(run_type),
                 str(status),
-                str(runtime_path),
+                stored_path(runtime_path),
                 created_at,
                 created_at,
             ),
@@ -66,7 +67,7 @@ def get_run(run_id: str) -> dict[str, Any] | None:
             "SELECT * FROM runs WHERE run_id = ?",
             (str(run_id),),
         ).fetchone()
-    return dict(row) if row is not None else None
+    return path_fields(dict(row)) if row is not None else None
 
 
 def list_runs(limit: int = 50) -> list[dict[str, Any]]:
@@ -76,7 +77,7 @@ def list_runs(limit: int = 50) -> list[dict[str, Any]]:
             "SELECT * FROM runs ORDER BY created_at DESC, run_id DESC LIMIT ?",
             (safe_limit,),
         ).fetchall()
-    return [dict(row) for row in rows]
+    return [path_fields(dict(row)) for row in rows]
 
 
 def list_run_summaries(limit: int = 50) -> list[dict[str, Any]]:
@@ -101,4 +102,4 @@ def list_run_summaries(limit: int = 50) -> list[dict[str, Any]]:
             """,
             (safe_limit,),
         ).fetchall()
-    return [dict(row) for row in rows]
+    return [path_fields(dict(row)) for row in rows]

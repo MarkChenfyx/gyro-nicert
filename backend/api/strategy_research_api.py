@@ -14,6 +14,14 @@ def get_pool_research_context(pool_item_id: str) -> dict:
     return strategy_research_service.get_pool_research_context(pool_item_id)
 
 
+@router.post("/pool/{pool_item_id}/ai-overview")
+def create_pool_ai_overview(pool_item_id: str, force_refresh: bool = False) -> dict:
+    return strategy_research_service.create_pool_ai_overview(
+        pool_item_id,
+        force_refresh=force_refresh,
+    )
+
+
 @router.post("/pool/{pool_item_id}/heatmap")
 def run_pool_parameter_heatmap(pool_item_id: str, payload: StrategyResearchHeatmapRequest) -> dict:
     return strategy_research_service.run_pool_parameter_heatmap(

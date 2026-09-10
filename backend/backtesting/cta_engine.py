@@ -38,9 +38,9 @@ from vnpy_ctastrategy.template import CtaTemplate
 
 
 class BacktestingEngine:
-    """老师版 CTA 回测引擎的项目内适配版本。
+    """vn.py CTA 回测引擎的项目内适配版本。
 
-    撮合、委托、逐日盈亏和统计计算保留老师版本的实现；数据加载器可由
+    撮合、委托、逐日盈亏和统计计算保留上游实现；数据加载器可由
     工作台注入，从而继续只读取项目自己的 SQLite 行情库。
     """
 
@@ -90,6 +90,7 @@ class BacktestingEngine:
         self.tick_data_loader: Optional[Callable] = None
 
         self.daily_results: Dict[date, DailyResult] = {}
+        self.initial_pos: float = 0
         self.daily_df: DataFrame = None
 
     def set_data_loaders(
@@ -190,6 +191,12 @@ class BacktestingEngine:
             self, strategy_class.__name__, self.vt_symbol, setting
         )
 
+    def set_initial_position(self, position: float) -> None:
+        """Seed a replay from a previously persisted strategy position."""
+        self.initial_pos = float(position)
+        if self.strategy is not None:
+            self.strategy.pos = float(position)
+
     def load_data(self) -> None:
         """"""
         self.output("开始加载历史数据")
@@ -245,7 +252,7 @@ class BacktestingEngine:
 
         self.output(f"历史数据加载完成，数据量：{len(self.history_data)}")
 
-    def run_backtesting(self) -> None:
+    def run_backtesting(self, on_ready: Optional[Callable] = None) -> None:
         """"""
         if self.mode == BacktestingMode.BAR:
             func = self.new_bar
@@ -255,6 +262,10 @@ class BacktestingEngine:
         self.strategy.on_init()
         self.strategy.inited = True
         self.output("策略初始化完成")
+
+        if on_ready is not None:
+            on_ready(self.strategy)
+            self.output("已注入外部策略状态")
 
         self.strategy.on_start()
         self.strategy.trading = True
@@ -296,7 +307,7 @@ class BacktestingEngine:
 
         # Calculate daily result by iteration.
         pre_close = 0
-        start_pos = 0
+        start_pos = self.initial_pos
 
         for daily_result in self.daily_results.values():
             daily_result.calculate_pnl(
@@ -1206,4 +1217,3 @@ def get_target_value(result: list) -> float:
     Get target value for sorting optimization results.
     """
     return result[1]
-

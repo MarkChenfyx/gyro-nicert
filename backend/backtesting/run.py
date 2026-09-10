@@ -1,15 +1,18 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import datetime, time
-from typing import Any
+from pathlib import Path
+from typing import Any, Iterator
 from uuid import uuid4
+import os
 import types
 
 from backend.backtesting import local_data_provider
 from backend.data_manager import coverage_service
 
-ENGINE_NAME = "teacher_cta_backtesting_engine"
-ENGINE_VERSION = "teacher_backtesting_v1_local_sqlite"
+ENGINE_NAME = "gyro_cta_backtesting_engine"
+ENGINE_VERSION = "cta_backtesting_v1_local_sqlite"
 
 
 def _diagnostic(level: str, message: str) -> dict[str, str]:
@@ -90,8 +93,8 @@ def _vnpy_interval(interval: str):
     raise ValueError(f"Unsupported interval: {interval}")
 
 
-def _teacher_bar_loader(symbol: str, exchange: Any, interval: Any, start: datetime, end: datetime) -> list[Any]:
-    """Bridge the teacher engine's loader contract to the workbench SQLite provider."""
+def _local_bar_loader(symbol: str, exchange: Any, interval: Any, start: datetime, end: datetime) -> list[Any]:
+    """Bridge the CTA engine's loader contract to the workbench SQLite provider."""
     exchange_value = getattr(exchange, "value", str(exchange))
     interval_value = getattr(interval, "value", str(interval))
     return local_data_provider.load_bar_data(
@@ -104,6 +107,28 @@ def _teacher_bar_loader(symbol: str, exchange: Any, interval: Any, start: dateti
 
 def _unsupported_tick_loader(*_: Any) -> list[Any]:
     raise ValueError("本地行情库尚未配置 Tick 数据，当前只能使用 BAR 模式回测")
+
+
+@contextmanager
+def _resource_dir(resource_root: Any) -> Iterator[None]:
+    """部分策略在 on_init 里按相对路径加载模型文件，回测期间切到它们的资源目录。
+
+    只包住加载与回放这一段，并用 finally 保证异常时也恢复当前目录；工作台自身的
+    数据库和产物都走 core.paths 的绝对路径，不受当前目录影响。
+    """
+    path = str(resource_root or "").strip()
+    if not path:
+        yield
+        return
+    resolved = Path(path).expanduser().resolve()
+    if not resolved.is_dir():
+        raise ValueError(f"策略资源目录不存在：{resolved}")
+    previous = os.getcwd()
+    os.chdir(resolved)
+    try:
+        yield
+    finally:
+        os.chdir(previous)
 
 
 def _load_strategy_class(strategy_code: str, class_name: str):
@@ -193,7 +218,7 @@ def _real_backtest(
 ) -> dict[str, Any]:
     from vnpy_ctastrategy.base import BacktestingMode
 
-    from backend.backtesting.teacher_engine import BacktestingEngine
+    from backend.backtesting.cta_engine import BacktestingEngine
 
     data_mode = str(config.get("data_mode") or config.get("backtesting_mode") or "bar").strip().lower()
     if data_mode not in {"bar", "kline", "k_line"}:
@@ -246,29 +271,30 @@ def _real_backtest(
             ],
         )
 
-    strategy_class = _load_strategy_class(strategy_code, class_name)
-    engine = BacktestingEngine()
-    engine.set_data_loaders(
-        bar_loader=_teacher_bar_loader,
-        tick_loader=_unsupported_tick_loader,
-    )
-    engine.set_parameters(
-        vt_symbol=vt_symbol,
-        interval=_vnpy_interval(interval),
-        start=start,
-        end=end,
-        rate=float(config.get("rate", 0.000045)),
-        slippage=float(config.get("slippage", 0.001)),
-        size=float(config.get("size", 1)),
-        pricetick=float(config.get("pricetick", 0.001)),
-        capital=int(float(config.get("capital", 100000))),
-        mode=BacktestingMode.BAR,
-        risk_free=float(config.get("risk_free", 0)),
-        annual_days=int(config.get("annual_days", 240)),
-    )
-    engine.add_strategy(strategy_class, dict(parameters or {}))
-    engine.history_data = bars
-    engine.run_backtesting()
+    with _resource_dir(config.get("resource_root")):
+        strategy_class = _load_strategy_class(strategy_code, class_name)
+        engine = BacktestingEngine()
+        engine.set_data_loaders(
+            bar_loader=_local_bar_loader,
+            tick_loader=_unsupported_tick_loader,
+        )
+        engine.set_parameters(
+            vt_symbol=vt_symbol,
+            interval=_vnpy_interval(interval),
+            start=start,
+            end=end,
+            rate=float(config.get("rate", 0.000045)),
+            slippage=float(config.get("slippage", 0.001)),
+            size=float(config.get("size", 1)),
+            pricetick=float(config.get("pricetick", 0.001)),
+            capital=int(float(config.get("capital", 100000))),
+            mode=BacktestingMode.BAR,
+            risk_free=float(config.get("risk_free", 0)),
+            annual_days=int(config.get("annual_days", 240)),
+        )
+        engine.add_strategy(strategy_class, dict(parameters or {}))
+        engine.history_data = bars
+        engine.run_backtesting()
     daily_df = engine.calculate_result()
     statistics = engine.calculate_statistics(daily_df, output=False)
     daily_results = _records_from_daily_df(daily_df)
@@ -280,8 +306,8 @@ def _real_backtest(
         "trades": trades,
         "logs": list(getattr(engine, "logs", []) or []),
         "diagnostics": [
-            _diagnostic("info", f"老师版 CTA 回测引擎已完成 {len(bars)} 根本地 K 线回放"),
-            _diagnostic("info", "撮合与逐日盈亏使用老师版 backtesting 逻辑"),
+            _diagnostic("info", f"CTA 回测引擎已完成 {len(bars)} 根本地 K 线回放"),
+            _diagnostic("info", "撮合与逐日盈亏使用 vn.py CTA backtesting 逻辑"),
             _diagnostic("info", "行情由工作台本地 SQLite bars 表提供，不读取 vn.py 全局数据库"),
         ],
         "engine_name": ENGINE_NAME,

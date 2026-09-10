@@ -6,6 +6,8 @@ import LaunchFlowPage from "../pages/LaunchFlowPage";
 import StrategyGenerationPage from "../pages/StrategyGenerationPage";
 import ParameterOptimizationPage from "../pages/ParameterOptimizationPage";
 import PoolPage from "../pages/PoolPage";
+import LivePage from "../pages/LivePage";
+import PortfolioPage from "../pages/PortfolioPage";
 import StrategyResearchPage from "../pages/StrategyResearchPage";
 import {
   PAGE_STORAGE_KEY,
@@ -23,19 +25,80 @@ const CachedLaunchFlowPage = memo(LaunchFlowPage);
 const CachedStrategyGenerationPage = memo(StrategyGenerationPage);
 const CachedParameterOptimizationPage = memo(ParameterOptimizationPage);
 const CachedPoolPage = memo(PoolPage);
+const CachedPortfolioPage = memo(PortfolioPage);
+const CachedLivePage = memo(LivePage);
 const CachedStrategyResearchPage = memo(StrategyResearchPage);
 
 const APP_THEME = {
   token: {
     colorPrimary: "#17b8b1",
+    colorPrimaryHover: "#19c0ba",
+    colorPrimaryActive: "#0ea5a0",
+    colorInfo: "#2d6cdf",
+    colorSuccess: "#169b94",
+    colorWarning: "#b45309",
+    colorError: "#be123c",
     colorText: "#202938",
     colorTextSecondary: "#667085",
-    borderRadius: 8,
-    controlHeight: 34,
+    colorTextTertiary: "#98a2b3",
+    colorBgLayout: "#f4f6f8",
+    colorBgContainer: "#ffffff",
+    colorFillAlter: "#fafbfc",
+    colorBorder: "#e3e8ef",
+    colorBorderSecondary: "#edf1f5",
+    borderRadius: 6,
+    borderRadiusLG: 8,
+    controlHeight: 36,
     controlHeightSM: 30,
     fontSize: 14,
     lineHeight: 1.5,
     fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei UI", "PingFang SC", sans-serif'
+  },
+  components: {
+    Button: {
+      fontWeight: 600,
+      primaryShadow: "none",
+      defaultShadow: "none"
+    },
+    Input: {
+      activeBorderColor: "#17b8b1",
+      hoverBorderColor: "#19c0ba",
+      activeShadow: "0 0 0 2px rgba(23, 184, 177, 0.12)"
+    },
+    InputNumber: {
+      activeBorderColor: "#17b8b1",
+      hoverBorderColor: "#19c0ba",
+      activeShadow: "0 0 0 2px rgba(23, 184, 177, 0.12)"
+    },
+    Select: {
+      activeBorderColor: "#17b8b1",
+      hoverBorderColor: "#19c0ba",
+      activeOutlineColor: "rgba(23, 184, 177, 0.12)",
+      optionSelectedBg: "#ecfdf5"
+    },
+    DatePicker: {
+      activeBorderColor: "#17b8b1",
+      hoverBorderColor: "#19c0ba",
+      activeShadow: "0 0 0 2px rgba(23, 184, 177, 0.12)"
+    },
+    Table: {
+      headerBg: "#f7f8fa",
+      headerColor: "#475467",
+      rowHoverBg: "#f0fdfa",
+      borderColor: "#edf1f5",
+      cellPaddingBlock: 10,
+      cellPaddingInline: 12
+    },
+    Tabs: {
+      itemColor: "#667085",
+      itemHoverColor: "#17b8b1",
+      itemSelectedColor: "#0f766e",
+      inkBarColor: "#17b8b1"
+    },
+    Modal: {
+      titleFontSize: 18,
+      titleColor: "#202938"
+    }
   }
 };
 
@@ -297,6 +360,16 @@ export default function App() {
           {visitedPages.has("pool") && (
             <div hidden={page !== "pool"}>
               <CachedPoolPage poolItems={poolItems} poolNavigation={poolNavigation} onPoolNavigationApplied={handlePoolNavigationApplied} refreshPool={refreshPool} refreshTasks={refreshTasks} onContinueOptimization={navigateToOptimizationRun} onOpenResearch={navigateToResearch} />
+            </div>
+          )}
+          {visitedPages.has("live") && (
+            <div hidden={page !== "live"}>
+              <CachedLivePage />
+            </div>
+          )}
+          {visitedPages.has("portfolio") && (
+            <div hidden={page !== "portfolio"}>
+              <CachedPortfolioPage poolItems={poolItems} />
             </div>
           )}
           {visitedPages.has("research") && (

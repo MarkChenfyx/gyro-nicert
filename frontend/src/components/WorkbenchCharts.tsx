@@ -13,6 +13,8 @@ import {
   formatReturnPct,
   rowDate
 } from "../app/shared";
+import { UI_TEXT } from "../app/terminology";
+import AppIcon from "./AppIcon";
 
 echarts.use([
   LineChart,
@@ -41,9 +43,22 @@ function observeChartResize(element: HTMLDivElement, chart: ReturnType<typeof ec
   };
 }
 
-export function CurveChart({ rows, height = 340, showLegend = true }: { rows: any[]; height?: number; showLegend?: boolean }) {
+export function CurveChart({
+  rows,
+  benchmarkLabel = "buy_hold",
+  height = 340,
+  showLegend = true
+}: {
+  rows: any[];
+  benchmarkLabel?: string;
+  height?: number;
+  showLegend?: boolean;
+}) {
   const ref = useRef<HTMLDivElement | null>(null);
-  const series = useMemo(() => buildNormalizedCurveSeries(rows), [rows]);
+  const series = useMemo(
+    () => buildNormalizedCurveSeries(rows, benchmarkLabel),
+    [benchmarkLabel, rows]
+  );
   const dates = useMemo(() => rows.map(rowDate), [rows]);
   useEffect(() => {
     if (!ref.current) return;
@@ -59,8 +74,8 @@ export function CurveChart({ rows, height = 340, showLegend = true }: { rows: an
   return (
     <div className="curve-chart-shell">
       <div className="curve-chart-heading">
-        <div><strong>单位仓位累计收益</strong><span>固定数量 · 非复利</span></div>
-        <span>下方展示策略与 B&amp;H 回撤</span>
+        <div><strong>{UI_TEXT.metric.totalReturn}</strong><span>单位仓位 · 固定数量 · 非复利</span></div>
+        <span>下方展示策略与买入持有回撤</span>
       </div>
       <div ref={ref} className="curve-canvas" style={{ height }} />
       {showLegend && series.length > 0 && (
@@ -87,7 +102,8 @@ export function buildComparisonSeries(
   curves: Record<string, any[]>,
   visibleKeys: string[],
   labels: Record<string, string> = {},
-  benchmark?: NormalizedCurveSeries | null
+  benchmark?: NormalizedCurveSeries | null,
+  benchmarkLabel = "buy_hold"
 ): NormalizedCurveSeries[] {
   const series: NormalizedCurveSeries[] = [];
   const variantKeys = visibleKeys.filter((key) => key !== "buy_hold");
@@ -107,7 +123,7 @@ export function buildComparisonSeries(
       series.push(benchmark);
     } else {
       const benchmarkSource = curves.baseline || curves[variantKeys[0]] || Object.values(curves)[0] || [];
-      const generatedBenchmark = buildNormalizedCurveSeries(benchmarkSource).find((item) => item.key === "buy_hold");
+      const generatedBenchmark = buildNormalizedCurveSeries(benchmarkSource, benchmarkLabel).find((item) => item.key === "buy_hold");
       if (generatedBenchmark) series.push(generatedBenchmark);
     }
   }
@@ -123,6 +139,7 @@ function MultiVariantCurveChartComponent({
   visibleKeys,
   labels = EMPTY_CURVE_LABELS,
   benchmark = null,
+  benchmarkLabel = "buy_hold",
   orderedKeys = EMPTY_ORDERED_CURVE_KEYS,
   height = 340,
   showLegend = true
@@ -131,13 +148,17 @@ function MultiVariantCurveChartComponent({
   visibleKeys: string[];
   labels?: Record<string, string>;
   benchmark?: NormalizedCurveSeries | null;
+  benchmarkLabel?: string;
   orderedKeys?: string[];
   height?: number;
   showLegend?: boolean;
 }) {
   const ref = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<ReturnType<typeof echarts.init> | null>(null);
-  const series = useMemo(() => buildComparisonSeries(curves, visibleKeys, labels, benchmark), [curves, visibleKeys, labels, benchmark]);
+  const series = useMemo(
+    () => buildComparisonSeries(curves, visibleKeys, labels, benchmark, benchmarkLabel),
+    [benchmark, benchmarkLabel, curves, labels, visibleKeys]
+  );
   const dates = useMemo(() => {
     const seen = new Set<string>();
     for (const item of series) {
@@ -169,7 +190,7 @@ function MultiVariantCurveChartComponent({
   return (
     <div className="curve-chart-shell">
       <div className="curve-chart-heading">
-        <div><strong>单位仓位累计收益</strong><span>固定数量 · 非复利</span></div>
+        <div><strong>{UI_TEXT.metric.totalReturn}</strong><span>单位仓位 · 固定数量 · 非复利</span></div>
         <span>下方展示策略与 B&amp;H 回撤</span>
       </div>
       <div ref={ref} className="curve-canvas" style={{ height }} />
@@ -264,7 +285,7 @@ export function CurveControls({
                 <strong>{item.label}</strong>
                 <small>{detail}</small>
               </span>
-              <span className="curve-pill-check" aria-hidden="true">✓</span>
+              <span className="curve-pill-check"><AppIcon name="check" size={11} /></span>
             </button>
           );
         })}

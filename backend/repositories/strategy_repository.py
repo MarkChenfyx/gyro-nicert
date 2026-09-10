@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from backend.core.paths import stored_path, path_fields
 from backend.common.time_utils import now_iso
 from backend.data_manager.database import get_app_db_connection
 
@@ -41,7 +42,7 @@ def create_strategy(
                 str(source_type),
                 source_text,
                 class_name,
-                str(code_path),
+                stored_path(code_path),
                 code_hash,
                 created_at,
             ),
@@ -59,7 +60,7 @@ def get_strategy(strategy_id: str) -> dict[str, Any] | None:
             "SELECT * FROM strategies WHERE strategy_id = ?",
             (str(strategy_id),),
         ).fetchone()
-    return dict(row) if row is not None else None
+    return path_fields(dict(row)) if row is not None else None
 
 
 def list_strategies(limit: int = 100) -> list[dict[str, Any]]:
@@ -69,4 +70,4 @@ def list_strategies(limit: int = 100) -> list[dict[str, Any]]:
             "SELECT * FROM strategies ORDER BY created_at DESC, strategy_id DESC LIMIT ?",
             (safe_limit,),
         ).fetchall()
-    return [dict(row) for row in rows]
+    return [path_fields(dict(row)) for row in rows]

@@ -1,6 +1,7 @@
-import React, { useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Drawer, message } from "antd";
 import { archiveTerminalTasks, listTasks } from "../api";
+import { UI_TEXT } from "../app/terminology";
 import {
   PageKey,
   TaskView,
@@ -18,6 +19,40 @@ import {
   taskSummary,
   zh
 } from "../app/shared";
+
+const DRAWER_TASK_LIMIT = 50;
+const DRAWER_REFRESH_MS = 1500;
+
+function filterDrawerTasks(rows: WorkbenchTask[], filter: TaskView): WorkbenchTask[] {
+  if (filter === "active") {
+    return rows.filter((task) => ["running", "queued"].includes(String(task.status).toLowerCase()) && !task.archived_at);
+  }
+  if (filter === "failed") {
+    return rows.filter((task) => task.status === "failed" && !task.archived_at);
+  }
+  if (filter === "completed") {
+    return rows.filter((task) => ["completed", "cancelled"].includes(String(task.status).toLowerCase()) && !task.archived_at);
+  }
+  if (filter === "archived") {
+    return rows.filter((task) => Boolean(task.archived_at));
+  }
+  return rows.filter((task) => !task.archived_at);
+}
+
+function taskSnapshotEqual(left: WorkbenchTask | null | undefined, right: WorkbenchTask | null | undefined): boolean {
+  if (!left || !right) return left === right;
+  return left.task_id === right.task_id
+    && left.status === right.status
+    && Number(left.progress || 0) === Number(right.progress || 0)
+    && left.message === right.message
+    && left.error === right.error
+    && left.updated_at === right.updated_at
+    && left.archived_at === right.archived_at;
+}
+
+function taskListEqual(left: WorkbenchTask[], right: WorkbenchTask[]): boolean {
+  return left.length === right.length && left.every((task, index) => taskSnapshotEqual(task, right[index]));
+}
 
 export function Sidebar({
   page,
@@ -43,6 +78,9 @@ export function Sidebar({
   const [taskFilter, setTaskFilter] = useState<TaskView>("all");
   const [selectedTask, setSelectedTask] = useState<WorkbenchTask | null>(null);
   const [loadingDrawer, setLoadingDrawer] = useState(false);
+  const drawerRequestSequence = useRef(0);
+  const drawerLoadingSequence = useRef(0);
+  const drawerRequestInFlight = useRef(false);
   const mergedTasks = useMemo(() => mergeRecentResearchTasks(tasks), [tasks]);
   const liveWorkflowTask = useMemo<WorkbenchTask | null>(() => {
     if (!workflowUi.isRunning || !workflowUi.startedAt) return null;
@@ -85,34 +123,52 @@ export function Sidebar({
     ...displayTasks.filter((task) => !activeTaskIds.has(task.task_id))
   ].slice(0, 5);
 
-  async function loadDrawerTasks(filter: TaskView = taskFilter) {
-    setLoadingDrawer(true);
-    try {
-      const view = filter === "archived" ? "archived" : "all";
-      const payload = await listTasks({ view, limit: 300 });
-      const rows = (payload.tasks || []) as WorkbenchTask[];
-      const filtered = filter === "active"
-        ? rows.filter((task) => ["running", "queued"].includes(String(task.status)) && !task.archived_at)
-        : filter === "failed"
-          ? rows.filter((task) => task.status === "failed" && !task.archived_at)
-          : filter === "completed"
-            ? rows.filter((task) => ["completed", "cancelled"].includes(String(task.status)) && !task.archived_at)
-            : filter === "archived"
-              ? rows.filter((task) => Boolean(task.archived_at))
-              : rows.filter((task) => !task.archived_at);
-      setDrawerTasks(filtered);
-      setSelectedTask((current) => filtered.find((task) => task.task_id === current?.task_id) || filtered[0] || null);
-    } catch (error) {
-      message.error(String(error));
-    } finally {
-      setLoadingDrawer(false);
+  const loadDrawerTasks = useCallback(async (filter: TaskView, silent = false) => {
+    if (silent && drawerRequestInFlight.current) return;
+    const requestSequence = drawerRequestSequence.current + 1;
+    drawerRequestSequence.current = requestSequence;
+    drawerRequestInFlight.current = true;
+    if (!silent) {
+      drawerLoadingSequence.current = requestSequence;
+      setLoadingDrawer(true);
     }
-  }
+    try {
+      const view = filter === "archived" ? "archived" : filter === "active" ? "active" : "recent";
+      const status = filter === "failed" ? "failed" : undefined;
+      const payload = await listTasks({ view, status, limit: DRAWER_TASK_LIMIT });
+      if (requestSequence !== drawerRequestSequence.current) return;
+      const rows = (payload.tasks || []) as WorkbenchTask[];
+      const filtered = filterDrawerTasks(rows, filter);
+      setDrawerTasks((current) => taskListEqual(current, filtered) ? current : filtered);
+      setSelectedTask((current) => {
+        const next = filtered.find((task) => task.task_id === current?.task_id) || filtered[0] || null;
+        return taskSnapshotEqual(current, next) ? current : next;
+      });
+    } catch (error) {
+      if (!silent) message.error(String(error));
+    } finally {
+      if (!silent && requestSequence === drawerLoadingSequence.current) setLoadingDrawer(false);
+      if (requestSequence === drawerRequestSequence.current) drawerRequestInFlight.current = false;
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!drawerOpen) return undefined;
+
+    void loadDrawerTasks(taskFilter);
+    const timer = window.setInterval(() => {
+      if (!document.hidden) void loadDrawerTasks(taskFilter, true);
+    }, DRAWER_REFRESH_MS);
+
+    return () => {
+      window.clearInterval(timer);
+      drawerRequestSequence.current += 1;
+    };
+  }, [drawerOpen, loadDrawerTasks, taskFilter]);
 
   function openTaskDrawer(task?: WorkbenchTask) {
     setSelectedTask(task || null);
     setDrawerOpen(true);
-    void loadDrawerTasks(taskFilter);
   }
 
   async function archiveEndedTasks() {
@@ -131,10 +187,17 @@ export function Sidebar({
     setDrawerOpen(false);
   }
 
-  const groupedTasks = ["今天", "昨天", "更早"].map((label) => ({
-    label,
-    tasks: drawerTasks.filter((task) => taskDateGroup(task) === label)
-  })).filter((group) => group.tasks.length);
+  const groupedTasks = useMemo(() => {
+    if (!drawerOpen) return [];
+    const groups = new Map<string, WorkbenchTask[]>([
+      ["今天", []],
+      ["昨天", []],
+      ["更早", []]
+    ]);
+    drawerTasks.forEach((task) => groups.get(taskDateGroup(task))?.push(task));
+    return Array.from(groups, ([label, grouped]) => ({ label, tasks: grouped }))
+      .filter((group) => group.tasks.length);
+  }, [drawerOpen, drawerTasks]);
 
   return (
     <aside className="sidebar">
@@ -145,15 +208,17 @@ export function Sidebar({
       </div>
 
       <section className="sidebar-section nav-section">
-        {[
+        {([
           ["launch", zh.launchFlow],
           ["generate", zh.generate],
           ["optimize", zh.optimize],
           ["pool", zh.pool],
-          ["research", zh.research]
-        ].map(([key, label]) => (
+          ["research", zh.research],
+          ["portfolio", zh.portfolio],
+          ["live", zh.live]
+        ] as Array<[PageKey, string]>).map(([key, label]) => (
           <button key={key} type="button" className={`nav-button ${page === key ? "is-active" : ""}`} onClick={() => onPageChange(key as PageKey)}>
-            {label}
+            <span>{label}</span>
           </button>
         ))}
       </section>
@@ -194,6 +259,7 @@ export function Sidebar({
         placement="right"
         width={720}
         open={drawerOpen}
+        destroyOnClose
         onClose={() => setDrawerOpen(false)}
         extra={<Button size="small" onClick={archiveEndedTasks}>归档已结束</Button>}
       >
@@ -206,7 +272,7 @@ export function Sidebar({
                 type="button"
                 key={key}
                 className={`mini-button ${taskFilter === key ? "is-active" : ""}`}
-                onClick={() => { setTaskFilter(key); void loadDrawerTasks(key); }}
+                onClick={() => setTaskFilter(key)}
               >{label}</button>
             ))}
           </div>
@@ -235,13 +301,13 @@ export function Sidebar({
                     <div><dt>创建时间</dt><dd>{formatDate(selectedTask.created_at)}</dd></div>
                     <div><dt>更新时间</dt><dd>{formatDate(selectedTask.updated_at)}</dd></div>
                     {(["running", "queued", "failed"].includes(String(selectedTask.status)) || selectedTask.error) && <div className="span-2"><dt>{selectedTask.error ? "错误信息" : "当前阶段"}</dt><dd>{selectedTask.error || selectedTask.message || "-"}</dd></div>}
-                    {selectedTask.related_run_id && <div className="span-2"><dt>关联运行版本</dt><dd>{selectedTask.related_run_id}</dd></div>}
+                    {selectedTask.related_run_id && <div className="span-2"><dt>关联{UI_TEXT.term.runId}</dt><dd>{selectedTask.related_run_id}</dd></div>}
                     {selectedTask.related_strategy_id && <div className="span-2"><dt>关联策略</dt><dd>{selectedTask.related_strategy_id}</dd></div>}
-                    {selectedTask.related_pool_item_id && <div className="span-2"><dt>关联策略池</dt><dd>{selectedTask.related_pool_item_id}</dd></div>}
+                    {selectedTask.related_pool_item_id && <div className="span-2"><dt>关联{UI_TEXT.term.poolSnapshot}</dt><dd>{selectedTask.related_pool_item_id}</dd></div>}
                   </dl>
                   {(selectedTask.status === "failed" || selectedTask.related_run_id || selectedTask.related_pool_item_id) && (
                     <Button type="primary" onClick={() => navigateFromTask(selectedTask)}>
-                      {selectedTask.status === "failed" ? "返回对应页面重新配置" : "查看关联结果"}
+                      {selectedTask.status === "failed" ? "返回对应页面重新配置" : UI_TEXT.action.viewDetails}
                     </Button>
                   )}
                 </>

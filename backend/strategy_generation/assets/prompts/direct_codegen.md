@@ -42,6 +42,8 @@
 "strategy_code": "完整 Python 策略代码字符串"
 }
 
+strategy_code 必须是标准 JSON 字符串：换行只使用一层 JSON 转义 `\n`，不要返回字面量 `\\n`，也不要给整段代码再次加引号或再次转义。
+
 用户策略需求：
 
 {USER_REQUEST}

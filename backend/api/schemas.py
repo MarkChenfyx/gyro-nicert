@@ -18,6 +18,12 @@ class StrategyRepairRequest(BaseModel):
     options: dict[str, Any] | None = None
 
 
+class StrategyInitialReviewRequest(BaseModel):
+    run_id: str
+    force_refresh: bool = False
+    options: dict[str, Any] | None = None
+
+
 class ResearchCreateRequest(BaseModel):
     source_filename: str
     symbol: str = "510300"
@@ -68,6 +74,7 @@ class ResearchCodeBaselineCreateRequest(BaseModel):
 class PoolAddRequest(BaseModel):
     run_id: str
     variant_name: str = "baseline"
+    candidate_label: str | None = None
     tags: list[str] | None = None
     note: str | None = Field(default=None, max_length=500)
     vt_symbol: str | None = None
@@ -97,6 +104,41 @@ class PoolListQuery(BaseModel):
     sort_by: str = "created_at"
     order: str = "desc"
     limit: int = Field(default=100, ge=1, le=1000)
+
+
+class PortfolioComponentRequest(BaseModel):
+    pool_item_id: str
+    weight: float = Field(default=1.0, gt=0)
+
+
+class PortfolioSaveRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    description: str = Field(default="", max_length=1000)
+    virtual_capital: float = Field(default=1_000_000.0, gt=0)
+    start_date: str | None = None
+    end_date: str | None = None
+    components: list[PortfolioComponentRequest] = Field(min_length=1, max_length=50)
+
+
+class LiveSourceImportRequest(BaseModel):
+    trade_date: str
+    name: str = Field(default="实盘组合", max_length=80)
+    # 默认 local_dir：直接读取 .env 中分别配置的策略目录和 .vntrader 目录。
+    source_kind: str = "local_dir"
+    package_base64: str = ""
+    settings: dict[str, Any] = Field(default_factory=dict)
+    states: dict[str, Any] = Field(default_factory=dict)
+
+
+class LiveSnapshotRequest(BaseModel):
+    trade_date: str
+    settings: dict[str, Any] = Field(default_factory=dict)
+    states: dict[str, Any] = Field(default_factory=dict)
+
+
+class LiveTrackRequest(BaseModel):
+    trade_date: str
+    update_data: bool = True
 
 
 class DataDownloadRequest(BaseModel):

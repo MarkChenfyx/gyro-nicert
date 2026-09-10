@@ -5,7 +5,7 @@ from uuid import uuid4
 
 from backend.common.time_utils import timestamp_id
 from backend.data_manager import coverage_service, market_repository
-from backend.data_manager.rqdata_client import get_default_client
+from backend.data_manager.rqdata_client import PRICE_ADJUST_TYPE, get_default_client
 
 
 class BarClient(Protocol):
@@ -51,6 +51,7 @@ def download_bars(
             "start_date": start_date,
             "end_date": end_date,
             "source": resolved_client.name,
+            "adjust_type": PRICE_ADJUST_TYPE,
             "bar_count": len(bars),
             "saved_count": inserted,
             "coverage": coverage_service.get_data_coverage(
@@ -74,9 +75,9 @@ def download_bars(
             "start_date": start_date,
             "end_date": end_date,
             "source": getattr(resolved_client, "name", "unknown"),
+            "adjust_type": PRICE_ADJUST_TYPE,
             "bar_count": 0,
             "saved_count": 0,
             "coverage": coverage_service.get_data_coverage(symbol, exchange, interval, source=getattr(resolved_client, "name", "rqdata")),
             "error": str(exc),
         }
-

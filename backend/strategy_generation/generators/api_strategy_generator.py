@@ -11,7 +11,7 @@ from backend.strategy_generation.providers import build_provider
 
 
 GENERATOR_NAME = "api_strategy_generator"
-GENERATOR_VERSION = "phase6b_api_v1"
+GENERATOR_VERSION = "phase6b_api_v2"
 REQUIRED_KEYS = {
     "success",
     "source_text",
@@ -54,6 +54,42 @@ def _strip_code_fence(value: str) -> str:
         text = re.sub(r"^```(?:python|json)?\s*", "", text)
         text = re.sub(r"\s*```$", "", text)
     return text.strip()
+
+
+def _is_valid_python(value: str) -> bool:
+    try:
+        ast.parse(value)
+    except SyntaxError:
+        return False
+    return True
+
+
+def _normalize_strategy_code(value: str) -> str:
+    """Recover an otherwise valid model response whose newlines were escaped twice."""
+    text = _strip_code_fence(value)
+    if not text or _is_valid_python(text):
+        return text
+
+    candidates: list[str] = []
+
+    # Some responses prepend a literal ``\n`` to otherwise normal multiline code.
+    without_escaped_prefix = re.sub(r"^(?:\\r\\n|\\n)+", "", text).lstrip()
+    if without_escaped_prefix != text:
+        candidates.append(without_escaped_prefix)
+
+    # A fully double-escaped code blob arrives as one physical line containing ``\n``.
+    if "\n" not in text and ("\\n" in text or "\\r" in text):
+        candidates.append(
+            text.replace("\\r\\n", "\n")
+            .replace("\\n", "\n")
+            .replace("\\t", "\t")
+        )
+
+    for candidate in candidates:
+        normalized = _strip_code_fence(candidate)
+        if _is_valid_python(normalized):
+            return normalized
+    return text
 
 
 def _extract_json_object(value: str) -> dict[str, Any]:
@@ -155,7 +191,10 @@ class ApiStrategyGenerator:
 
     def _normalize_payload(self, source_text: str, payload: dict[str, Any], diagnostics: list[dict[str, str]]) -> dict[str, Any]:
         model_success = bool(payload.get("success", True))
-        strategy_code = _strip_code_fence(str(payload.get("strategy_code") or ""))
+        raw_strategy_code = _strip_code_fence(str(payload.get("strategy_code") or ""))
+        strategy_code = _normalize_strategy_code(raw_strategy_code)
+        if strategy_code != raw_strategy_code:
+            diagnostics.append(_diagnostic("normalization", "warning", "decoded double-escaped strategy code line breaks"))
         code_class_name = _extract_class_name(strategy_code) if strategy_code else None
         returned_class_name = str(payload.get("class_name") or "").strip() or None
         if code_class_name and returned_class_name and code_class_name != returned_class_name:
@@ -287,4 +326,3 @@ class ApiStrategyGenerator:
             "generator_version": self.generator_version,
             "error": error,
         }
-

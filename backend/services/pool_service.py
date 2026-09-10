@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from backend.core.paths import path_fields
+
 import ast
 from datetime import date
 from pathlib import Path
@@ -22,7 +24,7 @@ from backend.services import artifact_service, run_service, task_service
 def _read_json(path: Path) -> dict[str, Any]:
     if not path.exists() or not path.is_file():
         return {}
-    return json.loads(path.read_text(encoding="utf-8"))
+    return path_fields(json.loads(path.read_text(encoding="utf-8")))
 
 
 def _read_csv(path: Path) -> dict[str, Any]:
@@ -37,7 +39,7 @@ def _read_csv(path: Path) -> dict[str, Any]:
 
 def _write_json_atomic(path: Path, payload: Any) -> None:
     temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    temporary.write_text(json.dumps(path_fields(payload, storing=True), ensure_ascii=False, indent=2), encoding="utf-8")
     temporary.replace(path)
 
 
@@ -290,6 +292,32 @@ def _extract_class_name(strategy_code: str) -> str:
     return ""
 
 
+def _resolved_trade_count(
+    metrics: dict[str, Any],
+    curve: list[dict[str, Any]],
+    trades_rows: list[dict[str, Any]],
+) -> int:
+    if trades_rows:
+        return len(trades_rows)
+
+    metric_count = _metric(metrics, "total_trade_count", "trade_count")
+    if metric_count is not None:
+        return max(0, int(round(metric_count)))
+
+    daily_count = 0.0
+    found_daily_count = False
+    for row in curve:
+        value = row.get("trade_count")
+        if value in {None, ""}:
+            continue
+        try:
+            daily_count += float(value)
+            found_daily_count = True
+        except (TypeError, ValueError):
+            continue
+    return max(0, int(round(daily_count))) if found_daily_count else 0
+
+
 def _compare_item(detail: dict[str, Any]) -> dict[str, Any]:
     item = dict(detail.get("pool_item") or {})
     manifest = dict(detail.get("manifest") or {})
@@ -319,7 +347,7 @@ def _compare_item(detail: dict[str, Any]) -> dict[str, Any]:
         "notes": detail.get("notes") or "",
         "curve": curve,
         "trades_preview": trades_rows[:20],
-        "trade_count": len(trades_rows),
+        "trade_count": _resolved_trade_count(metrics, curve, trades_rows),
     }
 
 
@@ -346,7 +374,7 @@ def _compare_payload_from_parts(detail: dict[str, Any], *, metrics: dict[str, An
         "notes": detail.get("notes") or "",
         "curve": curve,
         "trades_preview": trades_rows[:20],
-        "trade_count": len(trades_rows),
+        "trade_count": _resolved_trade_count(metrics, curve, trades_rows),
     }
 
 
@@ -474,6 +502,7 @@ def _rerun_payload(
 def add_variant_to_pool(
     run_id: str,
     variant_name: str,
+    candidate_label: str | None = None,
     tags: list[str] | None = None,
     note: str | None = None,
     vt_symbol: str | None = None,
@@ -487,7 +516,10 @@ def add_variant_to_pool(
     if variant is None:
         raise FileNotFoundError(f"Variant not found: {run_id} / {variant_name}")
 
-    snapshot = artifact_service.create_pool_snapshot(run_id, variant_name, tags=tags, note=resolved_note)
+    snapshot_options: dict[str, Any] = {"tags": tags, "note": resolved_note}
+    if candidate_label:
+        snapshot_options["candidate_label"] = candidate_label
+    snapshot = artifact_service.create_pool_snapshot(run_id, variant_name, **snapshot_options)
     pool_item_id = str(snapshot["pool_item_id"])
     pool_path = Path(snapshot["pool_path"])
     result = _read_json(pool_path / "result.json")
@@ -536,20 +568,29 @@ def add_variant_to_pool(
         path=str(pool_path),
         sha256=None,
     )
-    try:
-        rerun = rerun_pool_items_to_latest([pool_item_id], start_mode="auto_earliest")
-    except Exception as exc:
+    if candidate_label:
         rerun = {
             "task": None,
             "items": [],
-            "benchmark": {"label": "Buy & Hold", "curve": []},
-            "diagnostics": [{
-                "level": "warning",
-                "message": f"pool rerun failed after add: {pool_item_id} | {exc}",
-                "pool_item_id": pool_item_id,
-            }],
+            "benchmark": {"label": _text(vt_symbol) or "buy_hold", "curve": []},
+            "diagnostics": [],
             "rerun_end": "",
         }
+    else:
+        try:
+            rerun = rerun_pool_items_to_latest([pool_item_id], start_mode="auto_earliest")
+        except Exception as exc:
+            rerun = {
+                "task": None,
+                "items": [],
+                "benchmark": {"label": _text(vt_symbol) or "buy_hold", "curve": []},
+                "diagnostics": [{
+                    "level": "warning",
+                    "message": f"pool rerun failed after add: {pool_item_id} | {exc}",
+                    "pool_item_id": pool_item_id,
+                }],
+                "rerun_end": "",
+            }
     refreshed_pool_item = pool_repository.get_pool_item(pool_item_id) or pool_item
     return {
         **_pool_item_view(dict(refreshed_pool_item), manifest),
@@ -743,16 +784,18 @@ def compare_pool_items(pool_item_ids: list[str] | None) -> dict[str, Any]:
 
     benchmark_rows: list[dict[str, Any]] = []
     benchmark_diagnostic: dict[str, Any] | None = None
+    benchmark_label = "buy_hold"
     for item in items:
         benchmark_rows, benchmark_diagnostic = _benchmark_curve(list(item.get("curve") or []))
         if benchmark_rows:
+            benchmark_label = _text(item.get("vt_symbol")) or "buy_hold"
             break
     if benchmark_diagnostic and items:
         diagnostics.append(benchmark_diagnostic)
 
     return {
         "items": items,
-        "benchmark": {"label": "Buy & Hold", "curve": benchmark_rows},
+        "benchmark": {"label": benchmark_label, "curve": benchmark_rows},
         "diagnostics": diagnostics,
     }
 
@@ -770,7 +813,7 @@ def rerun_pool_items_to_latest(
         return {
             "task": None,
             "items": [],
-            "benchmark": {"label": "Buy & Hold", "curve": []},
+            "benchmark": {"label": "buy_hold", "curve": []},
             "diagnostics": [],
             "rerun_end": requested_end_date,
         }
@@ -811,9 +854,11 @@ def rerun_pool_items_to_latest(
 
     benchmark_rows: list[dict[str, Any]] = []
     benchmark_diagnostic: dict[str, Any] | None = None
+    benchmark_label = "buy_hold"
     for item in items:
         benchmark_rows, benchmark_diagnostic = _benchmark_curve(list(item.get("curve") or []))
         if benchmark_rows:
+            benchmark_label = _text(item.get("vt_symbol")) or "buy_hold"
             break
     if benchmark_diagnostic and items:
         diagnostics.append(benchmark_diagnostic)
@@ -833,7 +878,7 @@ def rerun_pool_items_to_latest(
     return {
         "task": task,
         "items": items,
-        "benchmark": {"label": "Buy & Hold", "curve": benchmark_rows},
+        "benchmark": {"label": benchmark_label, "curve": benchmark_rows},
         "diagnostics": diagnostics,
         "rerun_start": _date_only(start_date) or _text(items[0].get("rerun_start") if items else ""),
         "rerun_end": requested_end_date or _text(items[0].get("rerun_end") if items else ""),

@@ -9,6 +9,7 @@ from backend.core.environment import env
 
 
 RQDATA_HOST = ("rqdatad-pro.ricequant.com", 16011)
+PRICE_ADJUST_TYPE = "pre"
 _INIT_LOCK = threading.Lock()
 _INITIALIZED = False
 
@@ -118,7 +119,7 @@ class RQDataClient:
             end_date=end,
             frequency=_frequency(interval),
             fields=["open", "high", "low", "close", "volume", "total_turnover"],
-            adjust_type="none",
+            adjust_type=PRICE_ADJUST_TYPE,
         )
         if frame is None or len(frame) == 0:
             return []

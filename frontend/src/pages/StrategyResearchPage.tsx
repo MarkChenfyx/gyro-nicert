@@ -1,8 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Button, InputNumber, Modal, Select, Spin, Table, message } from "antd";
-import { getPoolResearchContext, runPoolResearchHeatmap, runPoolResearchWalkForward, runPoolWalkForwardRankAnalysis } from "../api";
+import { Button, Input, InputNumber, Modal, Select, Space, Spin, Table, message } from "antd";
+import { createPoolResearchAiOverview, getPoolResearchContext, runPoolResearchHeatmap, runPoolResearchWalkForward, runPoolWalkForwardRankAnalysis } from "../api";
 import ResearchHeatmap from "../components/ResearchHeatmap";
-import { CurveChart, MultiVariantCurveChart, curveSummary, formatDate, strategyLabel } from "../app/ui";
+import { CurveChart, MultiVariantCurveChart, UI_TEXT, curveSummary, formatDate, strategyLabel } from "../app/ui";
 
 const RESEARCH_POOL_STORAGE_KEY = "gyro_nicert.research_pool_item_id";
 const RESEARCH_TAB_STORAGE_KEY = "gyro_nicert.research_tab";
@@ -106,6 +106,9 @@ export default function StrategyResearchPage({
   const [context, setContext] = useState<any>(null);
   const [heatmap, setHeatmap] = useState<any>(null);
   const [walkForward, setWalkForward] = useState<any>(null);
+  const [aiOverview, setAiOverview] = useState<any>(null);
+  const [loadingAiOverview, setLoadingAiOverview] = useState(false);
+  const [aiOverviewError, setAiOverviewError] = useState("");
   const [loadingContext, setLoadingContext] = useState(false);
   const [running, setRunning] = useState(false);
   const [runningWalkForward, setRunningWalkForward] = useState(false);
@@ -239,6 +242,45 @@ export default function StrategyResearchPage({
       });
   }, [selectedPoolItemId]);
 
+  useEffect(() => {
+    let active = true;
+    setAiOverview(null);
+    setAiOverviewError("");
+    if (!selectedPoolItemId || context?.pool_item?.pool_item_id !== selectedPoolItemId) {
+      setLoadingAiOverview(false);
+      return () => {
+        active = false;
+      };
+    }
+    setLoadingAiOverview(true);
+    createPoolResearchAiOverview(selectedPoolItemId)
+      .then((payload) => {
+        if (active) setAiOverview(payload);
+      })
+      .catch((error) => {
+        if (active) setAiOverviewError(String(error));
+      })
+      .finally(() => {
+        if (active) setLoadingAiOverview(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [context?.pool_item?.pool_item_id, selectedPoolItemId]);
+
+  async function refreshAiOverview() {
+    if (!selectedPoolItemId || loadingAiOverview) return;
+    setLoadingAiOverview(true);
+    setAiOverviewError("");
+    try {
+      setAiOverview(await createPoolResearchAiOverview(selectedPoolItemId, true));
+    } catch (error) {
+      setAiOverviewError(String(error));
+    } finally {
+      setLoadingAiOverview(false);
+    }
+  }
+
   function switchTab(tab: ResearchTab) {
     setActiveTab(tab);
     window.localStorage.setItem(RESEARCH_TAB_STORAGE_KEY, tab);
@@ -288,7 +330,7 @@ export default function StrategyResearchPage({
         max_trials: 100
       });
       setHeatmap(payload);
-      message.success("参数稳定性研究完成");
+      message.success("参数稳定性分析已完成");
       await refreshTasks().catch(() => undefined);
     } catch (error) {
       message.error(String(error));
@@ -332,7 +374,7 @@ export default function StrategyResearchPage({
       setWalkForward(payload);
       setRankDetailWindowIndex(Number(payload?.windows?.[0]?.index || 1));
       setHeatmapWindowIndex(null);
-      message.success("Walk Forward 研究完成");
+      message.success("滚动优化已完成");
       await refreshTasks().catch(() => undefined);
     } catch (error) {
       message.error(String(error));
@@ -345,7 +387,7 @@ export default function StrategyResearchPage({
   async function runRankAnalysis() {
     const experimentId = String(walkForward?.experiment_id || "");
     if (!selectedPoolItemId || !experimentId) {
-      message.warning("请先完成一次 Walk Forward");
+      message.warning("请先完成一次滚动优化");
       return;
     }
     setRunningRankAnalysis(true);
@@ -354,7 +396,7 @@ export default function StrategyResearchPage({
       const payload = await runPoolWalkForwardRankAnalysis(selectedPoolItemId, experimentId);
       setWalkForward(payload);
       setRankDetailWindowIndex(Number(payload?.windows?.[0]?.index || 1));
-      message.success(payload?.cached ? "已读取全量样本外分析" : "全量样本外分析完成");
+      message.success(payload?.cached ? "已读取完整参数横截面分析" : "完整参数横截面分析已完成");
       await refreshTasks().catch(() => undefined);
     } catch (error) {
       message.error(String(error));
@@ -366,11 +408,11 @@ export default function StrategyResearchPage({
 
   function openWindowHeatmaps(window: any) {
     if ((walkForward?.selected_parameters || []).length !== 2) {
-      message.info("训练集与测试集双热力图仅支持恰好两个优化参数");
+      message.info("训练期与样本外期双热力图仅支持恰好两个优化参数");
       return;
     }
     if (!(window?.rank_analysis?.rows || []).length) {
-      message.info("请先计算全量样本外参数横截面");
+      message.info("请先计算完整参数横截面");
       return;
     }
     setHeatmapWindowIndex(Number(window.index));
@@ -474,22 +516,22 @@ export default function StrategyResearchPage({
         </div>
       )
     },
-    { title: "训练 Sharpe", dataIndex: "training_score", width: 120, render: (value: unknown) => formatNumber(value, 3) },
-    { title: "样本外 Sharpe", dataIndex: "test_score", width: 130, render: (value: unknown) => formatNumber(value, 3) },
+    { title: "训练期夏普比率", dataIndex: "training_score", width: 140, render: (value: unknown) => formatNumber(value, 3) },
+    { title: "样本外期夏普比率", dataIndex: "test_score", width: 150, render: (value: unknown) => formatNumber(value, 3) },
     { title: "样本外排名", dataIndex: "test_rank", width: 110, render: (value: unknown) => formatNumber(value, 1) }
   ];
   const walkPerformanceColumns = [
-    { title: "版本", dataIndex: "label", width: 180 },
-    { title: "策略累计收益", dataIndex: "strategy_return", width: 130, render: (value: unknown) => formatPercent(value) },
-    { title: "B&H", dataIndex: "benchmark_return", width: 120, render: (value: unknown) => formatPercent(value) },
-    { title: "超额收益", dataIndex: "excess_return", width: 120, render: (value: unknown) => formatPercent(value) },
-    { title: "Sharpe", dataIndex: "sharpe", width: 110, render: (value: unknown) => formatNumber(value) },
-    { title: "交易次数", dataIndex: "trade_count", width: 110, render: (value: unknown) => Number.isFinite(Number(value)) ? String(value) : "-" },
-    { title: "最大回撤", dataIndex: "max_drawdown", width: 120, render: (value: unknown) => formatPercent(value) }
+    { title: "对照方式", dataIndex: "label", width: 180 },
+    { title: UI_TEXT.metric.totalReturn, dataIndex: "strategy_return", width: 130, render: (value: unknown) => formatPercent(value) },
+    { title: UI_TEXT.metric.benchmarkReturn, dataIndex: "benchmark_return", width: 130, render: (value: unknown) => formatPercent(value) },
+    { title: UI_TEXT.metric.excessReturn, dataIndex: "excess_return", width: 120, render: (value: unknown) => formatPercent(value) },
+    { title: UI_TEXT.metric.sharpe, dataIndex: "sharpe", width: 110, render: (value: unknown) => formatNumber(value) },
+    { title: UI_TEXT.metric.tradeCount, dataIndex: "trade_count", width: 110, render: (value: unknown) => Number.isFinite(Number(value)) ? String(value) : "-" },
+    { title: UI_TEXT.metric.maxDrawdown, dataIndex: "max_drawdown", width: 120, render: (value: unknown) => formatPercent(value) }
   ];
   const walkPerformanceRows = walkForward ? [{
     key: "walk_forward",
-    label: "Walk Forward 样本外",
+    label: "滚动优化样本外",
     strategy_return: walkSummary.strategy?.totalReturn,
     benchmark_return: walkSummary.buyHold?.totalReturn,
     excess_return: walkSummary.excess,
@@ -537,26 +579,26 @@ export default function StrategyResearchPage({
     <div className="view strategy-research-view">
       <section className="hero-band research-hero-band">
         <div>
-          <p className="eyebrow">STRATEGY RESEARCH</p>
-          <h2>策略研究</h2>
-          <p className="hero-copy">从策略池快照出发，检查收益表现和参数稳定性，不修改原策略与参数优化结果。</p>
+          <p className="eyebrow">研究工作台</p>
+          <h2>{UI_TEXT.page.research}</h2>
+          <p className="hero-copy">从策略快照出发，检查收益表现和参数稳定性，不修改原策略与参数优化结果。</p>
         </div>
       </section>
 
       <section className="band research-selector-band">
         <label className="field research-symbol-select">
-          <span>研究标的</span>
+          <span>{UI_TEXT.term.tradingSymbol}</span>
           <Select
             showSearch
             value={selectedSymbol}
             onChange={selectSymbol}
             optionFilterProp="label"
-            placeholder="选择标的"
+            placeholder="选择交易标的"
             options={symbolOptions}
           />
         </label>
         <label className="field research-strategy-select">
-          <span>研究策略</span>
+          <span>{UI_TEXT.term.poolSnapshot}</span>
           <Select
             showSearch
             value={selectedPoolItemId || undefined}
@@ -564,7 +606,7 @@ export default function StrategyResearchPage({
             filterOption={(input, option) => fuzzySearchMatch(input, (option as any)?.searchText || option?.label)}
             filterSort={(left, right, info) => fuzzySearchScore(info.searchValue, (left as any)?.searchText || left?.label)
               - fuzzySearchScore(info.searchValue, (right as any)?.searchText || right?.label)}
-            placeholder={selectedSymbol ? "搜索当前标的下的策略" : "请先选择标的"}
+            placeholder={selectedSymbol ? "搜索当前交易标的下的策略快照" : "请先选择交易标的"}
             disabled={!selectedSymbol}
             options={strategyOptions}
           />
@@ -579,32 +621,50 @@ export default function StrategyResearchPage({
 
       <nav className="research-tabs" aria-label="研究功能">
         <button type="button" className={activeTab === "overview" ? "is-active" : ""} onClick={() => switchTab("overview")}>研究概览</button>
-        <button type="button" className={activeTab === "heatmap" ? "is-active" : ""} onClick={() => switchTab("heatmap")}>参数热力图</button>
-        <button type="button" className={activeTab === "walk_forward" ? "is-active" : ""} onClick={() => switchTab("walk_forward")}>Walk Forward</button>
+        <button type="button" className={activeTab === "heatmap" ? "is-active" : ""} onClick={() => switchTab("heatmap")}>{UI_TEXT.research.parameterStability}</button>
+        <button type="button" className={activeTab === "walk_forward" ? "is-active" : ""} onClick={() => switchTab("walk_forward")}>{UI_TEXT.research.walkForward}</button>
       </nav>
 
       {loadingContext ? (
         <section className="band empty-state"><Spin size="small" /> 正在读取策略快照…</section>
       ) : !context ? (
-        <section className="band empty-state">选择一个策略池快照后开始研究。</section>
+        <section className="band empty-state">选择一个策略快照后开始研究。</section>
       ) : activeTab === "overview" ? (
         <>
           <section className="library-metric-grid research-metric-grid">
-            <div className="library-metric-card"><span>累计收益</span><strong>{formatPercent(strategyReturn)}</strong></div>
-            <div className={`library-metric-card ${Number(excessReturn) >= 0 ? "positive" : "negative"}`}><span>超额收益</span><strong>{formatPercent(excessReturn)}</strong></div>
-            <div className="library-metric-card"><span>Sharpe</span><strong>{formatNumber(metrics.sharpe ?? metrics.sharpe_ratio)}</strong></div>
-            <div className="library-metric-card negative"><span>最大回撤</span><strong>{formatPercent(maxDrawdown)}</strong></div>
+            <div className="library-metric-card"><span>{UI_TEXT.metric.totalReturn}</span><strong>{formatPercent(strategyReturn)}</strong></div>
+            <div className={`library-metric-card ${Number(excessReturn) >= 0 ? "positive" : "negative"}`}><span>{UI_TEXT.metric.excessReturn}</span><strong>{formatPercent(excessReturn)}</strong></div>
+            <div className="library-metric-card"><span>{UI_TEXT.metric.sharpe}</span><strong>{formatNumber(metrics.sharpe ?? metrics.sharpe_ratio)}</strong></div>
+            <div className="library-metric-card negative"><span>{UI_TEXT.metric.maxDrawdown}</span><strong>{formatPercent(maxDrawdown)}</strong></div>
+          </section>
+
+          <section className="band research-ai-overview">
+            <div className="research-ai-overview-copy">
+              <span>AI 研究提示</span>
+              {loadingAiOverview && !aiOverview
+                ? <p>正在生成当前策略的研究提示…</p>
+                : aiOverviewError && !aiOverview
+                  ? <p className="is-error">AI 研究提示暂不可用：{aiOverviewError}</p>
+                  : <p>{aiOverview?.summary || "等待生成研究提示。"}</p>}
+            </div>
+            <Button type="text" size="small" loading={loadingAiOverview} onClick={refreshAiOverview}>
+              {aiOverview ? "重新生成" : "生成"}
+            </Button>
           </section>
 
           <section className="band research-overview-grid">
             <div className="library-curve-panel">
-              <CurveChart rows={curveRows} height={360} />
+              <CurveChart
+                rows={curveRows}
+                benchmarkLabel={String(context?.pool_item?.vt_symbol || "buy_hold")}
+                height={360}
+              />
             </div>
             <aside className="research-snapshot-card">
-              <div><span>标的 / 周期</span><strong>{context.pool_item?.vt_symbol || "-"} · {context.config?.interval || "-"}</strong></div>
+              <div><span>交易标的 / K 线周期</span><strong>{context.pool_item?.vt_symbol || "-"} · {context.config?.interval || "-"}</strong></div>
               <div><span>回测区间</span><strong>{context.config?.start_date || "-"} 至 {context.config?.end_date || "-"}</strong></div>
-              <div><span>交易数量</span><strong>{Number(metrics.total_trade_count || 0).toLocaleString()}</strong></div>
-              <div><span>快照编号</span><strong>{context.pool_item?.pool_item_id || "-"}</strong></div>
+              <div><span>{UI_TEXT.metric.tradeCount}</span><strong>{Number(metrics.total_trade_count || 0).toLocaleString()}</strong></div>
+              <div><span>{UI_TEXT.term.poolSnapshotId}</span><strong>{context.pool_item?.pool_item_id || "-"}</strong></div>
               <div className="research-parameter-summary">
                 <span>当前参数</span>
                 <div>{Object.entries(context.base_parameters || {}).filter(([name]) => name !== "fixed_size").map(([name, value]) => <em key={name}>{name}={String(value)}</em>)}</div>
@@ -618,10 +678,10 @@ export default function StrategyResearchPage({
               <div className="research-conclusion-line">
                 <span className={`research-status-dot is-${positiveRatio !== null && positiveRatio >= 0.7 ? "stable" : positiveRatio !== null && positiveRatio >= 0.4 ? "general" : "sensitive"}`} />
                 <strong>{heatmap.x_parameter} × {heatmap.y_parameter}</strong>
-                <span>{positiveRows.length} 个有效组合，{positiveRatio === null ? "-" : `${Math.round(positiveRatio * 100)}%`} 的{metric === "excess_return" ? "超额收益" : "Sharpe"}为正。</span>
+                <span>{positiveRows.length} 个有效组合，{positiveRatio === null ? "-" : `${Math.round(positiveRatio * 100)}%`} 的{metric === "excess_return" ? UI_TEXT.metric.excessReturn : UI_TEXT.metric.sharpe}为正。</span>
                 <Button type="link" size="small" onClick={() => switchTab("heatmap")}>查看热力图</Button>
               </div>
-            ) : <div className="empty-state compact-empty">尚未运行参数稳定性研究。</div>}
+            ) : <div className="empty-state compact-empty">尚未运行参数稳定性分析。</div>}
           </section>
         </>
       ) : activeTab === "heatmap" ? (
@@ -629,12 +689,12 @@ export default function StrategyResearchPage({
           <section className="band research-settings-band">
             <div className="library-section-head">
               <div><h3>二维参数网格</h3><p>固定其他参数，只改变横纵轴两个参数；第一版最多运行 100 组。</p></div>
-              <Button type="primary" loading={running} disabled={!xParameter || !yParameter || totalGridCount < 4 || totalGridCount > 100} onClick={runHeatmap}>运行参数研究</Button>
+              <Button type="primary" loading={running} disabled={!xParameter || !yParameter || totalGridCount < 4 || totalGridCount > 100} onClick={runHeatmap}>运行稳定性分析</Button>
             </div>
             <div className="research-axis-grid">
               <label className="field"><span>横轴参数</span><Select value={xParameter || undefined} onChange={(value) => setXParameter(value)} options={parameterOptions.filter((item: { value: string }) => item.value !== yParameter)} /></label>
               <label className="field"><span>纵轴参数</span><Select value={yParameter || undefined} onChange={(value) => setYParameter(value)} options={parameterOptions.filter((item: { value: string }) => item.value !== xParameter)} /></label>
-              <label className="field"><span>观察指标</span><Select value={metric} onChange={setMetric} options={[{ value: "excess_return", label: "超额收益" }, { value: "sharpe", label: "Sharpe" }]} /></label>
+              <label className="field"><span>{UI_TEXT.research.displayMetric}</span><Select value={metric} onChange={setMetric} options={[{ value: "excess_return", label: UI_TEXT.metric.excessReturn }, { value: "sharpe", label: UI_TEXT.metric.sharpe }]} /></label>
               <div className="research-grid-count"><span>参数组合</span><strong>{totalGridCount || 0} 组</strong></div>
             </div>
             <div className="research-range-list">
@@ -646,7 +706,7 @@ export default function StrategyResearchPage({
           {heatmap ? (
             <section className="band research-heatmap-section">
               <div className="library-section-head">
-                <div><h3>参数稳定性热力图</h3><p>{heatmap.x_parameter} × {heatmap.y_parameter} · {formatDate(heatmap.created_at)} · ● 当前参数，★ 当前指标最优</p></div>
+                <div><h3>{UI_TEXT.research.parameterStabilityHeatmap}</h3><p>{heatmap.x_parameter} × {heatmap.y_parameter} · {formatDate(heatmap.created_at)} · ● 当前参数，★ 当前指标最优</p></div>
               </div>
               <div className="research-heatmap-layout">
                 <ResearchHeatmap
@@ -661,7 +721,7 @@ export default function StrategyResearchPage({
                 <aside className="research-stability-card">
                   <span>当前网格</span>
                   <strong>{positiveRatio !== null && positiveRatio >= 0.7 ? "较稳定" : positiveRatio !== null && positiveRatio >= 0.4 ? "一般" : "较敏感"}</strong>
-                  <p>{positiveRows.length} 个有效组合中，{positiveRatio === null ? "-" : `${Math.round(positiveRatio * 100)}%`} 的{metric === "excess_return" ? "超额收益" : "Sharpe"}为正。</p>
+                  <p>{positiveRows.length} 个有效组合中，{positiveRatio === null ? "-" : `${Math.round(positiveRatio * 100)}%`} 的{metric === "excess_return" ? UI_TEXT.metric.excessReturn : UI_TEXT.metric.sharpe}为正。</p>
                   <dl>
                     <div><dt>横轴</dt><dd>{heatmap.x_parameter}</dd></div>
                     <div><dt>纵轴</dt><dd>{heatmap.y_parameter}</dd></div>
@@ -679,8 +739,8 @@ export default function StrategyResearchPage({
           <section className="band research-settings-band">
             <div className="library-section-head">
               <div>
-                <h3>Walk Forward 配置</h3>
-                <p>使用过去一段时间训练选参，再用固定参数运行后续 6 个月样本外回测。</p>
+                <h3>{UI_TEXT.research.walkForward}配置</h3>
+                <p>通过滚动样本外检验，使用过去一段时间训练选参，再用固定参数运行后续 6 个月样本外回测。</p>
               </div>
               <Button
                 type="primary"
@@ -688,7 +748,7 @@ export default function StrategyResearchPage({
                 disabled={!walkParameters.length || walkGridCount < 2 || walkGridCount > 100}
                 onClick={runWalkForward}
               >
-                运行 Walk Forward
+                运行滚动优化
               </Button>
             </div>
             <div className="walk-forward-settings-grid">
@@ -705,25 +765,30 @@ export default function StrategyResearchPage({
               </label>
               <label className="field">
                 <span>训练窗口</span>
-                <InputNumber
-                  min={6}
-                  max={120}
-                  step={6}
-                  value={trainingMonths}
-                  addonAfter="个月"
-                  onChange={(value) => setTrainingMonths(Number(value || 24))}
-                />
+                <Space.Compact block>
+                  <InputNumber
+                    min={6}
+                    max={120}
+                    step={6}
+                    value={trainingMonths}
+                    onChange={(value) => setTrainingMonths(Number(value || 24))}
+                  />
+                  <Input value="个月" disabled readOnly style={{ width: 64, textAlign: "center" }} />
+                </Space.Compact>
               </label>
               <label className="field">
                 <span>样本外窗口</span>
-                <InputNumber value={6} addonAfter="个月" disabled />
+                <Space.Compact block>
+                  <InputNumber value={6} disabled />
+                  <Input value="个月" disabled readOnly style={{ width: 64, textAlign: "center" }} />
+                </Space.Compact>
               </label>
               <label className="field">
-                <span>目标评分函数</span>
+                <span>{UI_TEXT.research.optimizationObjective}</span>
                 <Select
                   value={walkObjective}
                   onChange={setWalkObjective}
-                  options={[{ value: "sharpe", label: "Sharpe" }]}
+                  options={[{ value: "sharpe", label: UI_TEXT.metric.sharpe }]}
                 />
               </label>
               <div className="research-grid-count"><span>每期参数组合</span><strong>{walkGridCount || 0} 组</strong></div>
@@ -760,14 +825,15 @@ export default function StrategyResearchPage({
               <section className="band research-walk-forward-results">
                 <div className="library-section-head">
                   <div>
-                    <h3>Walk Forward 样本外曲线</h3>
-                    <p>{walkForward.training_months} 个月训练 / {walkForward.test_months} 个月测试 · {formatDate(walkForward.created_at)}</p>
+                    <h3>{UI_TEXT.research.walkForward}样本外曲线</h3>
+                    <p>{walkForward.training_months} 个月训练期 / {walkForward.test_months} 个月样本外期 · {formatDate(walkForward.created_at)}</p>
                   </div>
                 </div>
                 <MultiVariantCurveChart
                   curves={{ walk_forward: walkCurveRows, fixed_parameters: fixedCurveRows }}
                   visibleKeys={["walk_forward", ...(fixedComparisonAvailable ? ["fixed_parameters"] : []), "buy_hold"]}
-                  labels={{ walk_forward: "Walk Forward", fixed_parameters: "固定参数" }}
+                  labels={{ walk_forward: UI_TEXT.research.walkForward, fixed_parameters: "固定参数对照" }}
+                  benchmarkLabel={String(context?.pool_item?.vt_symbol || "buy_hold")}
                   orderedKeys={["walk_forward", "fixed_parameters", "buy_hold"]}
                   height={380}
                 />
@@ -792,7 +858,7 @@ export default function StrategyResearchPage({
                 <div className="library-section-head">
                   <div>
                     <h3>各期选参</h3>
-                    <p>参数只由对应训练区间决定；完成全量样本外分析后可查看单期 Rank IC 和训练/测试双热力图。</p>
+                    <p>参数只由对应训练期决定；完成完整参数横截面分析后可查看单期 Rank IC 和训练期/样本外期双热力图。</p>
                   </div>
                   <Button
                     type={rankAnalysisComplete ? "default" : "primary"}
@@ -800,7 +866,7 @@ export default function StrategyResearchPage({
                     disabled={rankAnalysisComplete || !walkForward.experiment_id}
                     onClick={runRankAnalysis}
                   >
-                    {rankAnalysisComplete ? "全量样本外已计算" : "计算全量样本外"}
+                    {rankAnalysisComplete ? "参数横截面已计算" : "计算完整参数横截面"}
                   </Button>
                 </div>
                 <div className="walk-forward-window-list">
@@ -812,8 +878,8 @@ export default function StrategyResearchPage({
                     const heatmapHint = !dualHeatmapSupported
                       ? "双热力图仅支持两个参数"
                       : hasHeatmapRows
-                        ? "点击比较训练 / 测试热力图"
-                        : "完成全量样本外后可查看";
+                        ? "点击比较训练期 / 样本外期热力图"
+                        : "完成参数横截面分析后可查看";
                     return (
                       <button
                         type="button"
@@ -830,11 +896,11 @@ export default function StrategyResearchPage({
                             Rank IC <b>{hasRankIc ? formatNumber(rankIc, 3) : "待计算"}</b>
                           </span>
                         </div>
-                        <span>训练 {window.train_start} 至 {window.train_end}<b>Sharpe {formatNumber(window.train_metrics?.sharpe ?? window.train_metrics?.sharpe_ratio)}</b></span>
+                        <span>训练期 {window.train_start} 至 {window.train_end}<b>{UI_TEXT.metric.sharpe} {formatNumber(window.train_metrics?.sharpe ?? window.train_metrics?.sharpe_ratio)}</b></span>
                         <span>
-                          测试 {window.test_start} 至 {window.test_end}
-                          <b>滚动 Sharpe {formatNumber(window.test_metrics?.sharpe ?? window.test_metrics?.sharpe_ratio)}</b>
-                          <b>固定 Sharpe {formatNumber(window.fixed_test_metrics?.sharpe ?? window.fixed_test_metrics?.sharpe_ratio)}</b>
+                          样本外期 {window.test_start} 至 {window.test_end}
+                          <b>滚动选参夏普比率 {formatNumber(window.test_metrics?.sharpe ?? window.test_metrics?.sharpe_ratio)}</b>
+                          <b>固定参数夏普比率 {formatNumber(window.fixed_test_metrics?.sharpe ?? window.fixed_test_metrics?.sharpe_ratio)}</b>
                         </span>
                         <div className="walk-forward-window-parameters">
                           <div>{Object.entries(window.selected_parameters || {}).map(([name, value]) => <em key={name}>{name}={String(value)}</em>)}</div>
@@ -847,8 +913,8 @@ export default function StrategyResearchPage({
               </section>
               <section className="library-metric-grid research-metric-grid">
                 <div className="library-metric-card"><span>完整窗口</span><strong>{Number(walkForward.window_count || 0)}</strong></div>
-                <div className="library-metric-card"><span>滚动优化收益</span><strong>{formatPercent(walkSummary.strategy?.totalReturn)}</strong></div>
-                <div className="library-metric-card"><span>固定参数收益</span><strong>{fixedComparisonAvailable ? formatPercent(fixedSummary.strategy?.totalReturn) : "-"}</strong></div>
+                <div className="library-metric-card"><span>滚动选参累计收益</span><strong>{formatPercent(walkSummary.strategy?.totalReturn)}</strong></div>
+                <div className="library-metric-card"><span>固定参数累计收益</span><strong>{fixedComparisonAvailable ? formatPercent(fixedSummary.strategy?.totalReturn) : "-"}</strong></div>
                 <div className={`library-metric-card ${Number(walkReturnUplift) >= 0 ? "positive" : "negative"}`}><span>相对固定参数</span><strong>{walkReturnUplift === null ? "-" : formatPercent(walkReturnUplift)}</strong></div>
               </section>
               {rankAnalysisWindows.length ? (
@@ -880,7 +946,7 @@ export default function StrategyResearchPage({
                     <div className="library-section-head">
                       <div>
                         <h3>参数预测能力</h3>
-                        <p>同一参数横截面分别在训练期与紧随其后的样本外期评分；Rank IC 为两期 Sharpe 排名的 Spearman 相关。</p>
+                        <p>同一参数横截面分别在训练期与紧随其后的样本外期评分；Rank IC 为两期夏普比率排名的 Spearman 相关。</p>
                       </div>
                     </div>
                     <div className="rank-group-strip" aria-label="参数分组单调性">
@@ -888,12 +954,12 @@ export default function StrategyResearchPage({
                         <div className={`rank-group-card ${Number(group.test_score_mean) >= 0 ? "positive" : "negative"}`} key={group.label}>
                           <span>{group.label}<small>训练排名由低到高</small></span>
                           <strong>{formatNumber(group.test_score_mean, 3)}</strong>
-                          <em>样本外 Sharpe 均值</em>
+                          <em>样本外期夏普比率均值</em>
                           <small>训练均值 {formatNumber(group.training_score_mean, 3)} · {group.window_count} 个窗口</small>
                         </div>
                       ))}
                     </div>
-                    <p className="rank-analysis-note">Q 编号越高，训练期排名越靠前。理想情况下样本外 Sharpe 应随 Q1 → Q5 大致上升；分组单调性越接近 1 越好。</p>
+                    <p className="rank-analysis-note">Q 编号越高，训练期排名越靠前。理想情况下样本外期夏普比率应随 Q1 → Q5 大致上升；分组单调性越接近 1 越好。</p>
                     <Table
                       rowKey="index"
                       columns={rankWindowColumns}
@@ -932,7 +998,7 @@ export default function StrategyResearchPage({
                   </section>
                 </>
               ) : (
-                <section className="band empty-state">尚未计算参数 Rank IC。点击“计算全量样本外”后，平台会按需复测完整参数横截面并生成分组单调性。</section>
+                <section className="band empty-state">尚未计算参数 Rank IC。点击“计算完整参数横截面”后，平台会按需复测并生成分组单调性。</section>
               )}
               <Modal
                 open={selectedHeatmapWindow !== null}
@@ -943,23 +1009,23 @@ export default function StrategyResearchPage({
                 className="walk-forward-heatmap-modal"
                 title={selectedHeatmapWindow ? (
                   <div className="walk-forward-heatmap-modal-title">
-                    <strong>第 {selectedHeatmapWindow.index} 期训练 / 测试 Sharpe 热力图</strong>
+                    <strong>第 {selectedHeatmapWindow.index} 期训练期 / 样本外期夏普比率热力图</strong>
                     <small>
-                      训练 {selectedHeatmapWindow.train_start} 至 {selectedHeatmapWindow.train_end}
+                      训练期 {selectedHeatmapWindow.train_start} 至 {selectedHeatmapWindow.train_end}
                       <i>·</i>
-                      测试 {selectedHeatmapWindow.test_start} 至 {selectedHeatmapWindow.test_end}
+                      样本外期 {selectedHeatmapWindow.test_start} 至 {selectedHeatmapWindow.test_end}
                       <i>·</i>
                       Rank IC <b className={selectedHeatmapHasRankIc ? Number(selectedHeatmapRankIc) >= 0 ? "positive" : "negative" : "pending"}>
                         {selectedHeatmapHasRankIc ? formatNumber(selectedHeatmapRankIc, 3) : "待计算"}
                       </b>
                     </small>
                   </div>
-                ) : "训练 / 测试 Sharpe 热力图"}
+                ) : "训练期 / 样本外期夏普比率热力图"}
                 destroyOnHidden
               >
                 {selectedHeatmapWindow && (
                   <>
-                    <nav className="walk-forward-heatmap-period-nav" aria-label="切换 Walk-forward 期数">
+                    <nav className="walk-forward-heatmap-period-nav" aria-label="切换滚动优化期数">
                       <button
                         type="button"
                         disabled={!previousHeatmapWindow}
@@ -983,8 +1049,8 @@ export default function StrategyResearchPage({
                     <div className="walk-forward-dual-heatmap-grid">
                       <section className="walk-forward-heatmap-panel">
                         <div>
-                          <h4>训练集 Sharpe</h4>
-                          <p>★ 为训练集最优，● 为该期最终选中的参数。</p>
+                          <h4>训练期夏普比率</h4>
+                          <p>★ 为训练期最优，● 为该期最终选中的参数。</p>
                         </div>
                         <ResearchHeatmap
                           rows={trainingHeatmapRows}
@@ -999,8 +1065,8 @@ export default function StrategyResearchPage({
                       </section>
                       <section className="walk-forward-heatmap-panel">
                         <div>
-                          <h4>测试集 Sharpe</h4>
-                          <p>★ 为测试集最优，● 仍标记训练期选中的参数。</p>
+                          <h4>样本外期夏普比率</h4>
+                          <p>★ 为样本外期最优，● 仍标记训练期选中的参数。</p>
                         </div>
                         <ResearchHeatmap
                           rows={testHeatmapRows}

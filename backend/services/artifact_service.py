@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from backend.core.paths import path_fields
+
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
+import ast
 import csv
 import json
 import re
@@ -28,12 +31,12 @@ def _run_path(run_id: str) -> Path:
 
 def _write_json(path: Path, payload: Any) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    path.write_text(json.dumps(path_fields(payload, storing=True), ensure_ascii=False, indent=2), encoding="utf-8")
     return path
 
 
 def _read_json(path: Path) -> dict[str, Any]:
-    return json.loads(path.read_text(encoding="utf-8"))
+    return path_fields(json.loads(path.read_text(encoding="utf-8")))
 
 
 def _records_from_rows(rows: Any) -> list[dict[str, Any]]:
@@ -94,6 +97,45 @@ def _pool_snapshot_parameters(config: dict[str, Any], result: dict[str, Any]) ->
         if isinstance(candidate, dict) and candidate:
             return dict(candidate)
     return {}
+
+
+def _grid_candidate_row(grid_summary_path: Path, candidate_label: str) -> dict[str, Any]:
+    if not grid_summary_path.exists() or not grid_summary_path.is_file():
+        raise FileNotFoundError(f"Missing grid summary: {grid_summary_path}")
+    with grid_summary_path.open("r", encoding="utf-8-sig", newline="") as handle:
+        for row in csv.DictReader(handle):
+            if str(row.get("label") or "") == candidate_label:
+                return dict(row)
+    raise FileNotFoundError(f"Candidate not found in grid summary: {candidate_label}")
+
+
+def _grid_candidate_parameters(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return dict(value)
+    text = str(value or "").strip()
+    if not text:
+        return {}
+    for parser in (json.loads, ast.literal_eval):
+        try:
+            parsed = parser(text)
+        except (ValueError, SyntaxError, json.JSONDecodeError):
+            continue
+        if isinstance(parsed, dict):
+            return dict(parsed)
+    raise ValueError("Grid candidate parameters are not a mapping")
+
+
+def _grid_candidate_metrics(row: dict[str, Any]) -> dict[str, Any]:
+    excluded = {"label", "parameters", "success", "error", "rank"}
+    metrics: dict[str, Any] = {}
+    for key, value in row.items():
+        if key in excluded or value in {None, ""}:
+            continue
+        try:
+            metrics[key] = float(value)
+        except (TypeError, ValueError):
+            metrics[key] = value
+    return metrics
 
 
 def create_run_artifact(
@@ -199,7 +241,7 @@ def save_variant_candidate_curves(run_id: str, variant_name: str, candidates: An
     staging_dir = candidate_dir.with_name(f"{candidate_dir.name}.tmp_{uuid4().hex[:8]}")
     staging_dir.mkdir(parents=True, exist_ok=False)
     try:
-        for candidate in list(candidates or [])[:10]:
+        for candidate in list(candidates or []):
             label = _safe_storage_component(str(candidate.get("label") or ""), "candidate_label")
             _write_csv(staging_dir / label / "daily_results.csv", candidate.get("daily_results") or [])
         if candidate_dir.exists():
@@ -215,6 +257,7 @@ def save_variant_candidate_curves(run_id: str, variant_name: str, candidates: An
 def create_pool_snapshot(
     run_id: str,
     variant_name: str,
+    candidate_label: str | None = None,
     tags: list[str] | None = None,
     note: str | None = None,
 ) -> dict[str, Any]:
@@ -234,6 +277,7 @@ def create_pool_snapshot(
             suffix += 1
     created_at = pooled_at.isoformat()
 
+    safe_candidate_label = _safe_storage_component(candidate_label, "candidate_label") if candidate_label else None
     copied = {
         "manifest_path": _copy_required(source_run_path / "manifest.json", pool_path / "manifest.json", "manifest.json"),
         "input_path": _copy_required(source_run_path / "input.json", pool_path / "input.json", "input.json"),
@@ -241,8 +285,39 @@ def create_pool_snapshot(
         "strategy_path": _copy_required(source_run_path / "strategy.py", pool_path / "strategy.py", "strategy.py"),
         "result_path": _copy_required(variant_dir / "result.json", pool_path / "result.json", f"variant result.json for {variant_name}"),
     }
-    daily_results_path = _copy_optional(variant_dir / "daily_results.csv", pool_path / "daily_results.csv")
-    trades_path = _copy_optional(variant_dir / "trades.csv", pool_path / "trades.csv")
+    daily_results_source = variant_dir / "daily_results.csv"
+    trades_source = variant_dir / "trades.csv"
+    if safe_candidate_label:
+        if str(variant_name) != "manual_grid":
+            raise ValueError("A candidate label can only be used with manual_grid")
+        row = _grid_candidate_row(variant_dir / "grid_summary.csv", safe_candidate_label)
+        if str(row.get("success") or "").strip().lower() not in {"true", "1", "yes"}:
+            raise ValueError(f"Cannot pool an unsuccessful candidate: {safe_candidate_label}")
+        overrides = _grid_candidate_parameters(row.get("parameters"))
+        original_result = _read_json(pool_path / "result.json")
+        full_parameters = {**dict(original_result.get("base_parameters") or {}), **overrides}
+        metrics = _grid_candidate_metrics(row)
+        candidate_result = {
+            "success": True,
+            "selected_variant": str(variant_name),
+            "candidate_label": safe_candidate_label,
+            "objective": original_result.get("objective"),
+            "base_parameters": original_result.get("base_parameters") or {},
+            "metrics": metrics,
+            "recommended": {
+                "label": safe_candidate_label,
+                "parameters": full_parameters,
+                "overrides": overrides,
+                "score": metrics.get("score"),
+                "metrics": metrics,
+            },
+            "source_grid_rank": int(float(row.get("rank") or 0)),
+        }
+        copied["result_path"] = _write_json(pool_path / "result.json", candidate_result)
+        daily_results_source = candidate_curve_path(run_id, variant_name, safe_candidate_label)
+        trades_source = Path()
+    daily_results_path = _copy_optional(daily_results_source, pool_path / "daily_results.csv")
+    trades_path = _copy_optional(trades_source, pool_path / "trades.csv") if not safe_candidate_label else None
     if daily_results_path is not None:
         copied["daily_results_path"] = daily_results_path
     if trades_path is not None:
@@ -264,6 +339,7 @@ def create_pool_snapshot(
             "tags": list(tags or []),
             "source_run_id": run_id,
             "source_variant_name": str(variant_name),
+            "source_candidate_label": safe_candidate_label,
             "created_at": created_at,
         },
     )
@@ -298,6 +374,7 @@ def create_pool_snapshot(
             "pool_path": str(pool_path),
             "source_run_id": run_id,
             "source_variant_name": str(variant_name),
+            "source_candidate_label": safe_candidate_label,
             "source_strategy_version": source_strategy_version,
             "strategy_version": pool_version,
             "pool_created_at": created_at,

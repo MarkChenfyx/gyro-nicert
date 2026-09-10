@@ -33,6 +33,7 @@ def test_add_variant_reruns_from_earliest_local_data(tmp_path, monkeypatch):
     }
     rerun_calls: list[tuple[list[str], str | None, str | None]] = []
     snapshot_notes: list[str | None] = []
+    snapshot_candidates: list[str | None] = []
 
     monkeypatch.setattr(pool_service.run_repository, "get_run", lambda run_id: {"run_id": run_id, "strategy_id": "strategy_1"})
     monkeypatch.setattr(
@@ -41,8 +42,9 @@ def test_add_variant_reruns_from_earliest_local_data(tmp_path, monkeypatch):
         lambda run_id, variant_name: {"variant_id": "variant_1", "variant_name": variant_name},
     )
     monkeypatch.setattr(pool_service.strategy_repository, "get_strategy", lambda strategy_id: {"strategy_name": "Example"})
-    def fake_create_pool_snapshot(run_id, variant_name, tags=None, note=None):
+    def fake_create_pool_snapshot(run_id, variant_name, tags=None, note=None, candidate_label=None):
         snapshot_notes.append(note)
+        snapshot_candidates.append(candidate_label)
         return {"pool_item_id": "pool_1", "pool_path": pool_path}
 
     monkeypatch.setattr(pool_service.artifact_service, "create_pool_snapshot", fake_create_pool_snapshot)
@@ -74,6 +76,18 @@ def test_add_variant_reruns_from_earliest_local_data(tmp_path, monkeypatch):
     assert result["rerun"]["items"][0]["rerun_start"] == "2023-01-03"
     assert result["sharpe"] == 1.3
 
+    candidate_result = pool_service.add_variant_to_pool(
+        "run_1",
+        "manual_grid",
+        candidate_label="candidate_012",
+        vt_symbol="511380.SSE",
+        strategy_name="Example candidate",
+    )
+
+    assert rerun_calls == [(["pool_1"], None, "auto_earliest")]
+    assert snapshot_candidates == [None, "candidate_012"]
+    assert candidate_result["rerun_succeeded"] is False
+
 
 def test_persist_rerun_snapshot_saves_expanded_date_range(tmp_path, monkeypatch):
     pool_path = _prepare_snapshot(tmp_path)
@@ -103,3 +117,25 @@ def test_persist_rerun_snapshot_saves_expanded_date_range(tmp_path, monkeypatch)
     assert config["last_rerun_start"] == "2023-01-03"
     assert manifest["pool_last_rerun_start"] == "2023-01-03"
     assert manifest["pool_last_rerun_end"] == "2026-07-15"
+
+
+def test_compare_item_recovers_trade_count_without_trades_artifact():
+    detail = {
+        "pool_item": {"pool_item_id": "pool_candidate", "strategy_name": "Example"},
+        "result": {"metrics": {"total_trade_count": 17.0}},
+        "daily_results": {
+            "data": [
+                {"date": "2025-01-01", "trade_count": "1"},
+                {"date": "2025-01-02", "trade_count": "2"},
+            ]
+        },
+    }
+
+    payload = pool_service._compare_item(detail)
+
+    assert payload["trade_count"] == 17
+
+    detail["result"] = {"metrics": {}}
+    payload = pool_service._compare_item(detail)
+
+    assert payload["trade_count"] == 3

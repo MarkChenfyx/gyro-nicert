@@ -4,7 +4,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from backend.api import data_api, natural_language_api, optimization_api, pool_api, research_api, run_api, strategy_api, strategy_research_api, task_api
+from backend.api import data_api, live_api, natural_language_api, optimization_api, pool_api, portfolio_api, research_api, run_api, strategy_api, strategy_research_api, task_api
 from backend.core.environment import env
 
 
@@ -52,8 +52,18 @@ app.include_router(strategy_api.router)
 app.include_router(research_api.router)
 app.include_router(run_api.router)
 app.include_router(pool_api.router)
+app.include_router(portfolio_api.router)
+app.include_router(live_api.router)
 app.include_router(task_api.router)
 app.include_router(data_api.router)
 app.include_router(natural_language_api.router)
 app.include_router(optimization_api.router)
 app.include_router(strategy_research_api.router)
+
+# Server mode serves the built frontend on the same loopback port as the API.
+from fastapi.staticfiles import StaticFiles
+from backend.core.paths import PROJECT_ROOT
+
+frontend_dist = PROJECT_ROOT / "frontend" / "dist"
+if (frontend_dist / "index.html").is_file():
+    app.mount("/", StaticFiles(directory=frontend_dist, html=True), name="frontend")

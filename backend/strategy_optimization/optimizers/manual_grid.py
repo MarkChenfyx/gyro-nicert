@@ -14,6 +14,9 @@ from backend.strategy_optimization.optimizers.common import candidate_grid, diag
 
 
 GRID_DIAGNOSTIC_KEYS = (
+    "annual_return",
+    "calmar",
+    "return_drawdown_ratio",
     "total_net_pnl",
     "total_commission",
     "total_slippage",
@@ -191,7 +194,7 @@ class ManualGridOptimizer:
 
         candidate_results: list[dict[str, Any]] = []
         grid_summary: list[dict[str, Any]] = []
-        top_candidate_curves: list[dict[str, Any]] = []
+        candidate_curves: list[dict[str, Any]] = []
         best_result: dict[str, Any] | None = None
         best_index: int | None = None
         completed = 0
@@ -228,7 +231,7 @@ class ManualGridOptimizer:
                 best_result = {"candidate": candidate_payload, "backtest": result}
                 best_index = index
             if result.get("success") and daily_results:
-                top_candidate_curves.append(
+                candidate_curves.append(
                     {
                         "_candidate_index": index,
                         "label": str(candidate_payload["label"]),
@@ -236,10 +239,6 @@ class ManualGridOptimizer:
                         "daily_results": daily_results,
                     }
                 )
-                top_candidate_curves.sort(
-                    key=lambda item: (-float(item.get("score", float("-inf"))), int(item["_candidate_index"]))
-                )
-                del top_candidate_curves[10:]
             completed += 1
             diagnostics.append(diagnostic("info", f"candidate {index}/{len(candidates)} evaluated", label=candidate_payload["label"]))
             if progress_callback:
@@ -349,10 +348,10 @@ class ManualGridOptimizer:
         for row in grid_summary:
             row["rank"] = rank_by_label.get(str(row["label"]), 0)
         grid_summary.sort(key=lambda item: (item["rank"] == 0, item["rank"] or 999999))
-        for candidate_curve in top_candidate_curves:
+        for candidate_curve in candidate_curves:
             candidate_curve.pop("_candidate_index", None)
             candidate_curve["rank"] = rank_by_label.get(str(candidate_curve["label"]), 0)
-        top_candidate_curves.sort(key=lambda item: int(item.get("rank") or 999999))
+        candidate_curves.sort(key=lambda item: int(item.get("rank") or 999999))
         recommended = dict(successful[0])
         diagnostics.append(diagnostic("info", f"selected {recommended['label']} as best manual grid parameters"))
         return {
@@ -360,7 +359,7 @@ class ManualGridOptimizer:
             "recommended": recommended,
             "candidates": candidate_results,
             "grid_summary": grid_summary,
-            "candidate_curves": top_candidate_curves,
+            "candidate_curves": candidate_curves,
             "best_result": best_result["backtest"],
             "diagnostics": diagnostics,
             "optimizer_name": self.optimizer_name,

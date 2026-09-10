@@ -8,13 +8,15 @@ build/
 *.egg-info/
 storage/runtime/
 storage/cache/
+storage/live_sources/
 storage/pool/
+storage/portfolios/
+storage/live/
 storage/db/*.sqlite
 storage/db/*.db
 storage/strategies/generated/
 storage/strategies/validated/
 frontend/node_modules/
-frontend/dist/
 *.tsbuildinfo
 *.log
 outputs/

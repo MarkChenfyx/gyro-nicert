@@ -55,7 +55,7 @@ def _bars() -> list[BarData]:
     ]
 
 
-def test_real_backtest_uses_teacher_engine_and_local_loader(monkeypatch) -> None:
+def test_real_backtest_uses_cta_engine_and_local_loader(monkeypatch) -> None:
     bars = _bars()
     monkeypatch.setattr(
         "backend.backtesting.run.coverage_service.get_data_coverage",
@@ -93,8 +93,8 @@ def test_real_backtest_uses_teacher_engine_and_local_loader(monkeypatch) -> None
     )
 
     assert result["success"] is True
-    assert result["engine_name"] == "teacher_cta_backtesting_engine"
-    assert result["engine_version"] == "teacher_backtesting_v1_local_sqlite"
+    assert result["engine_name"] == "gyro_cta_backtesting_engine"
+    assert result["engine_version"] == "cta_backtesting_v1_local_sqlite"
     assert len(result["trades"]) == 2
     assert [trade["price"] for trade in result["trades"]] == [11.0, 12.0]
     assert result["metrics"]["total_net_pnl"] == 1.0

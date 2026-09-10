@@ -1,0 +1,14 @@
+# Direct dependency versions used for local verification; Python 3.13 on Windows.
+# Model compatibility must also be checked against the deployment environment.
+fastapi==0.139.0
+uvicorn==0.50.2
+httpx==0.28.1
+numpy==2.4.6
+optuna==4.9.0
+pandas==2.3.3
+plotly==6.8.0
+vnpy==4.4.0
+vnpy_ctastrategy==1.4.1
+rqdatac==3.5.2
+scikit-learn==1.9.0
+TA-Lib==0.6.6

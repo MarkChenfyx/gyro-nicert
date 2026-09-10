@@ -2,8 +2,38 @@
 // Set VITE_API_BASE_URL only when the API intentionally lives on another origin.
 const API_BASE_URL = String(import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
 
+const RETRY_DELAYS_MS = [150, 300, 600, 1000, 1500];
+
+function wait(milliseconds: number) {
+  return new Promise<void>((resolve) => window.setTimeout(resolve, milliseconds));
+}
+
+async function fetchWithReloadRetry(url: string, init?: RequestInit): Promise<Response> {
+  const method = String(init?.method || "GET").toUpperCase();
+  const retryable = method === "GET" || method === "HEAD";
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt <= (retryable ? RETRY_DELAYS_MS.length : 0); attempt += 1) {
+    try {
+      const response = await fetch(url, init);
+      const transientStatus = response.status === 500 || response.status === 502 || response.status === 503 || response.status === 504;
+      if (!retryable || !transientStatus || attempt === RETRY_DELAYS_MS.length) {
+        return response;
+      }
+    } catch (error) {
+      lastError = error;
+      if (!retryable || init?.signal?.aborted || attempt === RETRY_DELAYS_MS.length) {
+        throw error;
+      }
+    }
+    await wait(RETRY_DELAYS_MS[attempt]);
+  }
+
+  throw lastError instanceof Error ? lastError : new Error("API request failed during backend reload");
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
+  const response = await fetchWithReloadRetry(`${API_BASE_URL}${path}`, {
     headers: {
       "Content-Type": "application/json",
       ...(init?.headers || {})
@@ -12,7 +42,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
-    const message = payload?.error?.message || payload?.detail || response.statusText;
+    const message = payload?.error?.message
+      || (typeof payload?.error === "string" ? payload.error : "")
+      || payload?.detail?.message
+      || (typeof payload?.detail === "string" ? payload.detail : "")
+      || payload?.message
+      || response.statusText
+      || `API 请求失败（HTTP ${response.status}）`;
     throw new Error(String(message));
   }
   return payload as T;
@@ -34,6 +70,13 @@ export function repairStrategyCode(payload: {
   return request<any>("/api/strategies/repair", {
     method: "POST",
     body: JSON.stringify(payload)
+  });
+}
+
+export function createStrategyInitialReview(runId: string, forceRefresh = false) {
+  return request<any>("/api/strategies/initial-review", {
+    method: "POST",
+    body: JSON.stringify({ run_id: runId, force_refresh: forceRefresh })
   });
 }
 
@@ -168,10 +211,10 @@ export function getGridCandidateCurve(runId: string, variantName: string, candid
   return request<any>(`/api/runs/${encodeURIComponent(runId)}/variants/${encodeURIComponent(variantName)}/candidates/${encodeURIComponent(candidateLabel)}/curve`);
 }
 
-export function addToPool(runId: string, variantName = "baseline", vtSymbol?: string, strategyName?: string, note?: string) {
+export function addToPool(runId: string, variantName = "baseline", vtSymbol?: string, strategyName?: string, note?: string, candidateLabel?: string) {
   return request<any>("/api/pool/add", {
     method: "POST",
-    body: JSON.stringify({ run_id: runId, variant_name: variantName, vt_symbol: vtSymbol, strategy_name: strategyName, note, tags: ["frontend"] })
+    body: JSON.stringify({ run_id: runId, variant_name: variantName, candidate_label: candidateLabel, vt_symbol: vtSymbol, strategy_name: strategyName, note, tags: ["frontend"] })
   });
 }
 
@@ -202,6 +245,13 @@ export function getPoolCurve(poolItemId: string) {
 
 export function getPoolResearchContext(poolItemId: string) {
   return request<any>(`/api/strategy-research/pool/${encodeURIComponent(poolItemId)}/context`, { cache: "no-store" });
+}
+
+export function createPoolResearchAiOverview(poolItemId: string, forceRefresh = false) {
+  return request<any>(
+    `/api/strategy-research/pool/${encodeURIComponent(poolItemId)}/ai-overview?force_refresh=${forceRefresh ? "true" : "false"}`,
+    { method: "POST" }
+  );
 }
 
 export function runPoolResearchHeatmap(poolItemId: string, payload: {
@@ -256,6 +306,103 @@ export function removeFromPool(poolItemId: string) {
   return request<any>(`/api/pool/${encodeURIComponent(poolItemId)}`, {
     method: "DELETE"
   });
+}
+
+export type PortfolioSavePayload = {
+  name: string;
+  description?: string;
+  virtual_capital: number;
+  start_date?: string;
+  end_date?: string;
+  components: Array<{ pool_item_id: string; weight: number }>;
+};
+
+export function listPortfolios(includeArchived = false) {
+  return request<any>(`/api/portfolios?include_archived=${includeArchived ? "true" : "false"}`, { cache: "no-store" });
+}
+
+export function getPortfolio(portfolioId: string) {
+  return request<any>(`/api/portfolios/${encodeURIComponent(portfolioId)}`, { cache: "no-store" });
+}
+
+export function createPortfolio(payload: PortfolioSavePayload) {
+  return request<any>("/api/portfolios", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function updatePortfolio(portfolioId: string, payload: PortfolioSavePayload) {
+  return request<any>(`/api/portfolios/${encodeURIComponent(portfolioId)}`, {
+    method: "PUT",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function refreshPortfolio(portfolioId: string) {
+  return request<any>(`/api/portfolios/${encodeURIComponent(portfolioId)}/refresh`, { method: "POST" });
+}
+
+export function archivePortfolio(portfolioId: string) {
+  return request<any>(`/api/portfolios/${encodeURIComponent(portfolioId)}/archive`, { method: "POST" });
+}
+
+export function getLiveLocalStatus() {
+  return request<any>("/api/live/local-status", { cache: "no-store" });
+}
+
+export function listLiveSources() {
+  return request<any>("/api/live/sources", { cache: "no-store" });
+}
+
+export function createLiveSource(payload: { trade_date: string; name?: string }) {
+  return request<any>("/api/live/sources", { method: "POST", body: JSON.stringify(payload) });
+}
+
+export function getLiveSource(sourceId: string) {
+  return request<any>(`/api/live/sources/${encodeURIComponent(sourceId)}`, { cache: "no-store" });
+}
+
+export function deleteLiveSource(sourceId: string) {
+  return request<any>(`/api/live/sources/${encodeURIComponent(sourceId)}`, { method: "DELETE" });
+}
+
+export function importLiveSnapshot(sourceId: string, tradeDate: string) {
+  return request<any>(`/api/live/sources/${encodeURIComponent(sourceId)}/snapshots`, {
+    method: "POST",
+    body: JSON.stringify({ trade_date: tradeDate })
+  });
+}
+
+export function trackLiveDay(sourceId: string, tradeDate: string, updateData = true) {
+  return request<any>(`/api/live/sources/${encodeURIComponent(sourceId)}/track`, {
+    method: "POST",
+    body: JSON.stringify({ trade_date: tradeDate, update_data: updateData })
+  });
+}
+
+export function getLiveRecord(sourceId: string, tradeDate: string) {
+  return request<any>(
+    `/api/live/sources/${encodeURIComponent(sourceId)}/records/${encodeURIComponent(tradeDate)}`,
+    { cache: "no-store" }
+  );
+}
+
+export async function downloadPortfolioCsv(portfolioId: string, filename: string) {
+  const response = await fetchWithReloadRetry(`${API_BASE_URL}/api/portfolios/${encodeURIComponent(portfolioId)}/export`);
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    throw new Error(String(payload?.error?.message || payload?.detail || response.statusText));
+  }
+  const blob = await response.blob();
+  const url = window.URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.URL.revokeObjectURL(url);
 }
 
 export function listTasks(options: { view?: "active" | "recent" | "archived" | "all"; status?: string; limit?: number } = {}) {

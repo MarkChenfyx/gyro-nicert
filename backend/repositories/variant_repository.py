@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 from uuid import uuid4
 
+from backend.core.paths import stored_path, path_fields
 from backend.common.time_utils import now_iso, timestamp_id
 from backend.data_manager.database import get_app_db_connection
 
@@ -41,10 +42,10 @@ def create_variant(
                 str(run_id),
                 str(variant_name),
                 params_hash,
-                config_path,
-                str(result_path),
-                daily_results_path,
-                trades_path,
+                stored_path(config_path),
+                stored_path(result_path),
+                stored_path(daily_results_path),
+                stored_path(trades_path),
                 created_at,
             ),
         )
@@ -61,7 +62,7 @@ def get_variant(variant_id: str) -> dict[str, Any] | None:
             "SELECT * FROM run_variants WHERE variant_id = ?",
             (str(variant_id),),
         ).fetchone()
-    return dict(row) if row is not None else None
+    return path_fields(dict(row)) if row is not None else None
 
 
 def get_variant_by_run_and_name(run_id: str, variant_name: str) -> dict[str, Any] | None:
@@ -75,7 +76,7 @@ def get_variant_by_run_and_name(run_id: str, variant_name: str) -> dict[str, Any
             """,
             (str(run_id), str(variant_name)),
         ).fetchone()
-    return dict(row) if row is not None else None
+    return path_fields(dict(row)) if row is not None else None
 
 
 def list_variants(run_id: str) -> list[dict[str, Any]]:
@@ -88,4 +89,4 @@ def list_variants(run_id: str) -> list[dict[str, Any]]:
             """,
             (str(run_id),),
         ).fetchall()
-    return [dict(row) for row in rows]
+    return [path_fields(dict(row)) for row in rows]

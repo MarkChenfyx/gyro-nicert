@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Button, Checkbox, Drawer, Input, InputNumber, Modal, Progress, Select, Table, Tag, message } from "antd";
 import type { ColumnsType } from "antd/es/table";
+import { CopyCodeButton } from "../components/CopyCodeButton";
 import {
   addToPool,
   archiveTerminalTasks,
@@ -97,7 +98,8 @@ import {
   buildComparisonSeries,
   MultiVariantCurveChart,
   CurveControlItem,
-  CurveControls
+  CurveControls,
+  UI_TEXT
 } from "../app/ui";
 
 const POOL_QUICK_LIMIT_STORAGE_KEY = "gyro_nicert.pool_quick_limit";
@@ -153,7 +155,7 @@ export default function PoolPage({
   const [showBenchmark, setShowBenchmark] = useState(true);
   const [curveStartDate, setCurveStartDate] = useState("");
   const [curveEndDate, setCurveEndDate] = useState("");
-  const [curveReturnCache, setCurveReturnCache] = useState<Record<string, number>>({});
+  const [curveRowsCache, setCurveRowsCache] = useState<Record<string, any[]>>({});
   const [poolSelectionInitialized, setPoolSelectionInitialized] = useState(false);
   const presetRequestRef = useRef(0);
   const comparisonRequestRef = useRef(0);
@@ -331,12 +333,12 @@ export default function PoolPage({
     try {
       const payload = await continuePoolOptimization(poolItemId);
       const newRunId = String(payload?.baseline?.run?.run_id || "");
-      if (!newRunId) throw new Error("重跑完成，但没有返回新的运行版本");
+      if (!newRunId) throw new Error("重跑完成，但没有返回新的运行编号");
       await refreshTasks();
-      message.success("已重跑为新的基线，正在打开参数优化");
+      message.success("已生成新的基线结果，正在打开参数优化");
       onContinueOptimization(newRunId);
     } catch (error) {
-      message.error(`继续参数优化失败：${String(error)}`);
+      message.error(`${UI_TEXT.action.continueOptimization}失败：${String(error)}`);
     } finally {
       setContinuingPoolItemId("");
     }
@@ -403,12 +405,11 @@ export default function PoolPage({
       const today = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Shanghai" });
       const payload = await rerunPool(selectedIds, poolRerunStartDate, today);
       setComparison(payload);
-      setCurveReturnCache((current) => {
+      setCurveRowsCache((current) => {
         const next = { ...current };
         for (const item of payload?.items || []) {
           const poolItemId = String(item?.pool_item_id || "");
-          const totalReturn = curveSummary(item?.curve || []).strategy?.totalReturn;
-          if (poolItemId && Number.isFinite(totalReturn)) next[poolItemId] = Number(totalReturn);
+          if (poolItemId) next[poolItemId] = item?.curve || [];
         }
         return next;
       });
@@ -505,12 +506,11 @@ export default function PoolPage({
       .then((payload) => {
         if (requestId !== comparisonRequestRef.current) return;
         setComparison(payload);
-        setCurveReturnCache((current) => {
+        setCurveRowsCache((current) => {
           const next = { ...current };
           for (const item of payload?.items || []) {
             const poolItemId = String(item?.pool_item_id || "");
-            const totalReturn = curveSummary(item?.curve || []).strategy?.totalReturn;
-            if (poolItemId && Number.isFinite(totalReturn)) next[poolItemId] = Number(totalReturn);
+            if (poolItemId) next[poolItemId] = item?.curve || [];
           }
           return next;
         });
@@ -588,7 +588,8 @@ export default function PoolPage({
   const poolCurveControlItems = useMemo<CurveControlItem[]>(() =>
     displayedCurveItems.map((item: any) => {
       const poolItemId = String(item.pool_item_id);
-      const totalReturn = curveReturnCache[poolItemId] ?? curveSummary(item?.curve || []).strategy?.totalReturn;
+      const windowRows = clampDateRange(curveRowsCache[poolItemId] || item?.curve || [], curveStartDate, curveEndDate);
+      const totalReturn = curveSummary(windowRows).strategy?.totalReturn;
       return {
         key: poolItemId,
         label: poolItemLabel(item),
@@ -597,7 +598,7 @@ export default function PoolPage({
         detail: `${item.vt_symbol || "-"} · ${formatReturnPct(totalReturn, 2)}`
       };
     }),
-  [curveReturnCache, displayedCurveItems]);
+  [curveEndDate, curveRowsCache, curveStartDate, displayedCurveItems]);
 
   function applyPoolCurveShortcut(range: "3m" | "6m" | "1y" | "all") {
     const next = shortcutDateRange(poolCurveDateBounds, range);
@@ -607,7 +608,7 @@ export default function PoolPage({
   const comparisonColumns: ColumnsType<any> = useMemo(
     () => [
       {
-        title: "池内名称",
+        title: "策略名称",
         dataIndex: "strategy_name",
         width: 330,
         render: (value, record) => (
@@ -630,7 +631,7 @@ export default function PoolPage({
       {
         title: (
           <button type="button" className="table-sort-button" onClick={() => togglePoolSort("total_return")}>
-            累计收益 <SortCaret state={sortArrow("total_return")} />
+            {UI_TEXT.metric.totalReturn} <SortCaret state={sortArrow("total_return")} />
           </button>
         ),
         width: 104,
@@ -639,7 +640,7 @@ export default function PoolPage({
       {
         title: (
           <button type="button" className="table-sort-button" onClick={() => togglePoolSort("trade_count")}>
-            交易次数 <SortCaret state={sortArrow("trade_count")} />
+            {UI_TEXT.metric.tradeCount} <SortCaret state={sortArrow("trade_count")} />
           </button>
         ),
         width: 82,
@@ -657,7 +658,7 @@ export default function PoolPage({
       {
         title: (
           <button type="button" className="table-sort-button" onClick={() => togglePoolSort("max_drawdown")}>
-            最大回撤 <SortCaret state={sortArrow("max_drawdown")} />
+            {UI_TEXT.metric.maxDrawdown} <SortCaret state={sortArrow("max_drawdown")} />
           </button>
         ),
         width: 104,
@@ -666,7 +667,7 @@ export default function PoolPage({
       {
         title: (
           <button type="button" className="table-sort-button" onClick={() => togglePoolSort("excess_return")}>
-            超额收益 <SortCaret state={sortArrow("excess_return")} />
+            {UI_TEXT.metric.excessReturn} <SortCaret state={sortArrow("excess_return")} />
           </button>
         ),
         width: 104,
@@ -677,8 +678,8 @@ export default function PoolPage({
         width: 86,
         render: (_, record) => (
           <div className="strategy-pool-action-stack">
-            <Button size="small" danger onClick={() => handleDeletePoolItem(String(record.pool_item_id))}>移除</Button>
-            <Button size="small" onClick={() => openItem(record)}>查看</Button>
+            <Button size="small" danger onClick={() => handleDeletePoolItem(String(record.pool_item_id))}>{UI_TEXT.action.removeFromPool}</Button>
+            <Button size="small" onClick={() => openItem(record)}>{UI_TEXT.action.viewDetails}</Button>
           </div>
         )
       }
@@ -688,15 +689,15 @@ export default function PoolPage({
 
   async function handleDeletePoolItem(poolItemId: string) {
     Modal.confirm({
-      title: "确认移除",
-      content: `确定要将 ${poolItemId} 从策略池中移除吗？此操作不可撤销，相关的快照文件也会被删除。`,
-      okText: "确认移除",
+      title: "确认移出策略池",
+      content: `确定要将 ${poolItemId} 移出策略池吗？此操作不可撤销，相关的策略快照文件也会被删除。`,
+      okText: UI_TEXT.action.removeFromPool,
       okType: "danger",
       cancelText: "取消",
       onOk: async () => {
         try {
           await removeFromPool(poolItemId);
-          message.success(`已从策略池移除 ${poolItemId}`);
+          message.success(`已移出策略池：${poolItemId}`);
           setSelectedIds((current) => current.filter((id) => id !== poolItemId));
           if (selectedDetailId === poolItemId) setDetail(null);
           await refreshPool();
@@ -766,7 +767,7 @@ export default function PoolPage({
       align: "right"
     },
     {
-      title: "标的",
+      title: UI_TEXT.term.tradingSymbol,
       key: "symbol",
       width: 130,
       render: (_, row) => {
@@ -784,13 +785,13 @@ export default function PoolPage({
     <section className="view is-active">
       <div className="hero-band library-hero-band">
         <div>
-          <p className="eyebrow">策略池</p>
+          <p className="eyebrow">研究工作台</p>
           <h2>{zh.pool}</h2>
           <p className="hero-copy">已经确认的策略快照会集中放在这里，方便筛选、对比和查看详情。</p>
         </div>
         <div className="hero-metrics">
-          <div className="metric-tile"><div className="metric-value">{poolItems.length}</div><div className="metric-label">池内条目</div></div>
-          <div className="metric-tile"><div className="metric-value">{new Set(poolItems.map((item) => item.vt_symbol).filter(Boolean)).size}</div><div className="metric-label">标的数量</div></div>
+          <div className="metric-tile"><div className="metric-value">{poolItems.length}</div><div className="metric-label">{UI_TEXT.term.poolSnapshot}</div></div>
+          <div className="metric-tile"><div className="metric-value">{new Set(poolItems.map((item) => item.vt_symbol).filter(Boolean)).size}</div><div className="metric-label">交易标的</div></div>
           <div className="metric-tile"><div className="metric-value">{latestCreatedAt ? formatDate(latestCreatedAt).slice(5, 16) : "-"}</div><div className="metric-label">最近加入</div></div>
         </div>
       </div>
@@ -799,24 +800,24 @@ export default function PoolPage({
         <div className="library-section-head">
           <div>
             <h3>筛选条件</h3>
-            <p>选择标的、搜索策略，然后勾选要对比的策略池条目。</p>
+            <p>选择交易标的、搜索策略，然后勾选要对比的策略快照。</p>
           </div>
           <Button onClick={() => refreshPool().catch((error) => message.error(String(error)))}>{zh.refresh}</Button>
         </div>
         <div className="strategy-pool-filter-grid">
           <label className="field library-folder-field">
-            <span>标的</span>
+            <span>{UI_TEXT.term.tradingSymbol}</span>
             <Select value={selectedSymbol || undefined} onChange={(value) => { presetRequestRef.current += 1; setSelectionMode("recent"); setPoolSelectionInitialized(false); setSelectedSymbol(value); setDisplayedCurveIds([]); setSelectedIds([]); }} options={symbols.map((item) => ({ value: item, label: item }))} />
           </label>
           <label className="field library-folder-field">
             <span>策略搜索</span>
-            <Input value={searchText} onChange={(event) => { presetRequestRef.current += 1; setPoolSelectionInitialized(false); setSearchText(event.target.value); setDisplayedCurveIds([]); setSelectedIds([]); }} placeholder="策略 / 运行版本 / 结果版本 / 标签" />
+            <Input value={searchText} onChange={(event) => { presetRequestRef.current += 1; setPoolSelectionInitialized(false); setSearchText(event.target.value); setDisplayedCurveIds([]); setSelectedIds([]); }} placeholder="策略 / 回测运行 / 结果版本 / 标签" />
           </label>
           <div className="field library-folder-field strategy-pool-preset-field">
             <div className="strategy-pool-preset-head">
               <span>快捷选择</span>
               <div className="strategy-pool-limit-control">
-                <span>条数</span>
+                <span>选择数量</span>
                 <InputNumber
                   size="small"
                   min={1}
@@ -833,9 +834,9 @@ export default function PoolPage({
             <div className="strategy-pool-preset-buttons">
               {([
                 ["all", `全部（${candidateItems.length}）`],
-                ["top_sharpe", "最高夏普"],
-                ["top_excess", "最高超额"],
-                ["recent", "最近"]
+                ["top_sharpe", "夏普比率最高"],
+                ["top_excess", "超额收益最高"],
+                ["recent", "最近加入"]
               ] as Array<[string, string]>).map(([key, label]) => (
                 <button type="button" key={key} className={selectionMode === key ? "is-active" : ""} onClick={() => applyPreset(key)}>{label}</button>
               ))}
@@ -852,7 +853,7 @@ export default function PoolPage({
               onChange={(event) => setPoolRerunStartDate(event.target.value)}
             />
           </label>
-          <Button type="primary" disabled={!selectedIds.length || !poolRerunStartDate} loading={rerunning} onClick={rerunSelectedToToday}>重跑到今天</Button>
+          <Button type="primary" disabled={!selectedIds.length || !poolRerunStartDate} loading={rerunning} onClick={rerunSelectedToToday}>重跑回测到今天</Button>
           <span>
             {comparison?.rerun_end
               ? `当前对比结果重跑区间：${formatDate(comparison.rerun_start || poolRerunStartDate)} 至 ${formatDate(comparison.rerun_end)}。`
@@ -889,10 +890,10 @@ export default function PoolPage({
           <label className="pool-benchmark-toggle">
             <input type="checkbox" checked={showBenchmark} onChange={(event) => setShowBenchmark(event.target.checked)} disabled={!selectedIds.length} />
             <span className="curve-swatch is-dashed" style={{ borderLeftColor: BENCHMARK_CURVE_COLOR }} />
-            <span>显示 B&amp;H</span>
+            <span>{selectedSymbol || "buy_hold"}</span>
           </label>
         </div>
-        {compareItems.length && poolVisibleKeys.length > 0 ? <div className="library-curve-panel unified-curve-panel"><MultiVariantCurveChart curves={filteredCompareCurves} visibleKeys={poolVisibleKeys} labels={compareLabels} orderedKeys={[...poolCurveControlItems.map((item) => item.key), ...(showBenchmark ? ["buy_hold"] : [])]} showLegend={false} height={420} /></div> : compareItems.length ? <div className="empty-state">当前没有展示的曲线，可在上方重新勾选。</div> : <div className="empty-state">请至少选择一个策略。</div>}
+        {compareItems.length && poolVisibleKeys.length > 0 ? <div className="library-curve-panel unified-curve-panel"><MultiVariantCurveChart curves={filteredCompareCurves} visibleKeys={poolVisibleKeys} labels={compareLabels} benchmarkLabel={selectedSymbol || "buy_hold"} orderedKeys={[...poolCurveControlItems.map((item) => item.key), ...(showBenchmark ? ["buy_hold"] : [])]} showLegend={false} height={420} /></div> : compareItems.length ? <div className="empty-state">当前没有展示的曲线，可在上方重新勾选。</div> : <div className="empty-state">请至少选择一个策略。</div>}
         {(comparison?.diagnostics || []).length > 0 && <div className="diagnostic-list">{comparison.diagnostics.map((item: any, index: number) => <Tag color="orange" key={`${item.message}-${index}`}>{item.message}</Tag>)}</div>}
       </section>
 
@@ -905,12 +906,12 @@ export default function PoolPage({
 
       {detail && (
         <section className="band library-shell">
-          <div className="library-section-head"><div><h3>{strategyLabel(detail.pool_item)}</h3><p className="pool-detail-identity"><span>入池时间：{formatDate(detail.pool_item?.created_at).slice(0, 16)}</span><span>快照编号：{detail.pool_item?.pool_item_id || "-"}</span></p></div><div className="detail-head-actions"><span className="status-pill status-completed">快照已就绪</span><Button size="small" onClick={() => onOpenResearch(String(detail.pool_item?.pool_item_id || ""))}>进入策略研究</Button><Button size="small" loading={continuingPoolItemId === String(detail.pool_item?.pool_item_id)} onClick={continueOptimizationFromPool}>继续参数优化</Button><Button size="small" danger disabled={Boolean(continuingPoolItemId)} onClick={() => handleDeletePoolItem(String(detail.pool_item?.pool_item_id))}>从池中移除</Button></div></div>
+          <div className="library-section-head"><div><h3>{strategyLabel(detail.pool_item)}</h3><p className="pool-detail-identity"><span>入池时间：{formatDate(detail.pool_item?.created_at).slice(0, 16)}</span><span>{UI_TEXT.term.poolSnapshotId}：{detail.pool_item?.pool_item_id || "-"}</span></p></div><div className="detail-head-actions"><span className="status-pill status-completed">策略快照已就绪</span><Button size="small" onClick={() => onOpenResearch(String(detail.pool_item?.pool_item_id || ""))}>进入策略研究</Button><Button size="small" loading={continuingPoolItemId === String(detail.pool_item?.pool_item_id)} onClick={continueOptimizationFromPool}>{UI_TEXT.action.continueOptimization}</Button><Button size="small" danger disabled={Boolean(continuingPoolItemId)} onClick={() => handleDeletePoolItem(String(detail.pool_item?.pool_item_id))}>{UI_TEXT.action.removeFromPool}</Button></div></div>
           <div className="library-metric-grid">
             <div className="library-metric-card"><span>{zh.sharpe}</span><strong>{formatNumber(detail.pool_item?.sharpe ?? metrics.sharpe ?? metrics.sharpe_ratio)}</strong></div>
-            <div className="library-metric-card positive"><span>策略累计收益</span><strong>{detailCurveSummary.strategy ? formatReturnPct(detailCurveSummary.strategy.totalReturn, 2) : "-"}</strong></div>
+            <div className="library-metric-card positive"><span>{UI_TEXT.metric.totalReturn}</span><strong>{detailCurveSummary.strategy ? formatReturnPct(detailCurveSummary.strategy.totalReturn, 2) : "-"}</strong></div>
             <div className="library-metric-card negative"><span>{zh.drawdown}</span><strong>{detailCurveSummary.strategy ? formatReturnPct(detailCurveSummary.strategy.maxDrawdown, 2) : "-"}</strong></div>
-            <div className="library-metric-card"><span>卡玛比率</span><strong>{formatNumber(detail.pool_item?.calmar ?? metrics.calmar)}</strong></div>
+            <div className="library-metric-card"><span>{UI_TEXT.metric.calmar}</span><strong>{formatNumber(detail.pool_item?.calmar ?? metrics.calmar)}</strong></div>
           </div>
           <div className="detail-grid">
             <div className="viewer-summary-card"><span className="summary-label">参数</span><pre className="mini-code">{JSON.stringify(params, null, 2)}</pre></div>
@@ -940,7 +941,7 @@ export default function PoolPage({
             </div>
           </div>
           <section className="library-section"><div className="library-section-head"><div><h3>{zh.trades}</h3></div></div><Table rowKey={(row) => `${row?.datetime || row?.date || row?.trading_day || "trade"}-${row?.tradeid || ""}-${row?.orderid || ""}`} dataSource={sortedTrades} pagination={{ pageSize: 6, showSizeChanger: false, showTotal: (total) => `共 ${total} 条` }} scroll={{ x: 900 }} className="workbench-table" columns={tradeColumns} /></section>
-          <section className="library-section"><div className="library-section-head"><div><h3>{zh.code}</h3></div></div><pre className="code-block">{detail.strategy_code || ""}</pre></section>
+          <section className="library-section"><div className="library-section-head"><div><h3>{zh.code}</h3></div><CopyCodeButton code={detail.strategy_code || ""} /></div><pre className="code-block">{detail.strategy_code || ""}</pre></section>
         </section>
       )}
     </section>

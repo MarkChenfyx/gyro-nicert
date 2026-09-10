@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from backend.core.paths import stored_path, path_fields
 from backend.common.time_utils import now_iso
 from backend.data_manager.database import get_app_db_connection
 
@@ -36,7 +37,7 @@ def create_artifact(
                 str(owner_type),
                 str(owner_id),
                 str(artifact_type),
-                str(path),
+                stored_path(path),
                 sha256,
                 created_at,
             ),
@@ -58,7 +59,7 @@ def list_artifacts(owner_type: str, owner_id: str) -> list[dict[str, Any]]:
             """,
             (str(owner_type), str(owner_id)),
         ).fetchall()
-    return [dict(row) for row in rows]
+    return [path_fields(dict(row)) for row in rows]
 
 
 def get_artifact(artifact_id: str) -> dict[str, Any] | None:
@@ -67,7 +68,7 @@ def get_artifact(artifact_id: str) -> dict[str, Any] | None:
             "SELECT * FROM artifacts WHERE artifact_id = ?",
             (str(artifact_id),),
         ).fetchone()
-    return dict(row) if row is not None else None
+    return path_fields(dict(row)) if row is not None else None
 
 
 def delete_artifacts_by_owner(owner_type: str, owner_id: str) -> int:

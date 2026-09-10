@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { AutoComplete, Button, Checkbox, Drawer, Input, InputNumber, Modal, Progress, Select, Table, Tag, message } from "antd";
 import type { ColumnsType } from "antd/es/table";
+import { CopyCodeButton } from "../components/CopyCodeButton";
 import {
   addToPool,
   archiveTerminalTasks,
@@ -39,6 +40,7 @@ import {
   SourceFile,
   SourceSortMode,
   StrategyRepairUiStatus,
+  UI_TEXT,
   WorkflowUiState,
   extractMissingRanges,
   formatDate,
@@ -55,6 +57,11 @@ import {
   statusClass,
   zh
 } from "../app/ui";
+
+function readableError(error: unknown, fallback: string): string {
+  const detail = error instanceof Error ? error.message : String(error || "");
+  return detail.trim() && detail !== "[object Object]" ? detail.trim() : fallback;
+}
 
 export function LaunchFlowPage({
   onResearchCreated,
@@ -227,7 +234,7 @@ export function LaunchFlowPage({
       }
       return files;
     } catch (error) {
-      message.warning("自然语言文本列表暂时不可用");
+      message.warning(`${UI_TEXT.term.strategyDescriptionFile}列表暂时不可用`);
       return [];
     } finally {
       setLoadingSources(false);
@@ -403,9 +410,9 @@ export function LaunchFlowPage({
             repairWarnings: []
           }
         : file));
-      message.success("AI 修正完成，启动回测时将使用修正后的代码");
+      message.success("AI 修正完成，开始回测时将使用修正后的代码");
     } catch (error) {
-      const detail = "AI 修正请求失败，请检查接口配置或网络后重试";
+      const detail = readableError(error, "AI 修正请求失败，请检查接口配置或网络后重试");
       setLocalRepairProgress(100);
       setLocalRepairFeedback({ status: "failed", detail });
       message.error(detail);
@@ -441,9 +448,9 @@ export function LaunchFlowPage({
         return;
       }
       setManualStrategyCode(feedback.strategyCode);
-      message.success("AI 修正完成，启动回测时将使用修正后的代码");
+      message.success("AI 修正完成，开始回测时将使用修正后的代码");
     } catch (error) {
-      const detail = "AI 修正请求失败，请检查接口配置或网络后重试";
+      const detail = readableError(error, "AI 修正请求失败，请检查接口配置或网络后重试");
       setManualRepairProgress(100);
       setManualRepairFeedback({ status: "failed", detail });
       message.error(detail);
@@ -470,7 +477,7 @@ export function LaunchFlowPage({
       return;
     }
     if (!isCodeMode && !canRunNaturalLanguage) {
-      message.warning("启动前请先保存当前文本");
+      message.warning("开始前请先保存当前策略描述");
       return;
     }
 
@@ -479,7 +486,7 @@ export function LaunchFlowPage({
     const startedAt = new Date().toISOString();
     onWorkflowChange({
       stageKey: "generation",
-      message: isCodeMode ? "正在登记策略代码并创建 strategy.py。" : "正在根据自然语言生成 strategy.py。",
+      message: isCodeMode ? "正在登记策略代码并创建 strategy.py。" : "正在根据策略描述生成 strategy.py。",
       startedAt,
       isRunning: true,
       progress: 0.05,
@@ -601,21 +608,22 @@ export function LaunchFlowPage({
 
       onWorkflowChange({
         stageKey: "idle",
-        message: autoDownloaded ? "研究流程已完成，缺失行情已自动补齐。" : "研究流程已创建。",
+        message: autoDownloaded ? "生成与基线回测已完成，缺失行情已自动补齐。" : "回测运行已创建。",
         isRunning: false,
         progress: 1,
         error: null
       });
-      message.success(autoDownloaded ? "缺失行情已下载，研究流程已创建" : "研究流程已创建");
+      message.success(autoDownloaded ? "缺失行情已下载，回测运行已创建" : "回测运行已创建");
     } catch (error) {
-      setLaunchError({ error: String(error) });
+      const detail = readableError(error, "创建运行失败");
+      setLaunchError({ error: detail });
       onWorkflowChange({
         stageKey: "idle",
-        message: String(error),
+        message: detail,
         isRunning: false,
         error
       });
-      message.error(String(error));
+      message.error(detail);
     } finally {
       if (mountedRef.current) setLoadingResearch(false);
     }
@@ -625,9 +633,9 @@ export function LaunchFlowPage({
     <section className="view is-active">
       <div className="hero-band">
         <div>
-          <p className="eyebrow">研究启动</p>
+          <p className="eyebrow">研究工作台</p>
           <h2>{zh.launchFlow}</h2>
-          <p className="hero-copy">在这里配置回测参数，并通过自然语言、粘贴代码或本地文件启动完整研究流程。</p>
+          <p className="hero-copy">配置回测参数，并通过策略描述、粘贴代码或上传文件创建一次生成与基线回测运行。</p>
         </div>
       </div>
 
@@ -636,7 +644,7 @@ export function LaunchFlowPage({
           <div className="band-head">
             <div>
               <h3>{zh.startConfig}</h3>
-              <p className="band-note">三种输入方式共用同一套回测配置，成功后都会进入同一条基线回测与参数优化链路。</p>
+              <p className="band-note">三种输入方式共用同一套回测参数，成功后都会生成基线结果，并可继续参数优化。</p>
             </div>
           </div>
           <div className="form-grid">
@@ -666,7 +674,7 @@ export function LaunchFlowPage({
                         placeholder="搜索文件名 / 拼音 / 英文"
                       />
                       <Select<SourceSortMode>
-                        aria-label="自然语言文本排序"
+                        aria-label="策略描述文件排序"
                         className="source-sort-select"
                         size="small"
                         value={sourceSortMode}
@@ -689,7 +697,7 @@ export function LaunchFlowPage({
                         disabled={loadingSources}
                       >
                         <strong>{file.name}</strong>
-                        <small>{file.size ? `${file.size} 字节` : "本地 txt"}</small>
+                        <small>{file.size ? `${file.size} 字节` : UI_TEXT.term.strategyDescriptionFile}</small>
                       </button>
                     ))}
                     {visibleSourceFiles.length === 0 && <div className="source-search-empty">没有匹配的文本</div>}
@@ -729,6 +737,7 @@ export function LaunchFlowPage({
                     <span>{zh.strategyCodeInput}</span>
                     <div className="inline-input-row">
                       <span className="meta-inline">直接粘贴完整 strategy.py</span>
+                      <CopyCodeButton code={manualStrategyCode} />
                       <Button size="small" disabled={!manualStrategyCode.trim()} loading={repairingManualCode} onClick={repairManualStrategyCode}>AI 修正代码</Button>
                     </div>
                   </div>
@@ -813,7 +822,10 @@ export function LaunchFlowPage({
                   <section className="field span-2">
                     <div className="field-head">
                       <span>代码预览</span>
-                      <span className="meta-inline">{selectedLocalFile.aiRepaired ? "AI 修正版 · 本地原文件未修改" : selectedLocalFile.relativePath}</span>
+                      <div className="inline-input-row">
+                        <span className="meta-inline">{selectedLocalFile.aiRepaired ? "AI 修正版 · 本地原文件未修改" : selectedLocalFile.relativePath}</span>
+                        <CopyCodeButton code={selectedLocalFile.code} />
+                      </div>
                     </div>
                     <Input.TextArea rows={12} value={selectedLocalFile.code} readOnly />
                     {selectedLocalFile.aiRepaired && selectedLocalFile.repairWarnings?.length ? (
@@ -844,7 +856,7 @@ export function LaunchFlowPage({
                 <div className="band-head compact">
                   <div>
                     <h3>{zh.launchErrorTitle}</h3>
-                    <p className="band-note">{launchError?.error || launchError?.generation?.error || launchError?.backtest?.error || "启动失败"}</p>
+                    <p className="band-note">{launchError?.error || launchError?.generation?.error || launchError?.backtest?.error || "创建运行失败"}</p>
                   </div>
                   <span className="status-pill status-failed">失败</span>
                 </div>

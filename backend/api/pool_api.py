@@ -14,6 +14,7 @@ def add_to_pool(payload: PoolAddRequest) -> dict:
     return pool_service.add_variant_to_pool(
         payload.run_id,
         payload.variant_name,
+        candidate_label=payload.candidate_label,
         tags=payload.tags,
         note=payload.note,
         vt_symbol=payload.vt_symbol,

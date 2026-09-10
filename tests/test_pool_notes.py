@@ -77,6 +77,64 @@ def test_manual_grid_snapshot_uses_selected_variant_parameters(tmp_path, monkeyp
     assert config["parameters"] == {"window": 24, "threshold": 0.25}
 
 
+def test_candidate_snapshot_uses_exact_grid_parameters_and_curve(tmp_path, monkeypatch):
+    runs_root = tmp_path / "runs"
+    pool_root = tmp_path / "pool"
+    _prepare_source_run(
+        runs_root,
+        variant_name="manual_grid",
+        variant_result={
+            "objective": "sharpe",
+            "base_parameters": {"window": 10, "threshold": 0.1},
+            "recommended": {"parameters": {"window": 20, "threshold": 0.2}},
+            "metrics": {"sharpe": 1.5},
+        },
+    )
+    variant_path = runs_root / "run_1" / "variants" / "manual_grid"
+    (variant_path / "grid_summary.csv").write_text(
+        "rank,label,parameters,score,sharpe,excess_return,success,error\n"
+        '2,candidate_002,"{\'window\': 12, \'threshold\': 0.3}",1.8,1.8,4.2,True,\n',
+        encoding="utf-8",
+    )
+    candidate_path = variant_path / "candidates" / "candidate_002"
+    candidate_path.mkdir(parents=True)
+    expected_curve = "date,net_pnl\n2026-01-01,3\n"
+    (candidate_path / "daily_results.csv").write_text(expected_curve, encoding="utf-8")
+    monkeypatch.setattr(artifact_service, "RUNS_ROOT", runs_root)
+    monkeypatch.setattr(artifact_service, "POOL_STRATEGIES_ROOT", pool_root)
+
+    snapshot = artifact_service.create_pool_snapshot(
+        "run_1",
+        "manual_grid",
+        candidate_label="candidate_002",
+    )
+
+    pool_path = Path(snapshot["pool_path"])
+    config = json.loads((pool_path / "config.json").read_text(encoding="utf-8"))
+    result = json.loads((pool_path / "result.json").read_text(encoding="utf-8"))
+    manifest = json.loads((pool_path / "manifest.json").read_text(encoding="utf-8"))
+    assert config["parameters"] == {"window": 12, "threshold": 0.3}
+    assert result["candidate_label"] == "candidate_002"
+    assert result["metrics"]["sharpe"] == 1.8
+    assert manifest["source_candidate_label"] == "candidate_002"
+    assert (pool_path / "daily_results.csv").read_text(encoding="utf-8") == expected_curve
+    assert not (pool_path / "trades.csv").exists()
+
+
+def test_save_variant_candidate_curves_keeps_more_than_ten(tmp_path, monkeypatch):
+    runs_root = tmp_path / "runs"
+    monkeypatch.setattr(artifact_service, "RUNS_ROOT", runs_root)
+    candidates = [
+        {"label": f"candidate_{index:03d}", "daily_results": [{"date": "2026-01-01", "net_pnl": index}]}
+        for index in range(1, 13)
+    ]
+
+    artifact_service.save_variant_candidate_curves("run_1", "manual_grid", candidates)
+
+    saved = list((runs_root / "run_1" / "variants" / "manual_grid" / "candidates").glob("*/daily_results.csv"))
+    assert len(saved) == 12
+
+
 def test_update_notes_preserves_utf8_newlines_and_other_snapshot_files(tmp_path, monkeypatch):
     pool_root = tmp_path / "pool"
     item, pool_path = _prepare_pool_item(pool_root)

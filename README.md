@@ -278,6 +278,8 @@ AI 生成的参数范围会按 run 和 baseline 版本缓存，包含参数分�
 
 跟踪需要起点与当日两份快照，因此首次建立实盘源的当天还不能跟踪。回放结果单独保存在 `storage/live/`，不写入策略池，也不创建虚拟组合。
 
+服务器可在首次建立实盘源后运行 `powershell -ExecutionPolicy Bypass -File .\install-live-schedule.ps1`，创建“GYRO Daily Live Replay”计划任务。它会在周一至周五服务器本地时间 15:20 读取当天状态、保存快照、补齐行情并执行回放对账；休市或状态尚未更新时安全跳过，失败会每 10 分钟重试，日志写入 `storage/runtime/live-daily.log`。
+
 
 ## 实盘跟踪中的回放成交与信号
 

@@ -128,7 +128,8 @@ def test_local_source_supports_separate_strategy_and_vntrader_dirs(tmp_path, mon
 
     import os
     from datetime import timezone, timedelta
-    stamp = datetime(2026, 9, 2, 16, tzinfo=timezone(timedelta(hours=8))).timestamp()
+    # vn.py 在 15:05 写出的当日状态已经属于收盘后有效状态。
+    stamp = datetime(2026, 9, 2, 15, 5, tzinfo=timezone(timedelta(hours=8))).timestamp()
     os.utime(state_path, (stamp, stamp))
     monkeypatch.setenv(live_service.LIVE_SOURCE_DIR_ENV, "")
     monkeypatch.setenv(live_service.LIVE_STRATEGY_DIR_ENV, str(strategy_dir))

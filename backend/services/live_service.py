@@ -53,6 +53,7 @@ MAX_PACKAGE_BYTES = 256 * 1024 * 1024
 MAX_INSTANCES = 100
 REPLAY_TIMEOUT_SECONDS = 600
 MARKET_CLOSE = time(15, 10)
+STATE_FILE_CLOSE = time(15, 0)
 
 STATUS_MATCH = "MATCH"
 STATUS_MISMATCH = "MISMATCH"
@@ -92,7 +93,7 @@ def _check_capture_date(trade_date: str, *, local: bool = False) -> None:
     if local:
         state_path = local_vntrader_dir() / STATE_FILENAME
         modified = datetime.fromtimestamp(state_path.stat().st_mtime, BEIJING_TZ)
-        if modified.date().isoformat() != trade_date or modified.time() < MARKET_CLOSE:
+        if modified.date().isoformat() != trade_date or modified.time() < STATE_FILE_CLOSE:
             raise ValueError("状态文件修改时间不对应所选交易日收盘后；请确认文件已更新和服务器时钟正确")
 
 

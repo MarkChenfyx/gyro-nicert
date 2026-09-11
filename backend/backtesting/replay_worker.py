@@ -228,6 +228,9 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
     from backend.backtesting.cta_engine import BacktestingEngine
 
     package_root = Path(payload["package_root"]).resolve()
+    resource_root = Path(payload.get("resource_root") or package_root).resolve()
+    if not resource_root.is_dir():
+        raise FileNotFoundError(f"回放资源目录不存在：{resource_root}")
     strategy_path = (package_root / str(payload["module_path"])).resolve()
     strategy_path.relative_to(package_root)
     if not strategy_path.is_file():
@@ -259,7 +262,7 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
     injector = _state_injector(dict(payload.get("prior_state") or {}), applied, skipped)
 
     # 策略包内的模型文件按相对路径加载，整段回放都在包目录下执行。
-    with _resource_dir(package_root):
+    with _resource_dir(resource_root):
         strategy_class = _load_class(strategy_path, str(payload["class_name"]))
 
         engine = BacktestingEngine()

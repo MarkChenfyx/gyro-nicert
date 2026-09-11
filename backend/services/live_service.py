@@ -591,23 +591,47 @@ def _run_replay(
     prior_state: dict[str, Any],
 ) -> dict[str, Any]:
     package_root = package_root_for(source)
-    request = {
-        "package_root": str(package_root), "module_path": binding["module_path"],
-        "class_name": binding["class_name"], "vt_symbol": binding["vt_symbol"],
-        "parameters": binding["parameters"], "prior_state": prior_state,
-        "start_date": start_date, "end_date": end_date,
-    }
     with tempfile.TemporaryDirectory(prefix="gyro_replay_") as temporary:
-        input_path = Path(temporary) / "input.json"
-        output_path = Path(temporary) / "output.json"
+        temporary_root = Path(temporary)
+        resource_root = package_root
+        strategy_path = package_root / str(binding["module_path"])
+        try:
+            strategy_text = strategy_path.read_text(encoding="utf-8-sig")
+        except (OSError, UnicodeDecodeError):
+            strategy_text = ""
+        references = list(dict.fromkeys(SIDECAR_PATTERN.findall(strategy_text)))
+        if references:
+            resource_root = temporary_root / "resources"
+            search_root = package_root / "strategies" if (package_root / "strategies").is_dir() else package_root
+            for reference in references:
+                relative = Path(reference.replace("\\", "/"))
+                if relative.is_absolute() or ".." in relative.parts:
+                    continue
+                source_path = package_root / relative
+                if not source_path.is_file():
+                    source_path = search_root / relative.name
+                if source_path.is_file():
+                    target = resource_root / relative
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(source_path, target)
+
+        request = {
+            "package_root": str(package_root), "resource_root": str(resource_root),
+            "module_path": binding["module_path"],
+            "class_name": binding["class_name"], "vt_symbol": binding["vt_symbol"],
+            "parameters": binding["parameters"], "prior_state": prior_state,
+            "start_date": start_date, "end_date": end_date,
+        }
+        input_path = temporary_root / "input.json"
+        output_path = temporary_root / "output.json"
         input_path.write_text(json.dumps(request, ensure_ascii=False, default=str), encoding="utf-8")
         environment = dict(os.environ)
         environment["PYTHONPATH"] = os.pathsep.join(
-            filter(None, [str(PROJECT_ROOT), environment.get("PYTHONPATH", "")])
+            filter(None, [str(PROJECT_ROOT), str(package_root), environment.get("PYTHONPATH", "")])
         )
         completed = subprocess.run(
             [sys.executable, "-m", "backend.backtesting.replay_worker", str(input_path), str(output_path)],
-            cwd=str(package_root), env=environment,
+            cwd=str(resource_root), env=environment,
             capture_output=True, text=True, timeout=REPLAY_TIMEOUT_SECONDS,
         )
         if not output_path.exists():

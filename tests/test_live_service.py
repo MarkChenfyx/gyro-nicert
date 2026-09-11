@@ -429,6 +429,32 @@ def test_changed_code_never_matches(tmp_path, monkeypatch):
     assert live_service.track_day(source_id, "2026-09-03")["rows"][0]["status"] == "CONFIG_CHANGED"
 
 
+def test_replay_stages_flat_snapshot_models_at_strategy_relative_path(tmp_path, monkeypatch):
+    package = tmp_path / "code"
+    package.mkdir()
+    (package / "probe.py").write_text('MODEL = "strategies/probe.model"', encoding="utf-8")
+    (package / "probe.model").write_bytes(b"model snapshot")
+    observed = {}
+
+    def fake_run(command, **kwargs):
+        request = json.loads(Path(command[-2]).read_text(encoding="utf-8"))
+        resource_root = Path(request["resource_root"])
+        observed["cwd"] = Path(kwargs["cwd"])
+        observed["model"] = (resource_root / "strategies" / "probe.model").read_bytes()
+        Path(command[-1]).write_text(json.dumps({"success": True, "end_pos": 0}), encoding="utf-8")
+        return type("Completed", (), {"stdout": "", "stderr": ""})()
+
+    monkeypatch.setattr(live_service.subprocess, "run", fake_run)
+    result = live_service._run_replay(
+        {"module_path": "probe.py", "class_name": "Probe", "vt_symbol": "511380.SSE", "parameters": {}},
+        {"source_kind": "package", "package_path": str(package)},
+        "2026-09-03", "2026-09-03", {"pos": 0},
+    )
+    assert result["success"] is True
+    assert observed["model"] == b"model snapshot"
+    assert observed["cwd"].name == "resources"
+
+
 def test_minute_gap_and_missing_target_day_are_detected():
     from datetime import date, timedelta
     from types import SimpleNamespace
@@ -451,7 +477,8 @@ def test_worker_restores_state_after_on_start(tmp_path, monkeypatch):
         marker = 0
         variables = ["marker"]
         def on_init(self):
-            pass
+            with open("strategies/probe.model", "rb") as model:
+                assert model.read() == b"snapshot model"
         def on_start(self):
             self.marker = 1
             self.pos = 0
@@ -459,13 +486,16 @@ def test_worker_restores_state_after_on_start(tmp_path, monkeypatch):
             pass
 
     (tmp_path / "strategy.py").write_text("# isolated probe", encoding="utf-8")
+    resource_root = tmp_path / "resources"
+    (resource_root / "strategies").mkdir(parents=True)
+    (resource_root / "strategies" / "probe.model").write_bytes(b"snapshot model")
     bar = BarData(gateway_name="TEST", symbol="511380", exchange=Exchange.SSE,
                   datetime=datetime(2026, 9, 3, 9, 30), interval=Interval.MINUTE,
                   open_price=100, high_price=100, low_price=100, close_price=100)
     monkeypatch.setattr(local_data_provider, "load_bar_data", lambda *a: [bar])
     monkeypatch.setattr(replay_worker, "replay_data_issue", lambda *a: "")
     monkeypatch.setattr(replay_worker, "_load_class", lambda *a: Probe)
-    result = replay_worker.run({"package_root": str(tmp_path), "module_path": "strategy.py",
+    result = replay_worker.run({"package_root": str(tmp_path), "resource_root": str(resource_root), "module_path": "strategy.py",
                                 "class_name": "Probe", "vt_symbol": "511380.SSE",
                                 "end_date": "2026-09-03", "prior_state": {"pos": 500, "marker": 99}})
     assert result["end_pos"] == 500

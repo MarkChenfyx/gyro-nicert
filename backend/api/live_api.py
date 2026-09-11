@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import date, datetime, time
+
 from fastapi import APIRouter, Query
 
 from backend.api.schemas import LiveSnapshotRequest, LiveSourceImportRequest, LiveTrackRequest
@@ -7,6 +9,15 @@ from backend.services import live_scheduler, live_service
 
 
 router = APIRouter(prefix="/api/live", tags=["live"])
+
+
+@router.get("/price-bars")
+def get_live_price_bars(vt_symbol: str, trade_date: date) -> dict:
+    from backend.backtesting.local_data_provider import load_bar_rows, split_vt_symbol
+
+    symbol, exchange = split_vt_symbol(vt_symbol)
+    rows = load_bar_rows(symbol, exchange, "1m", datetime.combine(trade_date, time.min), datetime.combine(trade_date, time.max))
+    return {"items": [{"datetime": row["datetime"], "close": row["close"]} for row in rows]}
 
 
 @router.get("/local-status")

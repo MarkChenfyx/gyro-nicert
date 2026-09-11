@@ -129,7 +129,7 @@ export default function LivePage() {
     });
 
   const columns: ColumnsType<any> = [
-    { title: "策略实例", dataIndex: "instance_name", width: 300, ellipsis: true },
+    { title: "策略实例", dataIndex: "instance_name", width: 300, ellipsis: true, render: value => <Button type="link" onClick={() => setReplayInstance(String(value))}>{value}</Button> },
     { title: "标的", dataIndex: "vt_symbol", width: 118 },
     { title: "实盘手数", dataIndex: "fixed_size", width: 96, align: "right", render: (v) => num(v) },
     { title: "实盘持仓", dataIndex: "actual_pos", width: 104, align: "right", render: (v) => num(v) },

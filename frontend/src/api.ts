@@ -351,6 +351,10 @@ export function getLiveLocalStatus() {
   return request<any>("/api/live/local-status", { cache: "no-store" });
 }
 
+export function getLivePriceBars(symbol: string, day: string) {
+  return request<any>(`/api/live/price-bars?vt_symbol=${encodeURIComponent(symbol)}&trade_date=${encodeURIComponent(day)}`);
+}
+
 export function getLiveAutomationStatus() {
   return request<any>("/api/live/automation-status", { cache: "no-store" });
 }

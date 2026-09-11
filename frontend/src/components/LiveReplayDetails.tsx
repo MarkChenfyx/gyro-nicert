@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { Alert, Drawer, Empty, Select, Table, Tabs, Tag } from "antd";
+import LivePriceChart from "./LivePriceChart";
 
 type Row = Record<string, any>;
 const valueText = (value: any) => value == null ? "—" : typeof value === "boolean" ? (value ? "是" : "否") : String(value);
@@ -80,6 +81,7 @@ export default function LiveReplayDetails({ rows, tradeDate, instance, onClose }
       <Alert type="warning" message="所选范围中有策略未完成有效回放，不能将其空记录理解为当天没有交易。" />}
     {selectedRows.some(row => !row.trace_version) &&
       <p>部分记录未保存委托与信号细节；仍可查看已保存的成交。此页面只读取结果。</p>}
+    {selectedInstance && selectedRows[0]?.vt_symbol && <LivePriceChart symbol={selectedRows[0].vt_symbol} day={selectedDay} trades={tradesForDay} />}
     <Tabs items={[
       { key: "trades", label: `当日成交 ${tradesForDay.length} 笔`, children: <>
         <p>展开一笔成交，查看它关联的下单信号（可能发生在前一交易日）。</p>

@@ -16,6 +16,8 @@ def test_scheduler_runs_once_after_weekday_close(tmp_path, monkeypatch):
     assert live_scheduler.should_run(now) is True
     live_scheduler._write_status({"last_attempt_date": "2026-09-11", "last_status": "completed"})
     assert live_scheduler.should_run(now) is False
+    live_scheduler._write_status({"last_attempt_date": "2026-09-11", "last_status": "running"})
+    assert live_scheduler.should_run(now) is True
 
 
 def test_scheduler_skips_stale_state_for_holiday_or_late_update(tmp_path, monkeypatch):

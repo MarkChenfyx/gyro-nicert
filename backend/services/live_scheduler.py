@@ -86,11 +86,15 @@ def status() -> dict[str, Any]:
 def should_run(now: datetime | None = None) -> bool:
     current = now or now_beijing()
     saved = _read_status()
+    attempted_today = (
+        str(saved.get("last_attempt_date") or "") == current.date().isoformat()
+        and str(saved.get("last_status") or "") != "running"
+    )
     return (
         enabled()
         and current.weekday() < 5
         and current >= _scheduled_at(current.date())
-        and str(saved.get("last_attempt_date") or "") != current.date().isoformat()
+        and not attempted_today
     )
 
 

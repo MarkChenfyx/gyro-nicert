@@ -17,7 +17,7 @@ def get_live_price_bars(vt_symbol: str, trade_date: date) -> dict:
 
     symbol, exchange = split_vt_symbol(vt_symbol)
     rows = load_bar_rows(symbol, exchange, "1m", datetime.combine(trade_date, time.min), datetime.combine(trade_date, time.max))
-    return {"items": [{"datetime": row["datetime"], "close": row["close"]} for row in rows]}
+    return {"items": [{key: row[key] for key in ("datetime", "open", "high", "low", "close", "volume")} for row in rows]}
 
 
 @router.get("/local-status")

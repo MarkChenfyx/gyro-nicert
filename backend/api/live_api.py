@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Query
 
 from backend.api.schemas import LiveSnapshotRequest, LiveSourceImportRequest, LiveTrackRequest
-from backend.services import live_service
+from backend.services import live_scheduler, live_service
 
 
 router = APIRouter(prefix="/api/live", tags=["live"])
@@ -12,6 +12,11 @@ router = APIRouter(prefix="/api/live", tags=["live"])
 @router.get("/local-status")
 def get_local_source_status() -> dict:
     return live_service.local_source_status()
+
+
+@router.get("/automation-status")
+def get_live_automation_status() -> dict:
+    return live_scheduler.status()
 
 
 @router.get("/sources")

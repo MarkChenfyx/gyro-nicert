@@ -351,6 +351,10 @@ export function getLiveLocalStatus() {
   return request<any>("/api/live/local-status", { cache: "no-store" });
 }
 
+export function getLiveAutomationStatus() {
+  return request<any>("/api/live/automation-status", { cache: "no-store" });
+}
+
 export function listLiveSources() {
   return request<any>("/api/live/sources", { cache: "no-store" });
 }

@@ -1,14 +1,30 @@
 from __future__ import annotations
 
+import asyncio
+from contextlib import asynccontextmanager, suppress
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from backend.api import data_api, live_api, natural_language_api, optimization_api, pool_api, portfolio_api, research_api, run_api, strategy_api, strategy_research_api, task_api
 from backend.core.environment import env
+from backend.services import live_scheduler
 
 
-app = FastAPI(title="gyro_nicert API", version="0.1.0")
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    scheduler = asyncio.create_task(live_scheduler.run_forever()) if live_scheduler.enabled() else None
+    try:
+        yield
+    finally:
+        if scheduler is not None:
+            scheduler.cancel()
+            with suppress(asyncio.CancelledError):
+                await scheduler
+
+
+app = FastAPI(title="gyro_nicert API", version="0.1.0", lifespan=lifespan)
 
 cors_origins = [
     origin.strip()

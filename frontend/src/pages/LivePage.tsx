@@ -5,6 +5,7 @@ import LiveReplayDetails from "../components/LiveReplayDetails";
 import {
   createLiveSource,
   deleteLiveSource,
+  getLiveAutomationStatus,
   getLiveLocalStatus,
   getLiveRecord,
   getLiveSource,
@@ -35,6 +36,7 @@ function num(value: unknown, digits = 0) {
 
 export default function LivePage() {
   const [localStatus, setLocalStatus] = useState<any>(null);
+  const [automation, setAutomation] = useState<any>(null);
   const [sources, setSources] = useState<any[]>([]);
   const [detail, setDetail] = useState<any>(null);
   const [record, setRecord] = useState<any>(null);
@@ -46,8 +48,9 @@ export default function LivePage() {
   useEffect(() => { setReplayInstance(null); }, [record?.record_id]);
 
   const loadSources = useCallback(async () => {
-    const [status, list] = await Promise.all([getLiveLocalStatus(), listLiveSources()]);
+    const [status, list, automatic] = await Promise.all([getLiveLocalStatus(), listLiveSources(), getLiveAutomationStatus()]);
     setLocalStatus(status);
+    setAutomation(automatic);
     // 状态文件的北京日期就是它代表的交易日，直接当默认值，避免手填错日期。
     setTradeDate((current) => current || String(status?.state_trade_date || "") || todayInBeijing());
     const items = list?.items || [];
@@ -65,6 +68,13 @@ export default function LivePage() {
   useEffect(() => {
     loadSources().catch((error) => message.error(String(error)));
   }, [loadSources]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      getLiveAutomationStatus().then(setAutomation).catch(() => undefined);
+    }, 30000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   const sourceId = String(detail?.source?.source_id || "");
 
@@ -181,9 +191,29 @@ export default function LivePage() {
       <section className="band library-shell">
         <div className="library-section-head">
           <div>
+            <h3>内置自动跟踪</h3>
+            <p>平台保持运行时，工作日北京时间 {automation?.schedule_time || "15:20"} 自动保存状态、补齐行情并执行回放对账。</p>
+          </div>
+          <span className={`status-pill ${automation?.enabled ? "status-completed" : "status-failed"}`}>
+            {automation?.last_status === "running" ? "执行中" : automation?.enabled ? "已启用" : "已关闭"}
+          </span>
+        </div>
+        <div className="library-metric-grid portfolio-metric-grid">
+          <div className="library-metric-card"><span>下次检查</span><strong>{automation?.next_run_at ? String(automation.next_run_at).replace("T", " ").slice(0, 16) : "-"}</strong></div>
+          <div className="library-metric-card"><span>上次执行</span><strong>{automation?.last_finished_at ? String(automation.last_finished_at).replace("T", " ").slice(0, 16) : "尚未执行"}</strong></div>
+          <div className="library-metric-card"><span>上次状态</span><strong>{({ completed: "已完成", failed: "失败", skipped: "已跳过", running: "执行中" } as Record<string, string>)[automation?.last_status] || "等待首次执行"}</strong></div>
+        </div>
+        <div className="portfolio-weight-note">
+          {automation?.last_message || "当天晚于计划时间才启动平台时会自动补跑一次；同一天不会重复执行。"}
+        </div>
+      </section>
+
+      <section className="band library-shell">
+        <div className="library-section-head">
+          <div>
             <h3>本机实盘目录</h3>
             <p>
-              目录路径配置在 <code>.env</code> 的 <code>GYRO_LIVE_SOURCE_DIR</code>，
+              策略目录和 <code>.vntrader</code> 目录分别配置在 <code>.env</code>，
               平台从中读取策略代码、模型文件和每日持仓状态。
             </p>
           </div>

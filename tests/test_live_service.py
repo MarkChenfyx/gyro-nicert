@@ -420,13 +420,58 @@ def test_invalid_position_never_matches(tmp_path, monkeypatch, state):
     assert live_service.track_day(source_id, "2026-09-03")["rows"][0]["status"] == "NO_STATE"
 
 
-def test_changed_code_never_matches(tmp_path, monkeypatch):
+def test_changed_code_replays_with_warning(tmp_path, monkeypatch):
     source_id = _import(tmp_path, monkeypatch)
     root = live_service.package_root_for(live_service.live_repository.get_source(source_id))
     (root / "strategies" / "demo.py").write_text(PACKAGE_SOURCE + "\n# changed", encoding="utf-8")
     live_service.import_snapshot(source_id, {"trade_date": "2026-09-03", "settings": _settings(), "states": {"demo_live": {"pos": 500}}})
     _stub_market_data(monkeypatch)
-    assert live_service.track_day(source_id, "2026-09-03")["rows"][0]["status"] == "CONFIG_CHANGED"
+    calls = []
+    def replay(binding, source, *args):
+        calls.append(source)
+        return {"success": True, "end_pos": 300, "trades": [{"datetime": "2026-09-03T10:00:00"}]}
+    monkeypatch.setattr(live_service, "_run_replay", replay)
+    record = live_service.track_day(source_id, "2026-09-03")
+    row = record["rows"][0]
+    assert len(calls) == 1
+    assert row["status"] == "CONFIG_CHANGED"
+    assert row["version_changed"] is True
+    assert row["replay_pos"] == 300
+    assert row["difference"] == 200
+    assert len(row["replay_trades"]) == 1
+    assert "终点快照" in row["message"]
+    assert record["summary"]["unresolved"] == 1
+
+
+def test_other_strategy_code_change_does_not_block_replay(tmp_path, monkeypatch):
+    source_id = _import(tmp_path, monkeypatch)
+    root = live_service.package_root_for(live_service.live_repository.get_source(source_id))
+    (root / "strategies" / "other.py").write_text("class OtherStrategy: pass\n", encoding="utf-8")
+    live_service.import_snapshot(source_id, {
+        "trade_date": "2026-09-03",
+        "settings": _settings(),
+        "states": {"demo_live": {"pos": 500}},
+    })
+    _stub_market_data(monkeypatch)
+    monkeypatch.setattr(live_service, "_run_replay", lambda *_a, **_k: {
+        "success": True, "end_pos": 500.0, "trades": [], "end_variables": {},
+    })
+
+    assert live_service.track_day(source_id, "2026-09-03")["rows"][0]["status"] == "MATCH"
+
+
+def test_strategy_code_check_includes_referenced_model(tmp_path):
+    code_root = tmp_path / "code" / "strategies"
+    code_root.mkdir(parents=True)
+    (code_root / "demo.py").write_text(
+        PACKAGE_SOURCE + '\nMODEL = "strategies/demo.model"\n', encoding="utf-8"
+    )
+    binding = {"module_path": "strategies/demo.py"}
+    prior = {"code_hashes": {"strategies/demo.py": "same", "strategies/demo.model": "old"}}
+    current = {"code_hashes": {"strategies/demo.py": "same", "strategies/demo.model": "changed"}}
+
+    assert live_service._binding_code_hashes(binding, prior, tmp_path) != \
+        live_service._binding_code_hashes(binding, current, tmp_path)
 
 
 def test_replay_stages_flat_snapshot_models_at_strategy_relative_path(tmp_path, monkeypatch):

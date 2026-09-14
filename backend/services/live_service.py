@@ -380,6 +380,34 @@ def _config_hash(config: dict[str, Any]) -> str:
     })
 
 
+def _binding_code_hashes(
+    binding: dict[str, Any], capture: dict[str, Any], snapshot_root: Path
+) -> dict[str, str] | None:
+    """取单个策略源码及其直接引用模型的快照哈希。"""
+    hashes = dict(capture.get("code_hashes") or {})
+    module_path = Path(str(binding["module_path"]).replace("\\", "/"))
+    module_key = module_path.as_posix()
+    if module_key not in hashes:
+        return None
+
+    relevant = {module_key: str(hashes[module_key])}
+    try:
+        source = (snapshot_root / "code" / module_path).read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeDecodeError):
+        return None
+
+    for reference in dict.fromkeys(SIDECAR_PATTERN.findall(source)):
+        relative = Path(reference.replace("\\", "/"))
+        if relative.is_absolute() or ".." in relative.parts:
+            return None
+        candidates = (relative.as_posix(), (module_path.parent / relative.name).as_posix())
+        model_key = next((candidate for candidate in candidates if candidate in hashes), None)
+        if model_key is None:
+            return None
+        relevant[model_key] = str(hashes[model_key])
+    return relevant
+
+
 def _bindings_from_settings(source_id: str, settings: dict[str, Any], inventory: dict[str, str]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for instance_name, raw_config in settings.items():
@@ -680,7 +708,6 @@ def track_day(source_id: str, trade_date: str, *, update_data: bool = True) -> d
     for item in (prior, snapshot):
         metadata = _artifact_path(item["artifact_path"]) / "capture.json"
         captures.append(json.loads(metadata.read_text(encoding="utf-8")) if metadata.exists() else {})
-    code_verified = bool(captures[0].get("code_hashes")) and captures[0].get("code_hashes") == captures[1].get("code_hashes")
     replay_source = {**source, "source_kind": SOURCE_KIND_PACKAGE, "package_path": str(_artifact_path(snapshot["artifact_path"]) / "code")}
     # 起点快照记录的是它那一天收盘后的状态，所以回放从它的次日开始，一直放到目标日。
     replay_start = (date.fromisoformat(str(prior["trade_date"])) + timedelta(days=1)).isoformat()
@@ -709,9 +736,14 @@ def track_day(source_id: str, trade_date: str, *, update_data: bool = True) -> d
             rows.append({**base, "status": STATUS_NO_STATE,
                          "message": f"起点快照 {prior['trade_date']} 缺少该策略的状态，无法确定回放起点。"})
             continue
-        if not code_verified or _config_hash(dict(prior_settings.get(instance) or {})) != binding["config_hash"]:
+        prior_code = _binding_code_hashes(binding, captures[0], _artifact_path(prior["artifact_path"]))
+        current_code = _binding_code_hashes(binding, captures[1], _artifact_path(snapshot["artifact_path"]))
+        if (prior_code is None or current_code is None
+                or _config_hash(dict(prior_settings.get(instance) or {})) != binding["config_hash"]):
             rows.append({**base, "status": STATUS_CONFIG_CHANGED, "message": "起点与终点代码、模型或参数不一致，或旧快照未保存代码；请重新建立可靠起点。"})
             continue
+        version_changed = prior_code != current_code
+        base["version_changed"] = version_changed
         if binding["vt_symbol"] in data_failures:
             rows.append({**base, "status": STATUS_DATA_GAP, "message": data_failures[binding["vt_symbol"]]})
             continue
@@ -747,8 +779,14 @@ def track_day(source_id: str, trade_date: str, *, update_data: bool = True) -> d
             "replay_signals": list(result.get("signals") or []),
             "trace_version": result.get("trace_version"),
             "replay_variables": dict(result.get("end_variables") or {}),
-            "status": STATUS_MATCH if abs(difference) < 1e-9 else STATUS_MISMATCH,
-            "message": "",
+            "status": STATUS_CONFIG_CHANGED if version_changed else (
+                STATUS_MATCH if abs(difference) < 1e-9 else STATUS_MISMATCH
+            ),
+            "message": (
+                "该策略代码或模型哈希变化，已使用终点快照版本完成回放；"
+                "持仓及成交仅供参考，不计入一致或差异结论。"
+                if version_changed else ""
+            ),
         })
 
     for instance in settings:

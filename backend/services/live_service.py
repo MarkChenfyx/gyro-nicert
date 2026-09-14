@@ -779,10 +779,12 @@ def track_day(source_id: str, trade_date: str, *, update_data: bool = True) -> d
             "replay_signals": list(result.get("signals") or []),
             "trace_version": result.get("trace_version"),
             "replay_variables": dict(result.get("end_variables") or {}),
-            "status": STATUS_MATCH if abs(difference) < 1e-9 else STATUS_MISMATCH,
+            "status": STATUS_CONFIG_CHANGED if version_changed else (
+                STATUS_MATCH if abs(difference) < 1e-9 else STATUS_MISMATCH
+            ),
             "message": (
                 "该策略代码或模型哈希变化，已使用终点快照版本完成回放；"
-                "持仓及成交结论按回放结果展示，但需结合版本变化审阅。"
+                "持仓及成交仅供参考，不计入一致或差异结论。"
                 if version_changed else ""
             ),
         })

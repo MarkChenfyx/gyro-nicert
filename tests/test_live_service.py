@@ -420,7 +420,8 @@ def test_invalid_position_never_matches(tmp_path, monkeypatch, state):
     assert live_service.track_day(source_id, "2026-09-03")["rows"][0]["status"] == "NO_STATE"
 
 
-def test_changed_code_replays_with_warning(tmp_path, monkeypatch):
+@pytest.mark.parametrize(("end_pos", "expected_status"), [(300, "MISMATCH"), (500, "MATCH")])
+def test_changed_code_replays_with_warning(tmp_path, monkeypatch, end_pos, expected_status):
     source_id = _import(tmp_path, monkeypatch)
     root = live_service.package_root_for(live_service.live_repository.get_source(source_id))
     (root / "strategies" / "demo.py").write_text(PACKAGE_SOURCE + "\n# changed", encoding="utf-8")
@@ -429,18 +430,20 @@ def test_changed_code_replays_with_warning(tmp_path, monkeypatch):
     calls = []
     def replay(binding, source, *args):
         calls.append(source)
-        return {"success": True, "end_pos": 300, "trades": [{"datetime": "2026-09-03T10:00:00"}]}
+        return {"success": True, "end_pos": end_pos, "trades": [{"datetime": "2026-09-03T10:00:00"}]}
     monkeypatch.setattr(live_service, "_run_replay", replay)
     record = live_service.track_day(source_id, "2026-09-03")
     row = record["rows"][0]
     assert len(calls) == 1
-    assert row["status"] == "CONFIG_CHANGED"
+    assert row["status"] == expected_status
     assert row["version_changed"] is True
-    assert row["replay_pos"] == 300
-    assert row["difference"] == 200
+    assert row["replay_pos"] == end_pos
+    assert row["difference"] == 500 - end_pos
     assert len(row["replay_trades"]) == 1
     assert "终点快照" in row["message"]
-    assert record["summary"]["unresolved"] == 1
+    assert record["summary"]["match"] == (expected_status == "MATCH")
+    assert record["summary"]["mismatch"] == (expected_status == "MISMATCH")
+    assert record["summary"]["unresolved"] == 0
 
 
 def test_other_strategy_code_change_does_not_block_replay(tmp_path, monkeypatch):

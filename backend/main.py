@@ -24,7 +24,7 @@ async def lifespan(_app: FastAPI):
                 await scheduler
 
 
-app = FastAPI(title="gyro_nicert API", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="Quanta API", version="0.1.0", lifespan=lifespan)
 
 cors_origins = [
     origin.strip()
@@ -61,7 +61,7 @@ async def general_error_handler(request: Request, exc: Exception) -> JSONRespons
 
 @app.get("/api/health", tags=["health"])
 def health() -> dict:
-    return {"ok": True, "service": "gyro_nicert"}
+    return {"ok": True, "service": "quanta"}
 
 
 app.include_router(strategy_api.router)

@@ -33,6 +33,21 @@ def test_normalize_fixed_size_leaves_unit_position_unchanged():
     assert changed is False
 
 
+def test_normalize_runtime_capital_sizing():
+    code = '''class DemoStrategy:
+    fixed_size = 1
+    def on_bar(self, bar):
+        self.fixed_size = int(self.capital // bar.close_price)
+        return self.fixed_size
+'''
+    normalized, changed, _ = normalize_fixed_size(code)
+    namespace = {}
+    exec(normalized, namespace)
+    assert changed
+    assert namespace["DemoStrategy"]().on_bar(None) == 1
+    assert "self.capital" not in normalized
+
+
 def test_open_order_volume_accepts_self_fixed_size():
     code = """class DemoStrategy:\n    fixed_size = 1\n    def trade(self, price):\n        self.buy(price, self.fixed_size)\n        self.short(price=price, volume=self.fixed_size)\n"""
 

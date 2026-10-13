@@ -1,17 +1,21 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
+import json
 from typing import Any
 import threading
 
 from backend.core.environment import env
+from backend.core.paths import RUNTIME_ROOT
 
 
 RQDATA_HOST = ("rqdatad-pro.ricequant.com", 16011)
 PRICE_ADJUST_TYPE = "pre"
 _INIT_LOCK = threading.Lock()
 _INITIALIZED = False
+TRADING_DATES_CACHE = RUNTIME_ROOT / "cn_trading_dates.json"
+TRADING_DATES_START = date(2015, 1, 1)
 
 
 EXCHANGE_TO_RQ_SUFFIX = {
@@ -147,3 +151,46 @@ class RQDataClient:
 
 def get_default_client() -> RQDataClient:
     return RQDataClient()
+
+
+def _cached_trading_dates() -> dict[str, Any]:
+    try:
+        value = json.loads(TRADING_DATES_CACHE.read_text(encoding="utf-8"))
+        return value if isinstance(value, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def cn_closed_weekdays(start: date, end: date, *, fetch: bool = True) -> set[date]:
+    """沪深市场休市的工作日（节假日）。
+
+    交易日历来自 RQData 并缓存到本地；缓存未覆盖该区间且无法获取时返回空集合，
+    调用方据此保持保守（把无行情的工作日当作行情缺失）。
+    """
+    cache = _cached_trading_dates()
+    covered = str(cache.get("start", "9999")) <= start.isoformat() and end.isoformat() <= str(cache.get("end", ""))
+    if not covered and fetch:
+        try:
+            get_default_client().init()
+            import rqdatac
+
+            first, last = min(start, TRADING_DATES_START), date(end.year, 12, 31)
+            dates = rqdatac.get_trading_dates(first, last, market="cn")
+            if dates:
+                cache = {"start": first.isoformat(), "end": last.isoformat(),
+                         "dates": [item.isoformat()[:10] for item in dates]}
+                TRADING_DATES_CACHE.parent.mkdir(parents=True, exist_ok=True)
+                TRADING_DATES_CACHE.write_text(json.dumps(cache), encoding="utf-8")
+                covered = cache["start"] <= start.isoformat() and end.isoformat() <= cache["end"]
+        except Exception:
+            return set()
+    if not covered:
+        return set()
+    trading = set(cache.get("dates") or [])
+    closed: set[date] = set()
+    day = start
+    while day <= end:
+        if day.weekday() < 5 and day.isoformat() not in trading:
+            closed.add(day)
+        day += timedelta(days=1)
+    return closed

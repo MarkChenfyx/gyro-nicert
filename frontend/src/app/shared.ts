@@ -220,8 +220,8 @@ export function loadOptimizeDraft(): Record<string, any> {
 }
 
 export const zh = {
-  workbench: "\u7814\u7a76\u5de5\u4f5c\u53f0",
-  subtitle: "策略描述生成、参数优化和策略池沉淀的统一入口。",
+  workbench: "\u91cf\u5316\u7814\u7a76\u5de5\u4f5c\u53f0",
+  subtitle: "策略研究、回测优化与实盘跟踪的统一入口。",
   launchFlow: UI_TEXT.page.launch,
   generate: UI_TEXT.page.generate,
   optimize: UI_TEXT.page.optimize,
@@ -716,6 +716,13 @@ export function cumulativeBuyHoldSeries(rows: any[]): NormalizedCurvePoint[] {
   return rows
     .map((row) => {
       const currentClose = closeValue(row);
+      if (previousClose === null && currentClose !== null && currentClose > 0) {
+        previousClose = currentClose;
+        return {
+          date: rowDate(row),
+          value: 0
+        };
+      }
       const denominator = referenceClose(row, previousClose);
       if (currentClose !== null && currentClose > 0) previousClose = currentClose;
       if (currentClose === null || currentClose <= 0 || denominator === null || denominator <= 0) return null;

@@ -135,6 +135,7 @@ export function createResearchBaseline(payload: ResearchBaselinePayload) {
 export type ResearchCodeBaselinePayload = {
   strategy_name: string;
   strategy_code: string;
+  model_files?: Record<string, string>;
   symbol: string;
   exchange: string;
   interval: string;
@@ -351,12 +352,24 @@ export function getLiveLocalStatus() {
   return request<any>("/api/live/local-status", { cache: "no-store" });
 }
 
+export function listResearchSymbols() {
+  return request<{ symbols: string[] }>("/api/research/symbols");
+}
+
 export function getLivePriceBars(symbol: string, day: string) {
   return request<any>(`/api/live/price-bars?vt_symbol=${encodeURIComponent(symbol)}&trade_date=${encodeURIComponent(day)}`);
 }
 
 export function getLiveAutomationStatus() {
   return request<any>("/api/live/automation-status", { cache: "no-store" });
+}
+
+export function getBrokerOverview() {
+  return request<any>("/api/live/broker", { cache: "no-store" });
+}
+
+export function captureBrokerDbf() {
+  return request<any>("/api/live/broker/capture", { method: "POST" });
 }
 
 export function listLiveSources() {

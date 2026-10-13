@@ -1425,7 +1425,7 @@ export default function ParameterOptimizationPage({
     <section className="view is-active">
       <div className="hero-band compact-hero">
         <div>
-          <p className="eyebrow">研究工作台</p>
+          <p className="eyebrow">Quanta</p>
           <h2>{zh.optimize}</h2>
           <p className="hero-copy">按策略系列选择回测运行，比较不同结果版本，并将确认结果加入策略池。</p>
         </div>

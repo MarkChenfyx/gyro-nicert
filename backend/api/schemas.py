@@ -58,6 +58,8 @@ class ResearchBaselineCreateRequest(BaseModel):
 class ResearchCodeBaselineCreateRequest(BaseModel):
     strategy_name: str
     strategy_code: str
+    model_files: dict[str, str] = Field(default_factory=dict)
+    parameters: dict[str, Any] = Field(default_factory=dict)
     symbol: str = "510300"
     exchange: str = "SSE"
     interval: str = "1m"

@@ -20,6 +20,7 @@ import {
   getVariantCurve,
   getRun,
   listRuns,
+  listResearchSymbols,
   listNaturalLanguageSources,
   listPool,
   listTasks,
@@ -94,9 +95,15 @@ export function LaunchFlowPage({
   const [manualStrategyName, setManualStrategyName] = useState(() => String(restoredLaunchDraft.manualStrategyName || ""));
   const [manualStrategyCode, setManualStrategyCode] = useState(() => String(restoredLaunchDraft.manualStrategyCode || ""));
   const [localStrategyFiles, setLocalStrategyFiles] = useState<LocalStrategyFile[]>(() => restoredLaunchDraft.localStrategyFiles || []);
+  const [modelFiles, setModelFiles] = useState<Record<string, string>>({});
   const [selectedLocalPath, setSelectedLocalPath] = useState(() => String(restoredLaunchDraft.selectedLocalPath || restoredLaunchDraft.localStrategyFiles?.[0]?.relativePath || ""));
   const localFolderInputRef = useRef<HTMLInputElement>(null);
   const [vtSymbolInput, setVtSymbolInput] = useState(() => String(restoredLaunchDraft.vtSymbolInput || "511380.SSE"));
+  const [recentSymbols, setRecentSymbols] = useState<string[]>([]);
+  useEffect(() => {
+    listResearchSymbols().then(result => setRecentSymbols(result.symbols)).catch(() => {});
+  }, []);
+  const symbolOptions = [...new Set([...LAUNCH_SYMBOL_OPTIONS.map(item => item.value), ...recentSymbols])].map(value => ({ value }));
   const [interval, setInterval] = useState(() => String(restoredLaunchDraft.interval || "1m"));
   const [startDate, setStartDate] = useState(() => String(restoredLaunchDraft.startDate || "2025-01-02"));
   const [endDate, setEndDate] = useState(() => String(restoredLaunchDraft.endDate || "2026-06-25"));
@@ -348,27 +355,45 @@ export function LaunchFlowPage({
 
   async function loadLocalStrategyFile(event: React.ChangeEvent<HTMLInputElement>) {
     const inputFiles = Array.from(event.target.files || []);
-    const file = inputFiles[0];
-    if (!file || !file.name.toLowerCase().endsWith(".py")) {
+    const pythonFiles = inputFiles.filter(file => file.name.toLowerCase().endsWith(".py"));
+    const file = pythonFiles[0];
+    if (!file || pythonFiles.length !== 1) {
       setLocalStrategyFiles([]);
       setSelectedLocalPath("");
-      message.warning("请选择 .py 策略文件");
+      setModelFiles({});
+      message.warning("请选择一个主 .py 策略，可同时选择它需要的模型附件");
       event.target.value = "";
       return;
     }
     try {
+      if (inputFiles.reduce((total, item) => total + item.size, 0) > 16 * 1024 * 1024) {
+        throw new Error("策略和模型合计不能超过16MB");
+      }
+      const attachments: Record<string, string> = {};
+      for (const item of inputFiles.filter(item => item !== file)) {
+        if (!/\.(model|pkl|pickle|joblib|npy)$/i.test(item.name)) throw new Error(`不支持的附件：${item.name}`);
+        attachments[item.name] = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result).split(",")[1]);
+          reader.onerror = () => reject(new Error(`无法读取：${item.name}`));
+          reader.readAsDataURL(item);
+        });
+      }
       const loaded: LocalStrategyFile[] = [{
         name: file.name,
         relativePath: file.name,
         code: await file.text()
       }];
       setLocalStrategyFiles(loaded);
+      setModelFiles(attachments);
       setSelectedLocalPath(loaded[0].relativePath);
       setManualStrategyName(loaded[0].name.replace(/\.py$/i, ""));
       setLocalRepairProgress(0);
       setLocalRepairFeedback(null);
-      message.success(`已读取策略文件：${file.name}`);
+      message.success(`已读取策略及 ${Object.keys(attachments).length} 个模型附件`);
     } catch (error) {
+      setModelFiles({});
+      setLocalStrategyFiles([]);
       message.error(`读取本地策略失败：${String(error)}`);
     } finally {
       event.target.value = "";
@@ -563,6 +588,7 @@ export function LaunchFlowPage({
         ? await createResearchBaselineFromCode({
             strategy_name: manualStrategyName.trim(),
             strategy_code: strategyCode,
+            model_files: inputMode === "local_code" ? modelFiles : undefined,
             symbol,
             exchange,
             interval,
@@ -587,6 +613,7 @@ export function LaunchFlowPage({
             }))
           };
 
+      if (payload?.baseline) setRecentSymbols(items => [...new Set([`${symbol}.${exchange}`, ...items])]);
       if (payload?.generation) onGenerated(payload.generation);
       if (isCodeMode && payload?.generation?.strategy?.fixed_size_normalized) {
         message.info("检测到策略仓位不是单位仓位，平台已自动统一为 fixed_size = 1。");
@@ -633,7 +660,7 @@ export function LaunchFlowPage({
     <section className="view is-active">
       <div className="hero-band">
         <div>
-          <p className="eyebrow">研究工作台</p>
+          <p className="eyebrow">Quanta</p>
           <h2>{zh.launchFlow}</h2>
           <p className="hero-copy">配置回测参数，并通过策略描述、粘贴代码或上传文件创建一次生成与基线回测运行。</p>
         </div>
@@ -774,22 +801,26 @@ export function LaunchFlowPage({
                 <section className="field span-2">
                   <div className="field-head">
                     <span>本地策略文件</span>
-                    <span className="meta-inline">直接选择一个 .py 策略文件</span>
+                    <span className="meta-inline">选择一个 .py，可同时选中配套 .model 等文件</span>
                   </div>
                   <input
                     ref={localFolderInputRef}
                     type="file"
-                    accept=".py,text/x-python"
+                    accept=".py,.model,.pkl,.pickle,.joblib,.npy"
+                    multiple
                     onChange={loadLocalStrategyFile}
                     style={{ display: "none" }}
                   />
                   <div className="inline-input-row">
-                    <Button onClick={() => localFolderInputRef.current?.click()}>选择 .py 文件</Button>
+                    <Button onClick={() => localFolderInputRef.current?.click()}>选择策略和模型</Button>
                     <Button disabled={!selectedLocalFile} loading={repairingLocalCode} onClick={repairLocalStrategyCode}>AI 修正代码</Button>
                     <span className="meta-inline">
                       {selectedLocalFile ? `已选择：${selectedLocalFile.name}` : "尚未选择策略文件"}
                     </span>
                   </div>
+                  <span className="meta-inline">
+                    {Object.keys(modelFiles).length ? `模型附件：${Object.keys(modelFiles).join("、")}。固定模型：KBins只开放买卖标签和持仓周期优化，其他模型暂不自动开放参数。` : "无模型附件；如策略需要模型，请与 .py 一起重新选择。刷新页面后需重新选择模型附件。"}
+                  </span>
                   {(repairingLocalCode || localRepairFeedback) && (
                     <div className={`ai-repair-mini ${localRepairFeedback ? `is-${localRepairFeedback.status}` : ""}`}>
                       <span className="ai-repair-mini-label">
@@ -842,7 +873,7 @@ export function LaunchFlowPage({
                 <span className="meta-inline">仅支持单一标的</span>
               </div>
               <div className="pipeline-config-grid">
-                <label className="field"><span>{zh.symbol}</span><AutoComplete value={vtSymbolInput} options={LAUNCH_SYMBOL_OPTIONS.map(({ value }) => ({ value }))} onChange={(value) => { setVtSymbolInput(value); const matched = LAUNCH_SYMBOL_OPTIONS.find((item) => item.value === value.trim().toUpperCase()); if (matched) setSlippage(matched.slippage); }} placeholder="SYMBOL.EXCHANGE" /></label>
+                <label className="field"><span>{zh.symbol}</span><AutoComplete value={vtSymbolInput} options={symbolOptions} onChange={(value) => { setVtSymbolInput(value); const matched = LAUNCH_SYMBOL_OPTIONS.find((item) => item.value === value.trim().toUpperCase()); if (matched) setSlippage(matched.slippage); }} placeholder="SYMBOL.EXCHANGE" /></label>
                 <label className="field"><span>{zh.interval}</span><Input value={interval} onChange={(event) => setInterval(event.target.value)} /></label>
                 <label className="field"><span>{zh.rate}</span><InputNumber min={0} step={0.000001} value={rate} onChange={(value) => setRate(typeof value === "number" ? value : null)} /></label>
                 <label className="field"><span>{zh.startDate}</span><Input type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} /></label>

@@ -216,7 +216,7 @@ export function StrategyGenerationPage({
     <section className="view is-active">
       <div className="hero-band compact-hero">
         <div>
-          <p className="eyebrow">研究工作台</p>
+          <p className="eyebrow">Quanta</p>
           <h2>{zh.generate}</h2>
           <p className="hero-copy">这个页面会实时显示策略生成、行情下载、基线回测，以及首轮结果预览。</p>
         </div>

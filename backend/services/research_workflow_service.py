@@ -148,6 +148,10 @@ def create_baseline_run_for_strategy(
         "class_name": str(report.get("class_name") or strategy.get("class_name") or ""),
         "params": dict(report.get("params") or {}),
     }
+    resources_path = code_path.parent / "model_files.json"
+    if resources_path.is_file():
+        resources = json.loads(resources_path.read_text(encoding="utf-8"))
+        config_payload = {**dict(config_payload or {}), **resources}
     return _create_baseline_from_strategy_payload(
         strategy=dict(strategy),
         generated=generated,
@@ -165,14 +169,25 @@ def create_baseline_run_from_manual_code(
     baseline_result_payload: dict[str, Any] | None = None,
     daily_results: Any = None,
     trades: Any = None,
+    model_files: dict[str, str] | None = None,
+    strategy_parameters: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     generated: dict[str, Any] = {}
     try:
+        from backend.backtesting.strategy_resources import validate_resources
+        files = dict(model_files or {})
+        hashes = validate_resources(files, strategy_code)
+        if files:
+            config_payload = {**dict(config_payload or {}), "model_files": files, "model_hashes": hashes}
         strategy = strategy_service.register_manual_strategy(
             strategy_name=strategy_name,
             code=strategy_code,
         )
         executable_code = Path(str(strategy["code_path"])).read_text(encoding="utf-8")
+        if files:
+            (Path(str(strategy["code_path"])).parent / "model_files.json").write_text(
+                json.dumps({"model_files": files, "model_hashes": hashes}, ensure_ascii=False), encoding="utf-8"
+            )
         generated = {
             "success": True,
             "source_type": "manual_code",
@@ -181,7 +196,7 @@ def create_baseline_run_from_manual_code(
             "source_text": str(strategy_code or ""),
             "strategy_code": executable_code,
             "class_name": str(strategy.get("class_name") or ""),
-            "params": {},
+            "params": dict(strategy_parameters or {}),
             "diagnostics": [],
         }
         baseline_payload = _create_baseline_from_strategy_payload(

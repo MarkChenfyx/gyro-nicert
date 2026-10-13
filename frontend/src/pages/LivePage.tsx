@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
-import { Button, Input, Modal, Table, Tag, message } from "antd";
+import { Button, Input, Modal, Table, Tabs, Tag, message } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import LiveReplayDetails from "../components/LiveReplayDetails";
+import BrokerAssetCurve from "../components/BrokerAssetCurve";
 import {
+  captureBrokerDbf,
   createLiveSource,
   deleteLiveSource,
   getLiveAutomationStatus,
+  getBrokerOverview,
   getLiveLocalStatus,
   getLiveRecord,
   getLiveSource,
@@ -34,9 +37,16 @@ function num(value: unknown, digits = 0) {
   return parsed.toLocaleString("zh-CN", { minimumFractionDigits: digits, maximumFractionDigits: digits });
 }
 
+function signed(value: unknown, digits = 2) {
+  const parsed = Number(value);
+  const tone = !Number.isFinite(parsed) || parsed === 0 ? "" : parsed > 0 ? "positive" : "negative";
+  return <span className={`broker-value ${tone}`}>{num(value, digits)}</span>;
+}
+
 export default function LivePage() {
   const [localStatus, setLocalStatus] = useState<any>(null);
   const [automation, setAutomation] = useState<any>(null);
+  const [broker, setBroker] = useState<any>(null);
   const [sources, setSources] = useState<any[]>([]);
   const [detail, setDetail] = useState<any>(null);
   const [record, setRecord] = useState<any>(null);
@@ -48,9 +58,10 @@ export default function LivePage() {
   useEffect(() => { setReplayInstance(null); }, [record?.record_id]);
 
   const loadSources = useCallback(async () => {
-    const [status, list, automatic] = await Promise.all([getLiveLocalStatus(), listLiveSources(), getLiveAutomationStatus()]);
+    const [status, list, automatic, brokerOverview] = await Promise.all([getLiveLocalStatus(), listLiveSources(), getLiveAutomationStatus(), getBrokerOverview()]);
     setLocalStatus(status);
     setAutomation(automatic);
+    setBroker(brokerOverview);
     // 状态文件的北京日期就是它代表的交易日，直接当默认值，避免手填错日期。
     setTradeDate((current) => current || String(status?.state_trade_date || "") || todayInBeijing());
     const items = list?.items || [];
@@ -106,6 +117,13 @@ export default function LivePage() {
       setRecord(result);
       const summary = result?.summary || {};
       message.success(`跟踪完成：一致 ${summary.match || 0}，有差异 ${summary.mismatch || 0}`);
+    });
+
+  const captureBroker = () =>
+    withBusy("broker", async () => {
+      const payload = await captureBrokerDbf();
+      setBroker(payload?.overview || null);
+      message.success(payload?.capture?.status === "refreshed" ? "DBF 内容没有变化，已重新导入" : "券商数据已归档并导入");
     });
 
   function confirmDiscard() {
@@ -187,6 +205,118 @@ export default function LivePage() {
           <Button onClick={() => loadSources().catch((error) => message.error(String(error)))}>刷新</Button>
         </div>
       </div>
+
+      <section className="band library-shell broker-panel">
+        <div className="library-section-head">
+          <div>
+            <h3>券商账户</h3>
+            <p>只读采集 QMT 交易端导出的 DBF，保存真实账户、持仓、委托和成交。每项日期独立显示，不把旧数据当成当天数据。</p>
+          </div>
+          <div className="portfolio-head-actions">
+            <span className={`status-pill ${broker?.source?.available ? "status-completed" : "status-failed"}`}>
+              {broker?.source?.available ? "数据目录可读" : "尚未连接"}
+            </span>
+            <Button type="primary" loading={busy === "broker"} disabled={!broker?.source?.available} onClick={captureBroker}>立即采集</Button>
+          </div>
+        </div>
+        {broker?.account ? (
+          <>
+            <div className="library-metric-grid portfolio-metric-grid">
+              <div className="library-metric-card"><span>总资产 · {broker.dates?.account || "-"}</span><strong>¥ {num(broker.account.total_assets, 2)}</strong></div>
+              <div className="library-metric-card"><span>可用资金</span><strong>¥ {num(broker.account.available_cash, 2)}</strong></div>
+              <div className="library-metric-card"><span>总市值</span><strong>¥ {num(broker.account.total_market_value, 2)}</strong></div>
+              <div className={`library-metric-card ${Number(broker.account.profit_loss) >= 0 ? "positive" : "negative"}`}><span>账户盈亏</span><strong>¥ {num(broker.account.profit_loss, 2)}</strong></div>
+            </div>
+            {broker.asset_curve?.length > 1 ? <BrokerAssetCurve rows={broker.asset_curve} /> : <div className="broker-note">目前只有 {broker.dates?.account || "一个"} 交易日的快照；每天归档后会逐步形成账户资产曲线。</div>}
+            <Tabs
+              items={[
+                {
+                  key: "positions", label: `持仓 ${broker.positions?.length || 0}`,
+                  children: <Table size="small" rowKey="vt_symbol" pagination={{ pageSize: 10, showSizeChanger: false }} dataSource={broker.positions || []} columns={[
+                    { title: "标的", dataIndex: "vt_symbol" },
+                    { title: "持仓", dataIndex: "quantity", align: "right", render: (value) => num(value) },
+                    { title: "可用", dataIndex: "available_quantity", align: "right", render: (value) => num(value) },
+                    { title: "成本价", dataIndex: "cost_price", align: "right", render: (value) => num(value, 4) },
+                    { title: "市值", dataIndex: "market_value", align: "right", render: (value) => num(value, 2) },
+                    { title: "盈亏", dataIndex: "profit_loss", align: "right", render: (value) => signed(value) }
+                  ]} />
+                },
+                {
+                  key: "orders", label: `委托 ${broker.orders?.length || 0} · ${broker.dates?.orders || "无日期"}`,
+                  children: <Table size="small" rowKey="order_key" scroll={{ x: 900 }} pagination={{ pageSize: 10, showSizeChanger: false }} dataSource={broker.orders || []} columns={[
+                    { title: "时间", dataIndex: "order_time", width: 100 }, { title: "标的", dataIndex: "vt_symbol", width: 120 },
+                    { title: "方向", dataIndex: "action", width: 80 }, { title: "委托价", dataIndex: "order_price", align: "right", render: (value) => num(value, 4) },
+                    { title: "委托量", dataIndex: "order_quantity", align: "right", render: (value) => num(value) }, { title: "成交量", dataIndex: "filled_quantity", align: "right", render: (value) => num(value) },
+                    { title: "状态", dataIndex: "status", width: 110 }, { title: "拒绝原因", dataIndex: "reject_reason", ellipsis: true }
+                  ]} />
+                },
+                {
+                  key: "deals", label: `成交 ${broker.deals?.length || 0} · ${broker.dates?.deals || "无日期"}`,
+                  children: <Table size="small" rowKey="deal_key" scroll={{ x: 760 }} pagination={{ pageSize: 10, showSizeChanger: false }} dataSource={broker.deals || []} columns={[
+                    { title: "时间", dataIndex: "deal_time", width: 100 }, { title: "标的", dataIndex: "vt_symbol", width: 120 },
+                    { title: "方向", dataIndex: "action", width: 80 }, { title: "成交价", dataIndex: "price", align: "right", render: (value) => num(value, 4) },
+                    { title: "数量", dataIndex: "quantity", align: "right", render: (value) => num(value) }, { title: "金额", dataIndex: "amount", align: "right", render: (value) => num(value, 2) },
+                    { title: "费用", dataIndex: "fee", align: "right", render: (value) => num(value, 2) }
+                  ]} />
+                },
+                {
+                  key: "settlements", label: `交割单 ${broker.settlements?.length || 0}`,
+                  children: <>
+                    <div className="broker-note">交割单是 T+1 的已清算记录，真实手续费和印花税只有这里才有；当日成交里的费用是 0。下表费率可与回测参数对照。</div>
+                    <div className="broker-table-caption">按标的的实际费率<em>回测当前统一使用 0.45 bp</em></div>
+                    <Table size="small" rowKey="vt_symbol" pagination={false} dataSource={broker.fee_summary || []} columns={[
+                      { title: "标的", dataIndex: "vt_symbol" }, { title: "笔数", dataIndex: "trades", align: "right" },
+                      { title: "成交额", dataIndex: "amount", align: "right", render: (value) => num(value, 2) },
+                      { title: "费用合计", dataIndex: "fee", align: "right", render: (value) => num(value, 2) },
+                      { title: "实际费率", dataIndex: "fee_bp", align: "right", render: (value) => value === null || value === undefined ? "-" : `${num(value, 3)} bp` },
+                      { title: "区间", dataIndex: "first_date", render: (value, row: any) => `${value || "-"} ~ ${row.last_date || "-"}` }
+                    ]} />
+                    <div className="broker-table-caption">交割明细<em>最近 {broker.settlements?.length || 0} 条</em></div>
+                    <Table size="small" rowKey="settlement_key" scroll={{ x: 900 }} pagination={{ pageSize: 10, showSizeChanger: false }} dataSource={broker.settlements || []} columns={[
+                      { title: "日期", dataIndex: "trade_date", width: 110 }, { title: "时间", dataIndex: "deal_time", width: 100 },
+                      { title: "标的", dataIndex: "vt_symbol", width: 120 }, { title: "名称", dataIndex: "security_name", width: 110 },
+                      { title: "方向", dataIndex: "action", width: 80 }, { title: "价格", dataIndex: "price", align: "right", render: (value) => num(value, 4) },
+                      { title: "数量", dataIndex: "quantity", align: "right", render: (value) => num(value) },
+                      { title: "金额", dataIndex: "amount", align: "right", render: (value) => num(value, 2) },
+                      { title: "费用", dataIndex: "fee", align: "right", render: (value) => num(value, 2) },
+                      { title: "资金余额", dataIndex: "cash_balance", align: "right", render: (value) => num(value, 2) }
+                    ]} />
+                  </>
+                },
+                {
+                  key: "fund_flows", label: `资金流水 ${broker.fund_flows?.length || 0}`,
+                  children: <>
+                    <div className="broker-note">
+                      按业务分类汇总：{(broker.cash_summary || []).map((row: any) => `${row.category} ${num(row.amount, 2)}（${row.count} 笔）`).join(" · ") || "暂无"}。算账户收益时要先剔除出入金。
+                    </div>
+                    <Table size="small" rowKey="flow_key" scroll={{ x: 820 }} pagination={{ pageSize: 10, showSizeChanger: false }} dataSource={broker.fund_flows || []} columns={[
+                      { title: "日期", dataIndex: "trade_date", width: 110 }, { title: "时间", dataIndex: "flow_time", width: 100 },
+                      { title: "业务", dataIndex: "business", width: 140 },
+                      { title: "分类", dataIndex: "category", width: 90, render: (value) => <Tag color={value === "出入金" ? "orange" : value === "证券交易" ? "blue" : "default"}>{value}</Tag> },
+                      { title: "标的", dataIndex: "vt_symbol", width: 120 },
+                      { title: "发生金额", dataIndex: "amount", align: "right", render: (value) => signed(value) },
+                      { title: "剩余资金", dataIndex: "balance", align: "right", render: (value) => num(value, 2) }
+                    ]} />
+                  </>
+                },
+                {
+                  key: "reconciliation", label: "三方持仓",
+                  children: <>
+                    <div className="broker-note">券商 {broker.reconciliation?.dates?.broker || "-"} · vn.py {broker.reconciliation?.dates?.vnpy || "-"} · 平台回放 {broker.reconciliation?.dates?.platform || "-"}。日期不一致时只展示，不判定差异。</div>
+                    <Table size="small" rowKey="vt_symbol" pagination={{ pageSize: 10, showSizeChanger: false }} dataSource={broker.reconciliation?.items || []} columns={[
+                      { title: "标的", dataIndex: "vt_symbol" }, { title: "券商", dataIndex: "broker_quantity", align: "right", render: (value) => num(value) },
+                      { title: "vn.py", dataIndex: "vnpy_quantity", align: "right", render: (value) => num(value) }, { title: "平台回放", dataIndex: "platform_quantity", align: "right", render: (value) => num(value) },
+                      { title: "状态", dataIndex: "status", render: (value) => <Tag color={value === "match" ? "green" : value === "difference" ? "red" : "default"}>{value === "match" ? "一致" : value === "difference" ? "有差异" : "日期未对齐"}</Tag> }
+                    ]} />
+                  </>
+                }
+              ]}
+            />
+          </>
+        ) : (
+          <div className="broker-note">{broker?.source?.message || "尚未采集券商 DBF。先在服务器 .env 配置 GYRO_LIVE_BROKER_DBF_DIR。"}</div>
+        )}
+      </section>
 
       <section className="band library-shell">
         <div className="library-section-head">

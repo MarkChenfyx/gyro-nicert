@@ -785,7 +785,7 @@ export default function PoolPage({
     <section className="view is-active">
       <div className="hero-band library-hero-band">
         <div>
-          <p className="eyebrow">研究工作台</p>
+          <p className="eyebrow">Quanta</p>
           <h2>{zh.pool}</h2>
           <p className="hero-copy">已经确认的策略快照会集中放在这里，方便筛选、对比和查看详情。</p>
         </div>

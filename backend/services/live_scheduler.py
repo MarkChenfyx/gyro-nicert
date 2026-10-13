@@ -12,7 +12,7 @@ from backend.common.time_utils import BEIJING_TZ, now_beijing, now_iso
 from backend.core.environment import env
 from backend.core.paths import RUNTIME_ROOT
 from backend.repositories import live_repository
-from backend.services import live_service
+from backend.services import broker_dbf_service, live_service
 
 
 AUTO_ENABLED_ENV = "GYRO_LIVE_AUTO_TRACK"
@@ -21,6 +21,8 @@ DEFAULT_RUN_TIME = time(15, 20)
 STATUS_PATH = RUNTIME_ROOT / "live_scheduler_status.json"
 CHECK_INTERVAL_SECONDS = 60
 STARTUP_DELAY_SECONDS = 3
+RETRY_MINUTES = 10
+RETRY_UNTIL = time(23, 0)
 
 
 def enabled() -> bool:
@@ -86,10 +88,18 @@ def status() -> dict[str, Any]:
 def should_run(now: datetime | None = None) -> bool:
     current = now or now_beijing()
     saved = _read_status()
+    last_status = str(saved.get("last_status") or "")
     attempted_today = (
         str(saved.get("last_attempt_date") or "") == current.date().isoformat()
-        and str(saved.get("last_status") or "") != "running"
+        and last_status != "running"
     )
+    # 状态文件尚未更新（收盘后较晚才停止策略）时，当天每隔几分钟重试，直到截止时间
+    if attempted_today and last_status == "skipped" and current.time() < RETRY_UNTIL:
+        try:
+            last_started = datetime.fromisoformat(str(saved.get("last_started_at") or ""))
+            attempted_today = current - last_started < timedelta(minutes=RETRY_MINUTES)
+        except (TypeError, ValueError):
+            attempted_today = False
     return (
         enabled()
         and current.weekday() < 5
@@ -110,6 +120,17 @@ def run_today(now: datetime | None = None) -> dict[str, Any]:
         "last_results": [],
     }
     _write_status(started)
+
+    broker_capture: dict[str, Any]
+    broker_status = broker_dbf_service.configured_status()
+    if broker_status.get("available"):
+        try:
+            broker_capture = broker_dbf_service.capture()
+        except Exception as exc:
+            broker_capture = {"status": "failed", "message": str(exc)}
+    else:
+        broker_capture = {"status": "unconfigured", "message": broker_status.get("message", "")}
+    started["broker_capture"] = broker_capture
 
     try:
         local = live_service.local_source_status()
@@ -134,7 +155,7 @@ def run_today(now: datetime | None = None) -> dict[str, Any]:
             raise RuntimeError("尚未建立本机实盘源，请先在实盘跟踪页建立起点")
 
         rows: list[dict[str, Any]] = []
-        failed = False
+        failed = broker_capture.get("status") == "failed"
         for source in sources:
             source_id = str(source["source_id"])
             name = str(source.get("name") or source_id)
@@ -154,7 +175,7 @@ def run_today(now: datetime | None = None) -> dict[str, Any]:
             **started,
             "last_finished_at": now_iso(),
             "last_status": "failed" if failed else "completed",
-            "last_message": "部分实盘源执行失败" if failed else "自动跟踪完成",
+            "last_message": "券商采集或部分实盘源执行失败" if failed else "自动跟踪完成",
             "last_results": rows,
         }
     except Exception as exc:

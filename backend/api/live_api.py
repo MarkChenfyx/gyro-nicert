@@ -5,7 +5,7 @@ from datetime import date, datetime, time
 from fastapi import APIRouter, Query
 
 from backend.api.schemas import LiveSnapshotRequest, LiveSourceImportRequest, LiveTrackRequest
-from backend.services import live_scheduler, live_service
+from backend.services import broker_dbf_service, live_scheduler, live_service
 
 
 router = APIRouter(prefix="/api/live", tags=["live"])
@@ -28,6 +28,17 @@ def get_local_source_status() -> dict:
 @router.get("/automation-status")
 def get_live_automation_status() -> dict:
     return live_scheduler.status()
+
+
+@router.get("/broker")
+def get_broker_overview() -> dict:
+    return broker_dbf_service.overview()
+
+
+@router.post("/broker/capture")
+def capture_broker_dbf() -> dict:
+    result = broker_dbf_service.capture()
+    return {"capture": result, "overview": broker_dbf_service.overview()}
 
 
 @router.get("/sources")

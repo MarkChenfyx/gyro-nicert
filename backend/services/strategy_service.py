@@ -81,6 +81,27 @@ def normalize_fixed_size(code: str) -> tuple[str, bool, str]:
     if strategy_class is None:
         return code, False, ""
 
+    # Some imported strategies recalculate position size from capital on every
+    # bar. Normalize those assignments as well as the class default.
+    edits = []
+    source_lines = code.splitlines(keepends=True)
+    for node in ast.walk(strategy_class):
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target] if isinstance(node, ast.AnnAssign) else []
+        if len(targets) != 1:
+            continue
+        target = targets[0]
+        if (isinstance(target, ast.Attribute) and isinstance(target.value, ast.Name)
+                and target.value.id == "self" and target.attr == "fixed_size"):
+            value = node.value
+            if value is not None and not (isinstance(value, ast.Constant) and value.value == 1):
+                edits.append((_source_offset(source_lines, value.lineno, value.col_offset),
+                              _source_offset(source_lines, value.end_lineno, value.end_col_offset)))
+    if edits:
+        for start, end in sorted(edits, reverse=True):
+            code = code[:start] + "1" + code[end:]
+        normalized, _, _ = normalize_fixed_size(code)
+        return normalized, True, "runtime fixed_size was normalized to 1 for unit-position research"
+
     assignment = _fixed_size_assignment(strategy_class)
     lines = code.splitlines(keepends=True)
     if assignment is not None:

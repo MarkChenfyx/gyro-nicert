@@ -383,20 +383,27 @@ export default function PortfolioPage({ poolItems }: { poolItems: any[] }) {
       title: UI_TEXT.term.componentStrategy,
       key: "strategy",
       width: 280,
+      sorter: (left, right) => String(left.strategy_name || "").localeCompare(String(right.strategy_name || ""), "zh-CN"),
       render: (_, row) => <div className="portfolio-component-name"><strong>{row.strategy_name}</strong><span>{row.strategy_version || "-"} · {row.pool_item_id}</span></div>
     },
-    { title: UI_TEXT.term.tradingSymbol, dataIndex: "vt_symbol", width: 120 },
-    { title: "原始权重", dataIndex: "weight", width: 100, align: "right", render: (value) => formatNumber(value, 2) },
-    { title: "有效权重", dataIndex: "effective_weight", width: 110, align: "right", render: (value) => `${(Number(value) * 100).toFixed(2)}%` },
-    { title: "现金天数", dataIndex: "cash_days", width: 100, align: "right", render: (value) => Number(value || 0) },
-    { title: UI_TEXT.metric.totalReturn, dataIndex: "total_return", width: 110, align: "right", render: (value) => formatReturnPct(value, 2) },
-    { title: "收益贡献", dataIndex: "weighted_contribution", width: 110, align: "right", render: (value) => formatReturnPct(value, 2) },
-    { title: UI_TEXT.metric.maxDrawdown, dataIndex: "max_drawdown", width: 110, align: "right", render: (value) => formatReturnPct(value, 2) },
-    { title: UI_TEXT.metric.tradeCount, dataIndex: "trade_count", width: 100, align: "right" },
+    {
+      title: UI_TEXT.term.tradingSymbol,
+      dataIndex: "vt_symbol",
+      width: 120,
+      sorter: (left, right) => String(left.vt_symbol || "").localeCompare(String(right.vt_symbol || ""))
+    },
+    { title: "原始权重", dataIndex: "weight", width: 100, align: "right", sorter: (left, right) => Number(left.weight || 0) - Number(right.weight || 0), sortDirections: ["descend", "ascend"], render: (value) => formatNumber(value, 2) },
+    { title: "有效权重", dataIndex: "effective_weight", width: 110, align: "right", sorter: (left, right) => Number(left.effective_weight || 0) - Number(right.effective_weight || 0), sortDirections: ["descend", "ascend"], render: (value) => `${(Number(value) * 100).toFixed(2)}%` },
+    { title: "现金天数", dataIndex: "cash_days", width: 100, align: "right", sorter: (left, right) => Number(left.cash_days || 0) - Number(right.cash_days || 0), sortDirections: ["descend", "ascend"], render: (value) => Number(value || 0) },
+    { title: UI_TEXT.metric.totalReturn, dataIndex: "total_return", width: 110, align: "right", sorter: (left, right) => Number(left.total_return || 0) - Number(right.total_return || 0), sortDirections: ["descend", "ascend"], render: (value) => formatReturnPct(value, 2) },
+    { title: "收益贡献", dataIndex: "weighted_contribution", width: 110, align: "right", sorter: (left, right) => Number(left.weighted_contribution || 0) - Number(right.weighted_contribution || 0), sortDirections: ["descend", "ascend"], render: (value) => formatReturnPct(value, 2) },
+    { title: UI_TEXT.metric.maxDrawdown, dataIndex: "max_drawdown", width: 110, align: "right", sorter: (left, right) => Number(left.max_drawdown || 0) - Number(right.max_drawdown || 0), sortDirections: ["descend", "ascend"], render: (value) => formatReturnPct(value, 2) },
+    { title: UI_TEXT.metric.tradeCount, dataIndex: "trade_count", width: 100, align: "right", sorter: (left, right) => Number(left.trade_count || 0) - Number(right.trade_count || 0), sortDirections: ["descend", "ascend"] },
     {
       title: "来源状态",
       key: "source_status",
       width: 100,
+      sorter: (left, right) => Number(staleIds.includes(left.pool_item_id)) - Number(staleIds.includes(right.pool_item_id)),
       render: (_, row) => staleIds.includes(row.pool_item_id) ? <Tag color="orange">已更新</Tag> : <Tag color="green">一致</Tag>
     }
   ];
@@ -457,7 +464,7 @@ export default function PortfolioPage({ poolItems }: { poolItems: any[] }) {
     <section className="view is-active">
       <div className="hero-band library-hero-band portfolio-hero-band">
         <div>
-          <p className="eyebrow">研究工作台</p>
+          <p className="eyebrow">Quanta</p>
           <h2>{UI_TEXT.page.portfolio}</h2>
           <p className="hero-copy">复用策略池历史快照，按固定权重汇总单位仓位收益；查看组合不会重新回测。</p>
         </div>

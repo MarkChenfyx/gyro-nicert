@@ -59,8 +59,13 @@ def _load_class(path: Path, class_name: str):
     return strategy_class
 
 
-def replay_data_issue(bars: list[Any], start: date, end: date, exchange: str) -> str:
-    """Conservative cash-market minute check; uncertain closures must not yield MATCH."""
+def replay_data_issue(
+    bars: list[Any], start: date, end: date, exchange: str, closed_days: set[date] | frozenset[date] = frozenset()
+) -> str:
+    """Conservative cash-market minute check; uncertain closures must not yield MATCH.
+
+    closed_days 为交易日历确认的休市工作日，跳过检查；日历缺失时为空，保持保守。
+    """
     if exchange not in {"SSE", "SZSE"}:
         return "当前实盘分钟完整性校验仅支持沪深市场"
     by_day: dict[date, set[time]] = {}
@@ -71,7 +76,7 @@ def replay_data_issue(bars: list[Any], start: date, end: date, exchange: str) ->
         count_by_day[day] = count_by_day.get(day, 0) + 1
     day = start
     while day <= end:
-        if day.weekday() < 5:
+        if day.weekday() < 5 and day not in closed_days:
             observed = by_day.get(day, set())
             # Accept either minute-start or minute-end timestamps, never mixed sessions.
             valid = False
@@ -246,7 +251,10 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
     end = datetime.combine(end_date, time(23, 59, 59))
 
     bars = load_bar_data(vt_symbol, "1m", start, end)
-    issue = replay_data_issue(bars, start_date, end_date, vt_symbol.rsplit(".", 1)[-1])
+    from backend.data_manager.rqdata_client import cn_closed_weekdays
+
+    closed = cn_closed_weekdays(start_date, end_date, fetch=False)
+    issue = replay_data_issue(bars, start_date, end_date, vt_symbol.rsplit(".", 1)[-1], closed)
     if issue:
         return {"success": False, "reason": "no_bars", "error": issue}
     if not bars:

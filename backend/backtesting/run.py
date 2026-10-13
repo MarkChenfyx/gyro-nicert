@@ -7,12 +7,15 @@ from typing import Any, Iterator
 from uuid import uuid4
 import os
 import types
+import threading
+from tempfile import TemporaryDirectory
 
 from backend.backtesting import local_data_provider
 from backend.data_manager import coverage_service
 
 ENGINE_NAME = "gyro_cta_backtesting_engine"
 ENGINE_VERSION = "cta_backtesting_v1_local_sqlite"
+_RESOURCE_LOCK = threading.RLock()
 
 
 def _diagnostic(level: str, message: str) -> dict[str, str]:
@@ -116,25 +119,27 @@ def _resource_dir(resource_root: Any) -> Iterator[None]:
     只包住加载与回放这一段，并用 finally 保证异常时也恢复当前目录；工作台自身的
     数据库和产物都走 core.paths 的绝对路径，不受当前目录影响。
     """
-    path = str(resource_root or "").strip()
-    if not path:
-        yield
-        return
-    resolved = Path(path).expanduser().resolve()
-    if not resolved.is_dir():
-        raise ValueError(f"策略资源目录不存在：{resolved}")
-    previous = os.getcwd()
-    os.chdir(resolved)
-    try:
-        yield
-    finally:
-        os.chdir(previous)
+    with _RESOURCE_LOCK:
+        path = str(resource_root or "").strip()
+        if not path:
+            yield
+            return
+        resolved = Path(path).expanduser().resolve()
+        if not resolved.is_dir():
+            raise ValueError(f"策略资源目录不存在：{resolved}")
+        previous = os.getcwd()
+        os.chdir(resolved)
+        try:
+            yield
+        finally:
+            os.chdir(previous)
 
 
 def _load_strategy_class(strategy_code: str, class_name: str):
     from vnpy_ctastrategy import CtaTemplate
 
     module = types.ModuleType(f"gyro_backtest_strategy_{uuid4().hex}")
+    module.__file__ = str(Path.cwd() / "strategy.py")
     exec(compile(strategy_code, f"<{module.__name__}>", "exec"), module.__dict__)
     strategy_class = getattr(module, class_name, None)
     if strategy_class is None:
@@ -292,7 +297,10 @@ def _real_backtest(
             risk_free=float(config.get("risk_free", 0)),
             annual_days=int(config.get("annual_days", 240)),
         )
-        engine.add_strategy(strategy_class, dict(parameters or {}))
+        settings = dict(parameters or {})
+        if "capital" in strategy_class.parameters and not hasattr(strategy_class, "capital"):
+            settings.setdefault("capital", float(config.get("capital", 100000)))
+        engine.add_strategy(strategy_class, settings)
         engine.history_data = bars
         engine.run_backtesting()
     daily_df = engine.calculate_result()
@@ -330,6 +338,13 @@ def run_backtest(
     if mode != "real":
         return _failure(f"unsupported backtesting mode: {mode}")
     try:
+        if resolved_config.get("model_files"):
+            from backend.backtesting.strategy_resources import stage_resources
+            with TemporaryDirectory(prefix="gyro-model-") as directory:
+                root = Path(directory)
+                stage_resources(root, resolved_config["model_files"], strategy_code)
+                return _real_backtest(strategy_code, class_name, vt_symbol, parameters,
+                                      {**resolved_config, "resource_root": str(root)})
         return _real_backtest(strategy_code, class_name, vt_symbol, parameters, resolved_config)
     except Exception as exc:
         return _failure(str(exc), [_diagnostic("error", str(exc))])

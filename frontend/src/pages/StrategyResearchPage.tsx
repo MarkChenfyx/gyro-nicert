@@ -579,7 +579,7 @@ export default function StrategyResearchPage({
     <div className="view strategy-research-view">
       <section className="hero-band research-hero-band">
         <div>
-          <p className="eyebrow">研究工作台</p>
+          <p className="eyebrow">Quanta</p>
           <h2>{UI_TEXT.page.research}</h2>
           <p className="hero-copy">从策略快照出发，检查收益表现和参数稳定性，不修改原策略与参数优化结果。</p>
         </div>

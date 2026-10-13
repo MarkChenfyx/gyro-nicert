@@ -589,20 +589,22 @@ def _ensure_market_data(
     # The general coverage index only checks boundaries. Verify the actual replay days too.
     from backend.backtesting.local_data_provider import load_bar_data
     from backend.backtesting.replay_worker import replay_data_issue
+    from backend.data_manager.rqdata_client import cn_closed_weekdays
     start = datetime.combine(date.fromisoformat(replay_start), time.min)
     end = datetime.combine(date.fromisoformat(trade_date), time.max)
+    closed = cn_closed_weekdays(start.date(), end.date())
     for vt_symbol in sorted({str(item["vt_symbol"]) for item in bindings}):
         if vt_symbol in failures:
             continue
         symbol, exchange = split_vt_symbol(vt_symbol)
         bars = load_bar_data(vt_symbol, "1m", start, end)
-        issue = replay_data_issue(bars, start.date(), end.date(), exchange)
+        issue = replay_data_issue(bars, start.date(), end.date(), exchange, closed)
         if issue and update:
             download = download_service.download_bars(symbol, exchange, "1m", replay_start, trade_date)
             if not download.get("success"):
                 failures[vt_symbol] = _text(download.get("error")) or "行情下载失败"
                 continue
-            issue = replay_data_issue(load_bar_data(vt_symbol, "1m", start, end), start.date(), end.date(), exchange)
+            issue = replay_data_issue(load_bar_data(vt_symbol, "1m", start, end), start.date(), end.date(), exchange, closed)
         if issue:
             failures[vt_symbol] = issue
     return failures

@@ -8,7 +8,7 @@ from backend.strategy_generation.providers import build_provider
 from backend.strategy_generation.validation import validate_open_order_volumes
 
 
-REPAIR_SYSTEM_PROMPT = """You repair Python vn.py CTA strategy code for the GYRO_NICERT research platform.
+REPAIR_SYSTEM_PROMPT = """You repair Python vn.py CTA strategy code for the Quanta research platform.
 
 Make only the minimum changes required for the supplied strategy to run normally on the platform.
 Preserve the strategy class name, parameters, signal logic, entry rules, exit rules, and timing whenever possible.

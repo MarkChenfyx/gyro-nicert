@@ -512,6 +512,25 @@ def test_minute_gap_and_missing_target_day_are_detected():
     assert replay_data_issue(bars, day, date(2026, 9, 4), "SSE")
 
 
+def test_calendar_holidays_are_not_data_gaps(tmp_path, monkeypatch):
+    from datetime import date, timedelta
+    from types import SimpleNamespace
+    from backend.backtesting.replay_worker import replay_data_issue
+    from backend.data_manager import rqdata_client
+    bars = [SimpleNamespace(datetime=datetime(2026, 9, day, hour, minute) + timedelta(minutes=i))
+            for day in (24, 28) for hour, minute in [(9, 30), (13, 0)] for i in range(120)]
+    start, end = date(2026, 9, 24), date(2026, 9, 28)
+    assert replay_data_issue(bars, start, end, "SSE")
+    cache = tmp_path / "dates.json"
+    monkeypatch.setattr(rqdata_client, "TRADING_DATES_CACHE", cache)
+    assert rqdata_client.cn_closed_weekdays(start, end, fetch=False) == set()
+    cache.write_text(json.dumps({"start": "2026-01-01", "end": "2026-12-31",
+                                 "dates": ["2026-09-24", "2026-09-28"]}), encoding="utf-8")
+    closed = rqdata_client.cn_closed_weekdays(start, end, fetch=False)
+    assert closed == {date(2026, 9, 25)}
+    assert replay_data_issue(bars, start, end, "SSE", closed) == ""
+
+
 def test_worker_restores_state_after_on_start(tmp_path, monkeypatch):
     from backend.backtesting import replay_worker, local_data_provider
     from vnpy_ctastrategy import CtaTemplate

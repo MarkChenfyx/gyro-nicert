@@ -39,6 +39,7 @@ def _pool_detail(tmp_path):
 
 def test_continue_optimization_reruns_pool_snapshot_as_new_baseline(tmp_path, monkeypatch):
     detail = _pool_detail(tmp_path)
+    detail["config"]["model_files"] = {"frozen.model": "bW9kZWw="}
     captured: dict = {}
 
     monkeypatch.setattr(pool_service, "get_pool_item_detail", lambda pool_item_id: detail)
@@ -85,6 +86,8 @@ def test_continue_optimization_reruns_pool_snapshot_as_new_baseline(tmp_path, mo
     assert captured["backtest"]["strategy_code"] == detail["strategy_code"]
     assert captured["backtest"]["config"]["start_date"] == "2023-01-03"
     assert captured["backtest"]["config"]["end_date"] == "2026-07-15"
+    assert captured["backtest"]["config"]["model_files"] == detail["config"]["model_files"]
+    assert captured["baseline"]["config_payload"]["model_files"] == detail["config"]["model_files"]
     assert captured["baseline"]["result_payload"]["params"] == {"window": 25}
     assert captured["baseline"]["related_pool_item_id"] == "pool_1"
     assert captured["baseline"]["manifest_lineage"] == {

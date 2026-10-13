@@ -9,6 +9,23 @@ from backend.services import research_workflow_service
 router = APIRouter(prefix="/api/research", tags=["research"])
 
 
+@router.get("/symbols")
+def research_symbols() -> dict:
+    import json
+    from pathlib import Path
+    from backend.repositories import run_repository
+    symbols = []
+    for run in run_repository.list_runs(limit=1000):
+        try:
+            config = json.loads((Path(run["runtime_path"]) / "config.json").read_text(encoding="utf-8"))
+            symbol = str(config.get("vt_symbol") or "").strip().upper()
+            if symbol and symbol not in symbols:
+                symbols.append(symbol)
+        except (OSError, ValueError):
+            continue
+    return {"symbols": symbols}
+
+
 @router.post("/create")
 def create_research(payload: ResearchCreateRequest) -> dict:
     vt_symbol = f"{payload.symbol}.{payload.exchange}"
@@ -60,6 +77,8 @@ def create_research_baseline_from_code(payload: ResearchCodeBaselineCreateReques
     return research_workflow_service.create_baseline_run_from_manual_code(
         strategy_name=payload.strategy_name,
         strategy_code=payload.strategy_code,
+        model_files=payload.model_files,
+        strategy_parameters=payload.parameters,
         config_payload={
             "vt_symbol": vt_symbol,
             "symbol": payload.symbol,

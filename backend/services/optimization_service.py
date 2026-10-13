@@ -91,6 +91,13 @@ def _run_context(run_id: str) -> dict[str, Any]:
     report = read_json_file(report_path)
     strategy_code = strategy_path.read_text(encoding="utf-8")
     inventory = build_parameter_inventory(strategy_code=strategy_code, generation_report=report)
+    if config.get("model_files"):
+        from backend.backtesting.strategy_resources import frozen_parameters
+        allowed = frozen_parameters(strategy_code)
+        blocked = [item for item in inventory["parameters"] if item["name"] not in allowed]
+        inventory["parameters"] = [item for item in inventory["parameters"] if item["name"] in allowed]
+        inventory["hidden_parameters"].extend({**item, "reason": "固定模型：此参数尚未确认可独立优化"} for item in blocked)
+        inventory["diagnostics"].append({"level": "info", "message": "固定模型不重新训练；仅开放已支持的交易参数，训练区间未知时结果不能视为样本外验证。"})
     lineage = dict(manifest.get("lineage") or {})
     if lineage.get("source_type") == "pool_item" and lineage.get("operation") == "rerun_as_baseline":
         inventory = _apply_baseline_parameters(inventory, dict(config.get("parameters") or {}))
@@ -379,6 +386,11 @@ def run_optimization(
 
     context = _run_context(run_id)
     config = {**dict(context["config"]), "mode": dict(context["config"]).get("mode") or "real", "max_trials": max_trials}
+    if config.get("model_files"):
+        from backend.backtesting.strategy_resources import frozen_parameters
+        allowed = frozen_parameters(str(context["strategy_code"]))
+        if virtual_by_name or any(name not in allowed for name in selected):
+            raise ValueError("固定模型只支持已开放的交易参数优化")
     resolved_method = resolve_method({"method": resolved_method}, config)
     selected_variant = variant_for_method(resolved_method)
     task = task_service.create_task(TaskType.OPTIMIZATION.value, message="Optimization queued", related_run_id=run_id, related_strategy_id=str(context["run"]["strategy_id"]))

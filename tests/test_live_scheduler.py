@@ -20,6 +20,17 @@ def test_scheduler_runs_once_after_weekday_close(tmp_path, monkeypatch):
     assert live_scheduler.should_run(now) is True
 
 
+def test_scheduler_retries_skipped_day_until_cutoff(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch)
+    skipped = {"last_attempt_date": "2026-09-11", "last_status": "skipped",
+               "last_started_at": "2026-09-11T15:20:00+08:00"}
+    live_scheduler._write_status(skipped)
+    assert live_scheduler.should_run(datetime(2026, 9, 11, 15, 25, tzinfo=BEIJING_TZ)) is False
+    assert live_scheduler.should_run(datetime(2026, 9, 11, 15, 30, tzinfo=BEIJING_TZ)) is True
+    live_scheduler._write_status({**skipped, "last_started_at": "2026-09-11T22:55:00+08:00"})
+    assert live_scheduler.should_run(datetime(2026, 9, 11, 23, 10, tzinfo=BEIJING_TZ)) is False
+
+
 def test_scheduler_skips_stale_state_for_holiday_or_late_update(tmp_path, monkeypatch):
     _configure(tmp_path, monkeypatch)
     monkeypatch.setattr(

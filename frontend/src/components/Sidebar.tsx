@@ -202,7 +202,7 @@ export function Sidebar({
   return (
     <aside className="sidebar">
       <div className="brand-block">
-        <p className="eyebrow">GYRO_NICERT</p>
+        <p className="eyebrow">QUANTA</p>
         <h1>{zh.workbench}</h1>
         <p className="sidebar-copy">{zh.subtitle}</p>
       </div>

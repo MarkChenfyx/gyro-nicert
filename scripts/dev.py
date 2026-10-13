@@ -53,7 +53,7 @@ def start_process(command: list[str], cwd: Path) -> subprocess.Popen[bytes]:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="同时启动 gyro_nicert 前端和后端开发服务器")
+    parser = argparse.ArgumentParser(description="同时启动 Quanta 前端和后端开发服务器")
     parser.add_argument("--no-reload", action="store_true", help="关闭后端代码热重载")
     parser.add_argument("--skip-install", action="store_true", help="缺少 node_modules 时也不自动运行 npm install")
     parser.add_argument("--smoke-test", action="store_true", help="确认前后端可访问后立即关闭")

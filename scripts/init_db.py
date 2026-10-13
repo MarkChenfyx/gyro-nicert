@@ -164,6 +164,53 @@ CREATE TABLE IF NOT EXISTS live_daily_records (
     UNIQUE(source_id, trade_date)
 );
 
+CREATE TABLE IF NOT EXISTS broker_captures (
+    capture_id TEXT PRIMARY KEY, source_hash TEXT NOT NULL UNIQUE,
+    trade_date TEXT NOT NULL, captured_at TEXT NOT NULL,
+    artifact_path TEXT NOT NULL, counts_json TEXT NOT NULL, warnings_json TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS broker_account_daily (
+    account_key TEXT NOT NULL, account_label TEXT NOT NULL, trade_date TEXT NOT NULL,
+    capture_id TEXT NOT NULL, captured_at TEXT NOT NULL,
+    total_assets REAL, available_cash REAL, withdrawable_cash REAL,
+    total_market_value REAL, stock_market_value REAL, fund_market_value REAL,
+    profit_loss REAL, login_status TEXT, PRIMARY KEY (account_key, trade_date)
+);
+CREATE TABLE IF NOT EXISTS broker_positions (
+    account_key TEXT NOT NULL, trade_date TEXT NOT NULL, capture_id TEXT NOT NULL,
+    market TEXT NOT NULL, symbol TEXT NOT NULL, vt_symbol TEXT NOT NULL,
+    quantity REAL, available_quantity REAL, in_transit REAL, frozen_quantity REAL,
+    overnight_quantity REAL, cost_price REAL, market_value REAL, profit_loss REAL,
+    PRIMARY KEY (account_key, trade_date, vt_symbol)
+);
+CREATE TABLE IF NOT EXISTS broker_orders (
+    order_key TEXT PRIMARY KEY, account_key TEXT NOT NULL, trade_date TEXT NOT NULL,
+    capture_id TEXT NOT NULL, order_time TEXT, market TEXT, symbol TEXT, vt_symbol TEXT,
+    action TEXT, quote_type TEXT, order_price REAL, order_quantity REAL,
+    filled_quantity REAL, filled_average_price REAL, filled_amount REAL,
+    canceled_quantity REAL, status TEXT, entrust_id TEXT, order_id TEXT,
+    strategy_name TEXT, remark TEXT, reject_reason TEXT, updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS broker_deals (
+    deal_key TEXT PRIMARY KEY, account_key TEXT NOT NULL, trade_date TEXT NOT NULL,
+    capture_id TEXT NOT NULL, deal_time TEXT, market TEXT, symbol TEXT, vt_symbol TEXT,
+    action TEXT, price REAL, quantity REAL, amount REAL, fee REAL,
+    entrust_id TEXT, trade_id TEXT, order_id TEXT, strategy_name TEXT, remark TEXT,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS broker_settlements (
+    settlement_key TEXT PRIMARY KEY, account_key TEXT NOT NULL, trade_date TEXT NOT NULL,
+    capture_id TEXT NOT NULL, deal_time TEXT, symbol TEXT, vt_symbol TEXT, security_name TEXT,
+    action TEXT, price REAL, quantity REAL, amount REAL, fee REAL, stamp_tax REAL, other_fee REAL,
+    cash_balance REAL, share_balance REAL, entrust_id TEXT, trade_id TEXT, updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS broker_fund_flows (
+    flow_key TEXT PRIMARY KEY, account_key TEXT NOT NULL, trade_date TEXT NOT NULL,
+    capture_id TEXT NOT NULL, flow_time TEXT, serial TEXT, business TEXT, category TEXT,
+    amount REAL, balance REAL, symbol TEXT, vt_symbol TEXT, security_name TEXT,
+    quantity REAL, price REAL, fee REAL, updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS artifacts (
     artifact_id TEXT PRIMARY KEY,
     owner_type TEXT NOT NULL,
@@ -252,6 +299,13 @@ DROP TABLE IF EXISTS live_reconciliation_runs;
 DROP TABLE IF EXISTS live_position_snapshots;
 DROP TABLE IF EXISTS live_strategy_bindings;
 DROP TABLE IF EXISTS live_sources;
+DROP TABLE IF EXISTS broker_fund_flows;
+DROP TABLE IF EXISTS broker_settlements;
+DROP TABLE IF EXISTS broker_deals;
+DROP TABLE IF EXISTS broker_orders;
+DROP TABLE IF EXISTS broker_positions;
+DROP TABLE IF EXISTS broker_account_daily;
+DROP TABLE IF EXISTS broker_captures;
 DROP TABLE IF EXISTS artifacts;
 """
 

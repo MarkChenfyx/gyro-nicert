@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Button, Input, Modal, Table, Tabs, Tag, message } from "antd";
+import { Button, Collapse, Input, Modal, Table, Tabs, Tag, message } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import LiveReplayDetails from "../components/LiveReplayDetails";
 import BrokerAssetCurve from "../components/BrokerAssetCurve";
@@ -41,6 +41,46 @@ function signed(value: unknown, digits = 2) {
   const parsed = Number(value);
   const tone = !Number.isFinite(parsed) || parsed === 0 ? "" : parsed > 0 ? "positive" : "negative";
   return <span className={`broker-value ${tone}`}>{num(value, digits)}</span>;
+}
+
+const STATUS_ORDER: Record<string, number> = { MISMATCH: 0, REPLAY_ERROR: 1, DATA_GAP: 2, NO_STATE: 3, CONFIG_CHANGED: 4, NEW_INSTANCE: 5, MATCH: 9 };
+
+type DayCell = { date: string; kind: string; label: string; hint: string };
+
+const DAY_KIND: Record<string, string> = {
+  match: "全部一致", mismatch: "有差异", unresolved: "未能判定", baseline: "仅快照",
+  closed: "休市", missing: "未记录", pending: "待记录"
+};
+
+function isoDay(value: Date): string {
+  return new Intl.DateTimeFormat("sv-SE", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).format(value);
+}
+
+// 最近若干周的工作日各一格：已跟踪（一致/有差异/未判定）、仅快照、休市、未记录。
+function recordCalendar(records: any[], snapshots: any[], closedDays: string[], weeks = 8): DayCell[] {
+  const today = todayInBeijing();
+  const byDate = new Map(records.map((row) => [String(row.trade_date), row]));
+  const snapshotDates = new Set(snapshots.map((row) => String(row.trade_date)));
+  const closed = new Set(closedDays);
+  const anchor = new Date(`${today}T12:00:00+08:00`);
+  const monday = anchor.getTime() - ((anchor.getUTCDay() + 6) % 7) * 86400000;
+  const cells: DayCell[] = [];
+  for (let week = weeks - 1; week >= 0; week -= 1) {
+    for (let weekday = 0; weekday < 5; weekday += 1) {
+      const date = isoDay(new Date(monday - week * 7 * 86400000 + weekday * 86400000));
+      const record = byDate.get(date);
+      const summary = record?.summary || {};
+      let kind = "missing";
+      if (date > today) kind = "future";
+      else if (closed.has(date)) kind = "closed";
+      else if (record) kind = Number(summary.mismatch) > 0 ? "mismatch" : Number(summary.match) > 0 ? "match" : "unresolved";
+      else if (snapshotDates.has(date)) kind = "baseline";
+      else if (date === today) kind = "pending";
+      const hint = record ? `一致 ${summary.match ?? 0} · 有差异 ${summary.mismatch ?? 0} · 未判定 ${summary.unresolved ?? 0}` : DAY_KIND[kind] || "";
+      cells.push({ date, kind, label: date.slice(5), hint });
+    }
+  }
+  return cells;
 }
 
 export default function LivePage() {
@@ -187,9 +227,27 @@ export default function LivePage() {
   ];
 
   const summary = record?.summary || {};
-  const rows = record?.rows || [];
+  const rows = [...(record?.rows || [])].sort(
+    (a: any, b: any) => (STATUS_ORDER[String(a.status)] ?? 5) - (STATUS_ORDER[String(b.status)] ?? 5)
+  );
   const available = Boolean(localStatus?.available);
   const alreadyRecorded = Boolean(localStatus?.recorded_as);
+  const today = todayInBeijing();
+  const closedDays: string[] = automation?.closed_days || [];
+  const tradingToday = new Date().getDay() % 6 !== 0 && !closedDays.includes(today);
+  const latestRecord = detail?.records?.[0];
+  const calendar = recordCalendar(detail?.records || [], detail?.snapshots || [], closedDays);
+  const pastDays = calendar.filter((day) => !["future", "closed", "pending"].includes(day.kind));
+  const recordedCount = pastDays.filter((day) => !["missing", "baseline"].includes(day.kind)).length;
+  const alerts: string[] = [];
+  if (localStatus && !available) alerts.push(`本机实盘目录不可用：${localStatus.message || "请检查 .env 配置"}`);
+  if (available && tradingToday && localStatus.state_trade_date !== today) {
+    alerts.push(`状态文件还停在 ${localStatus.state_trade_date || "-"}（写于 ${String(localStatus.state_modified_at || "").replace("T", " ").slice(0, 16)}）。收盘后在 VeighNa 点“全部停止”，平台会在 23:00 前自动补记今天。`);
+  }
+  if (broker?.source?.available && tradingToday && broker?.dates?.account !== today) {
+    alerts.push(`券商 DBF 最新日期是 ${broker?.dates?.account || "-"}，今天还没采集到；确认 QMT 保持登录并开着自动导出。`);
+  }
+  if (automation?.last_status === "failed") alerts.push(`自动跟踪失败：${automation.last_message || "未知原因"}`);
 
   return (
     <section className="page-shell">
@@ -206,6 +264,125 @@ export default function LivePage() {
         </div>
       </div>
 
+      <section className="band library-shell">
+        <div className="library-section-head">
+          <div>
+            <h3>今日概览</h3>
+            <p>{today} · 最近一次跟踪 {latestRecord?.trade_date || "尚无"} · 最近 8 周 {pastDays.length} 个交易日中跟踪了 {recordedCount} 天</p>
+          </div>
+          <span className={`status-pill ${alerts.length ? "status-failed" : "status-completed"}`}>{alerts.length ? `${alerts.length} 项需处理` : "运行正常"}</span>
+        </div>
+        <div className="library-metric-grid portfolio-metric-grid">
+          <div className="library-metric-card"><span>最近跟踪日</span><strong>{latestRecord?.trade_date || "-"}</strong></div>
+          <div className="library-metric-card positive"><span>持仓一致</span><strong>{latestRecord?.summary?.match ?? "-"}</strong></div>
+          <div className="library-metric-card negative"><span>有差异</span><strong>{latestRecord?.summary?.mismatch ?? "-"}</strong></div>
+          <div className="library-metric-card"><span>未能判定</span><strong>{latestRecord?.summary?.unresolved ?? "-"}</strong></div>
+          <div className="library-metric-card"><span>账户总资产 · {broker?.dates?.account || "-"}</span><strong>{broker?.account ? `¥ ${num(broker.account.total_assets, 0)}` : "-"}</strong></div>
+        </div>
+        {alerts.length > 0 && <ul className="live-alerts">{alerts.map((text) => <li key={text}>{text}</li>)}</ul>}
+      </section>
+
+      {Boolean(detail) && (
+        <section className="band library-shell">
+          <div className="library-section-head">
+            <div>
+              <h3>记录日历</h3>
+              <p>每个交易日一格；点击已跟踪的日子查看当天比对。</p>
+            </div>
+            <div className="portfolio-head-actions">
+              <label className="field"><span>手动跟踪交易日</span>
+                <Input type="date" max={today} value={tradeDate} onChange={(event) => setTradeDate(event.target.value)} />
+              </label>
+              <Button type="primary" loading={busy === "track"} onClick={runTracking} disabled={!sourceId}>
+                {detail?.snapshots?.some((item: any) => item.trade_date === tradeDate) ? "使用已存快照重新回放" : "记录收盘快照并跟踪"}
+              </Button>
+            </div>
+          </div>
+          <div className="live-calendar">
+            {["一", "二", "三", "四", "五"].map((name) => <span key={name} className="live-calendar-head">周{name}</span>)}
+            {calendar.map((day) => (
+              <button
+                key={day.date}
+                type="button"
+                className={`live-day live-day-${day.kind}${record?.trade_date === day.date ? " selected" : ""}`}
+                title={`${day.date} · ${day.hint}`}
+                disabled={!["match", "mismatch", "unresolved"].includes(day.kind)}
+                onClick={() => openRecord(day.date)}
+              >
+                {day.label}
+              </button>
+            ))}
+          </div>
+          <div className="live-calendar-legend">
+            {["match", "mismatch", "unresolved", "baseline", "missing", "closed"].map((kind) => (
+              <span key={kind}><i className={`live-day-${kind}`} />{DAY_KIND[kind]}</span>
+            ))}
+          </div>
+        </section>
+      )}
+
+          {Boolean(record?.trade_date) && (
+            <section className="band library-shell">
+              <div className="library-section-head">
+                <div>
+                  <h3>{record.trade_date} 跟踪结果</h3>
+                  <p>回放起点为 {summary.prior_date || "-"} 收盘状态；该回放区间共成交 {summary.trade_count || 0} 笔。</p>
+                </div>
+                <span className="status-pill status-completed">{summary.total || rows.length} 个策略</span>
+              </div>
+              <div className="library-metric-grid portfolio-metric-grid">
+                <div className="library-metric-card positive"><span>持仓一致</span><strong>{summary.match ?? 0}</strong></div>
+                <div className="library-metric-card negative"><span>有差异</span><strong>{summary.mismatch ?? 0}</strong></div>
+                <div className="library-metric-card"><span>未能判定</span><strong>{summary.unresolved ?? 0}</strong></div>
+                <div className="library-metric-card"><span>目标日回放成交</span><Button type="link" onClick={() => setReplayInstance("")}>
+                  {rows.reduce((total: number, row: any) => total + (row.replay_trades || []).filter((trade: any) => String(trade.datetime || "").slice(0, 10) === record.trade_date).length, 0)} 笔 · 查看成交与信号
+                </Button></div>
+              </div>
+              <div className="library-table-wrap">
+                <Table
+                  rowKey={(row) => String(row.binding_id || row.instance_name)}
+                  columns={columns}
+                  dataSource={rows}
+                  pagination={{ pageSize: 15, showSizeChanger: false }}
+                  scroll={{ x: 1180 }}
+                  className="workbench-table"
+                />
+              </div>
+            </section>
+          )}
+
+          {Boolean(detail?.records?.length) && (
+            <section className="band library-shell">
+              <div className="library-section-head">
+                <div><h3>历史跟踪记录</h3><p>点击某一天查看当时的比对明细。</p></div>
+              </div>
+              <div className="library-table-wrap">
+                <Table
+                  rowKey="record_id"
+                  size="small"
+                  columns={[
+                    { title: "交易日", dataIndex: "trade_date", width: 130 },
+                    { title: "策略数", width: 90, align: "right", render: (_, row: any) => num(row.summary?.total) },
+                    { title: "一致", width: 80, align: "right", render: (_, row: any) => num(row.summary?.match) },
+                    { title: "有差异", width: 90, align: "right", render: (_, row: any) => num(row.summary?.mismatch) },
+                    { title: "未判定", width: 90, align: "right", render: (_, row: any) => num(row.summary?.unresolved) },
+                    {
+                      title: "",
+                      width: 90,
+                      render: (_, row: any) => (
+                        <Button size="small" loading={busy === "record"} onClick={() => openRecord(String(row.trade_date))}>
+                          查看
+                        </Button>
+                      )
+                    }
+                  ]}
+                  dataSource={detail.records}
+                  pagination={{ pageSize: 10, showSizeChanger: false }}
+                  className="workbench-table"
+                />
+              </div>
+            </section>
+          )}
       <section className="band library-shell broker-panel">
         <div className="library-section-head">
           <div>
@@ -318,6 +495,12 @@ export default function LivePage() {
         )}
       </section>
 
+      <Collapse
+        className="live-settings"
+        items={[{
+          key: "settings",
+          label: "设置与诊断：自动跟踪、本机实盘目录、实盘源",
+          children: <>
       <section className="band library-shell">
         <div className="library-section-head">
           <div>
@@ -405,8 +588,7 @@ export default function LivePage() {
         </section>
       )}
 
-      {Boolean(detail) && (
-        <>
+          {Boolean(detail) && (
           <section className="band library-shell">
             <div className="library-section-head">
               <div>
@@ -418,12 +600,6 @@ export default function LivePage() {
                 </p>
               </div>
               <div className="portfolio-head-actions">
-                <label className="field"><span>跟踪交易日</span>
-                  <Input type="date" max={todayInBeijing()} value={tradeDate} onChange={(event) => setTradeDate(event.target.value)} />
-                </label>
-                <Button type="primary" loading={busy === "track"} onClick={runTracking} disabled={!sourceId}>
-                  {detail?.snapshots?.some((item: any) => item.trade_date === tradeDate) ? "使用已存快照重新回放" : "记录收盘快照并跟踪"}
-                </Button>
                 <Button danger onClick={confirmDiscard}>弃用</Button>
               </div>
             </div>
@@ -434,70 +610,10 @@ export default function LivePage() {
             </div>
           </section>
 
-          {Boolean(record?.trade_date) && (
-            <section className="band library-shell">
-              <div className="library-section-head">
-                <div>
-                  <h3>{record.trade_date} 跟踪结果</h3>
-                  <p>回放起点为 {summary.prior_date || "-"} 收盘状态；该回放区间共成交 {summary.trade_count || 0} 笔。</p>
-                </div>
-                <span className="status-pill status-completed">{summary.total || rows.length} 个策略</span>
-              </div>
-              <div className="library-metric-grid portfolio-metric-grid">
-                <div className="library-metric-card positive"><span>持仓一致</span><strong>{summary.match ?? 0}</strong></div>
-                <div className="library-metric-card negative"><span>有差异</span><strong>{summary.mismatch ?? 0}</strong></div>
-                <div className="library-metric-card"><span>未能判定</span><strong>{summary.unresolved ?? 0}</strong></div>
-                <div className="library-metric-card"><span>目标日回放成交</span><Button type="link" onClick={() => setReplayInstance("")}>
-                  {rows.reduce((total: number, row: any) => total + (row.replay_trades || []).filter((trade: any) => String(trade.datetime || "").slice(0, 10) === record.trade_date).length, 0)} 笔 · 查看成交与信号
-                </Button></div>
-              </div>
-              <div className="library-table-wrap">
-                <Table
-                  rowKey={(row) => String(row.binding_id || row.instance_name)}
-                  columns={columns}
-                  dataSource={rows}
-                  pagination={{ pageSize: 15, showSizeChanger: false }}
-                  scroll={{ x: 1180 }}
-                  className="workbench-table"
-                />
-              </div>
-            </section>
           )}
-
-          {Boolean(detail.records?.length) && (
-            <section className="band library-shell">
-              <div className="library-section-head">
-                <div><h3>历史跟踪记录</h3><p>点击某一天查看当时的比对明细。</p></div>
-              </div>
-              <div className="library-table-wrap">
-                <Table
-                  rowKey="record_id"
-                  size="small"
-                  columns={[
-                    { title: "交易日", dataIndex: "trade_date", width: 130 },
-                    { title: "策略数", width: 90, align: "right", render: (_, row: any) => num(row.summary?.total) },
-                    { title: "一致", width: 80, align: "right", render: (_, row: any) => num(row.summary?.match) },
-                    { title: "有差异", width: 90, align: "right", render: (_, row: any) => num(row.summary?.mismatch) },
-                    { title: "未判定", width: 90, align: "right", render: (_, row: any) => num(row.summary?.unresolved) },
-                    {
-                      title: "",
-                      width: 90,
-                      render: (_, row: any) => (
-                        <Button size="small" loading={busy === "record"} onClick={() => openRecord(String(row.trade_date))}>
-                          查看
-                        </Button>
-                      )
-                    }
-                  ]}
-                  dataSource={detail.records}
-                  pagination={{ pageSize: 10, showSizeChanger: false }}
-                  className="workbench-table"
-                />
-              </div>
-            </section>
-          )}
-        </>
-      )}
+          </>
+        }]}
+      />
       {replayInstance !== null && record && <LiveReplayDetails rows={rows} tradeDate={record.trade_date} instance={replayInstance} onClose={() => setReplayInstance(null)} />}
     </section>
   );

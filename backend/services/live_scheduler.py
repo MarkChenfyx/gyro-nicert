@@ -23,6 +23,7 @@ CHECK_INTERVAL_SECONDS = 60
 STARTUP_DELAY_SECONDS = 3
 RETRY_MINUTES = 10
 RETRY_UNTIL = time(23, 0)
+CALENDAR_DAYS = 70
 
 
 def enabled() -> bool:
@@ -75,8 +76,12 @@ def status() -> dict[str, Any]:
     active = enabled()
     last_date = str(saved.get("last_attempt_date") or "")
     due = active and now.weekday() < 5 and now >= _scheduled_at(now.date()) and last_date != now.date().isoformat()
+    from backend.data_manager.rqdata_client import cn_closed_weekdays
+
+    closed = cn_closed_weekdays(now.date() - timedelta(days=CALENDAR_DAYS), now.date(), fetch=False)
     return {
         "enabled": active,
+        "closed_days": sorted(day.isoformat() for day in closed),
         "schedule_time": run_time().strftime("%H:%M"),
         "timezone": "Asia/Shanghai",
         "due": due,

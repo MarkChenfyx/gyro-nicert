@@ -268,7 +268,7 @@ def test_market_data_window_starts_from_replay_start(tmp_path, monkeypatch):
     assert seen["trade_date"] == "2026-10-20"
 
 
-def test_instance_added_in_live_is_reported_not_ignored(tmp_path, monkeypatch):
+def test_instance_added_in_live_is_bound_automatically(tmp_path, monkeypatch):
     source_id = _import(tmp_path, monkeypatch)
     settings = {**_settings(), "added_live": {
         "class_name": "DemoStrategy", "vt_symbol": "510300.SSE", "setting": {"fixed_size": 100},
@@ -285,7 +285,21 @@ def test_instance_added_in_live_is_reported_not_ignored(tmp_path, monkeypatch):
 
     rows = {row["instance_name"]: row for row in live_service.track_day(source_id, "2026-09-03")["rows"]}
     assert rows["demo_live"]["status"] == "MATCH"
-    assert rows["added_live"]["status"] == "NEW_INSTANCE"
+    # 新策略自动绑定；首日起点快照里没有它的状态，次日起正常比对
+    assert rows["added_live"]["status"] == "NO_STATE"
+    assert {row["instance_name"] for row in live_service.live_repository.list_bindings(source_id)} == {"demo_live", "added_live"}
+
+
+def test_removed_instance_drops_out_of_tracking(tmp_path, monkeypatch):
+    source_id = _import(tmp_path, monkeypatch)
+    live_service.import_snapshot(source_id, {
+        "trade_date": "2026-09-03",
+        "settings": {"other_live": {**_settings()["demo_live"]}},
+        "states": {"other_live": {"pos": 500}},
+    })
+    _stub_market_data(monkeypatch)
+    rows = live_service.track_day(source_id, "2026-09-03")["rows"]
+    assert [row["instance_name"] for row in rows] == ["other_live"]
 
 
 def test_changed_live_config_is_flagged(tmp_path, monkeypatch):

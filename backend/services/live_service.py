@@ -713,7 +713,7 @@ def track_day(source_id: str, trade_date: str, *, update_data: bool = True) -> d
     replay_source = {**source, "source_kind": SOURCE_KIND_PACKAGE, "package_path": str(_artifact_path(snapshot["artifact_path"]) / "code")}
     # 起点快照记录的是它那一天收盘后的状态，所以回放从它的次日开始，一直放到目标日。
     replay_start = (date.fromisoformat(str(prior["trade_date"])) + timedelta(days=1)).isoformat()
-    bindings = live_repository.list_bindings(source_id)
+    bindings = _sync_bindings(source_id, snapshot, settings)
     data_failures = _ensure_market_data(bindings, replay_start, trade_date, update_data)
 
     rows: list[dict[str, Any]] = []
@@ -729,7 +729,7 @@ def track_day(source_id: str, trade_date: str, *, update_data: bool = True) -> d
         config = settings.get(instance)
         if config is None or _config_hash(dict(config or {})) != binding["config_hash"]:
             rows.append({**base, "status": STATUS_CONFIG_CHANGED,
-                         "message": "实盘参数或标的已变化，需要重新导入实盘源以重建绑定。"})
+                         "message": "该策略在这一天改了参数或标的，当天无法比对；下一个交易日起按新配置正常比对。"})
             continue
         if not _valid_position(actual_state):
             rows.append({**base, "status": STATUS_NO_STATE, "message": "当日快照缺少合法的策略持仓 pos。"})
@@ -804,6 +804,24 @@ def track_day(source_id: str, trade_date: str, *, update_data: bool = True) -> d
 
     rows.sort(key=lambda row: (row["status"] == STATUS_MATCH, str(row["instance_name"])))
     return _persist_record(source_id, trade_date, rows, str(prior["trade_date"]), replay_start)
+
+
+def _sync_bindings(source_id: str, snapshot: dict[str, Any], settings: dict[str, Any]) -> list[dict[str, Any]]:
+    """跟踪最新一天时，让绑定跟随当天的实盘策略列表：删掉的策略不再比对，
+    改了参数的策略换成新配置（变更当天因起点配置不同显示配置已变，次日起正常比对），新增的策略自动绑定。"""
+    bindings = live_repository.list_bindings(source_id)
+    latest = live_repository.list_snapshots(source_id, limit=1)
+    if not latest or str(latest[0]["trade_date"]) != str(snapshot["trade_date"]):
+        return bindings
+    try:
+        fresh = _bindings_from_settings(source_id, settings, _class_inventory(_artifact_path(snapshot["artifact_path"]) / "code"))
+    except ValueError:
+        return bindings
+    current = {(row["instance_name"], row["config_hash"]) for row in bindings}
+    if current != {(row["instance_name"], row["config_hash"]) for row in fresh}:
+        live_repository.replace_bindings(source_id, fresh)
+        bindings = live_repository.list_bindings(source_id)
+    return bindings
 
 
 def _persist_record(

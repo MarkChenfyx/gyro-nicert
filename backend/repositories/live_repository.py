@@ -97,6 +97,15 @@ def create_bindings(rows: list[dict[str, Any]]) -> None:
         connection.commit()
 
 
+def replace_bindings(source_id: str, rows: list[dict[str, Any]]) -> None:
+    """实盘策略列表变化后整体替换绑定；历史快照和跟踪记录不受影响。"""
+    with _connect() as connection:
+        connection.execute("DELETE FROM live_bindings WHERE source_id = ?", (source_id,))
+        connection.execute("UPDATE live_sources SET instance_count = ? WHERE source_id = ?", (len(rows), source_id))
+        connection.commit()
+    create_bindings(rows)
+
+
 def list_bindings(source_id: str) -> list[dict[str, Any]]:
     with _connect() as connection:
         rows = connection.execute(

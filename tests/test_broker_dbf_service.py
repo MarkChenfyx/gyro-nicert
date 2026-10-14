@@ -93,3 +93,16 @@ def test_capture_reads_settlements_and_fund_flows(tmp_path, monkeypatch):
     assert overview["settlements"][0]["security_name"] == "转债ETF"
     assert {row["category"] for row in overview["cash_summary"]} == {"证券交易", "出入金"}
     assert [row["amount"] for row in overview["cash_summary"] if row["category"] == "出入金"] == [50_000]
+
+
+def test_stale_export_group_is_ignored(tmp_path, monkeypatch):
+    import os
+    from backend.services import broker_dbf_service
+    for name, mtime in [("750_2_10159_account.dbf", 1), ("750_2_10159_positions.dbf", 1),
+                        ("750_2_account.dbf", 2), ("750_2_positions.dbf", 2), ("750_2_stkDelivery.dbf", 2)]:
+        path = tmp_path / name
+        path.write_bytes(b"x")
+        os.utime(path, (mtime * 1000, mtime * 1000))
+    monkeypatch.setenv(broker_dbf_service.DBF_DIR_ENV, str(tmp_path))
+    _root, files = broker_dbf_service._source_files()
+    assert sorted(files) == ["750_2_account.dbf", "750_2_positions.dbf", "750_2_stkDelivery.dbf"]

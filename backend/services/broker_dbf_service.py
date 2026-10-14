@@ -107,6 +107,11 @@ def _source_files() -> tuple[Path, dict[str, bytes]]:
         raise FileNotFoundError(status["message"])
     root = Path(env(DBF_DIR_ENV)).expanduser()
     paths = sorted({*root.glob("*.dbf"), *root.glob("*.DBF")}, key=lambda item: item.name.lower())
+    # 目录里可能残留旧的导出（如 xxx_10159_account.dbf）；只取账户文件最新的那一组前缀。
+    accounts = [path for path in paths if path.name.lower().endswith("_account.dbf")]
+    if len(accounts) > 1:
+        prefix = max(accounts, key=lambda path: path.stat().st_mtime).name[: -len("account.dbf")].lower()
+        paths = [path for path in paths if path.name.lower().startswith(prefix) and "_" not in path.name[len(prefix):]]
     return root, {path.name: _stable_read(path) for path in paths}
 
 

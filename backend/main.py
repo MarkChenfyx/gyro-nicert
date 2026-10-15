@@ -7,7 +7,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from backend.api import data_api, live_api, natural_language_api, optimization_api, pool_api, portfolio_api, research_api, run_api, strategy_api, strategy_research_api, task_api
+from backend.api import data_api, executor_api, live_api, natural_language_api, optimization_api, pool_api, portfolio_api, research_api, run_api, strategy_api, strategy_research_api, task_api
 from backend.core.environment import env
 from backend.services import live_scheduler
 
@@ -70,6 +70,7 @@ app.include_router(run_api.router)
 app.include_router(pool_api.router)
 app.include_router(portfolio_api.router)
 app.include_router(live_api.router)
+app.include_router(executor_api.router)
 app.include_router(task_api.router)
 app.include_router(data_api.router)
 app.include_router(natural_language_api.router)

@@ -215,7 +215,8 @@ export function Sidebar({
           ["pool", zh.pool],
           ["research", zh.research],
           ["portfolio", zh.portfolio],
-          ["live", zh.live]
+          ["live", zh.live],
+          ["execution", zh.execution]
         ] as Array<[PageKey, string]>).map(([key, label]) => (
           <button key={key} type="button" className={`nav-button ${page === key ? "is-active" : ""}`} onClick={() => onPageChange(key as PageKey)}>
             <span>{label}</span>

@@ -6,7 +6,8 @@ export const UI_TEXT = {
     pool: "策略池",
     research: "策略研究",
     portfolio: "组合管理",
-    live: "实盘跟踪"
+    live: "实盘跟踪",
+    execution: "执行监控"
   },
   term: {
     strategySeries: "策略系列",

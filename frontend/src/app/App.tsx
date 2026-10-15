@@ -7,6 +7,7 @@ import StrategyGenerationPage from "../pages/StrategyGenerationPage";
 import ParameterOptimizationPage from "../pages/ParameterOptimizationPage";
 import PoolPage from "../pages/PoolPage";
 import LivePage from "../pages/LivePage";
+import ExecutionPage from "../pages/ExecutionPage";
 import PortfolioPage from "../pages/PortfolioPage";
 import StrategyResearchPage from "../pages/StrategyResearchPage";
 import {
@@ -27,6 +28,7 @@ const CachedParameterOptimizationPage = memo(ParameterOptimizationPage);
 const CachedPoolPage = memo(PoolPage);
 const CachedPortfolioPage = memo(PortfolioPage);
 const CachedLivePage = memo(LivePage);
+const CachedExecutionPage = memo(ExecutionPage);
 const CachedStrategyResearchPage = memo(StrategyResearchPage);
 
 const APP_THEME = {
@@ -365,6 +367,11 @@ export default function App() {
           {visitedPages.has("live") && (
             <div hidden={page !== "live"}>
               <CachedLivePage />
+            </div>
+          )}
+          {visitedPages.has("execution") && (
+            <div hidden={page !== "execution"}>
+              <CachedExecutionPage />
             </div>
           )}
           {visitedPages.has("portfolio") && (

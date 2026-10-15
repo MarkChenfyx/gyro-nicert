@@ -489,3 +489,11 @@ export function deleteOptimizationCurveSnapshot(snapshotId: string) {
     method: "DELETE"
   });
 }
+
+export function getExecutorRuns() {
+  return request<any>("/api/executor/runs", { cache: "no-store" });
+}
+
+export function getExecutorOverview(run: string) {
+  return request<any>(`/api/executor/overview?run=${encodeURIComponent(run)}`, { cache: "no-store" });
+}

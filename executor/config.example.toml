@@ -1,0 +1,63 @@
+# 交易引擎配置示例。复制为 executor/config.toml 后修改（config.toml 不提交）。
+# 路径相对于项目根目录（gyro_nicert/）。资金账号等真实信息只写在服务器本地的 config.toml。
+
+[engine]
+mode = "backtest"                     # backtest / paper / live
+live_trading = false                  # 只有 mode = "live" 且这里为 true 才会真实下单
+data_dir = "storage/executor/ticks"   # 行情文件目录（录制或下载），回测从这里读
+runtime_dir = "storage/executor"      # 数据库、日志、停止文件所在目录
+commission_bp = 1.0                   # 回测手续费（单边，基点）；账户实际约 0.1
+max_quote_age_seconds = 90            # 行情超过这么久没更新视为过期，不据此交易
+state_save_every = 0                  # 实盘每多少次决策保存一次策略状态（0 = 只在日终保存）
+tplus1 = []                           # T+1 标的（A 股宽基等）；跨境、港股、黄金为 T+0
+
+[sim]                                 # 回测和纸面模式的模拟撮合
+latency_seconds = 0                   # 报单到可成交的延迟
+fill_ratio = 1.0                      # <1 时测试部分成交
+reject_rate = 0.0                     # >0 时测试随机拒单
+
+[risk]
+stop_file = "storage/executor/STOP"   # 该文件存在时拒绝一切新委托
+band_pct = 1.0                        # 限价偏离中间价超过该百分比拒单
+max_order_value = 2000000
+max_intents_per_day = 20
+max_daily_loss_pct = 15.0            # 防程序异常的熔断；策略满仓，指数单日大跌也会计入，不宜设太小
+
+[qmt]
+userdata_path = ""                    # QMT 安装目录下的 userdata_mini 路径
+account_id = ""                       # 资金账号（只写在服务器本地）
+
+[[strategy]]
+name = "rot_hk_dividend"
+type = "same_index_rotation"
+symbols = ["513530.SH", "513820.SH"]
+threshold = 0.3
+capital = 200000
+
+[[strategy]]
+name = "rot_nikkei"
+type = "same_index_rotation"
+symbols = ["513520.SH", "513880.SH", "513000.SH", "159866.SZ"]
+threshold = 0.5
+capital = 200000
+
+[[strategy]]
+name = "rot_sp500"
+type = "same_index_rotation"
+symbols = ["513650.SH", "159655.SZ"]
+threshold = 0.3
+capital = 200000
+
+[[strategy]]
+name = "rot_hsi"
+type = "same_index_rotation"
+symbols = ["159920.SZ", "513600.SH", "513660.SH"]
+threshold = 0.3
+capital = 200000
+
+[[strategy]]
+name = "rot_hs_biotech"
+type = "same_index_rotation"
+symbols = ["159892.SZ", "159615.SZ", "513280.SH"]
+threshold = 0.5
+capital = 200000

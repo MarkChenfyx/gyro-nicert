@@ -1,6 +1,6 @@
 import { UI_TEXT, resultVersionLabel } from "./terminology";
 
-export type PageKey = "launch" | "generate" | "optimize" | "pool" | "portfolio" | "research" | "live";
+export type PageKey = "launch" | "generate" | "optimize" | "pool" | "portfolio" | "research" | "live" | "execution";
 export type TaskRunNavigation = { runId: string; requestId: number };
 export type PoolNavigation = { poolItemId: string; vtSymbol: string; requestId: number };
 export type ResearchNavigation = { poolItemId: string; requestId: number };
@@ -198,7 +198,7 @@ export function taskDateGroup(task: WorkbenchTask) {
 }
 
 export function isPageKey(value: string): value is PageKey {
-  return value === "launch" || value === "generate" || value === "optimize" || value === "pool" || value === "portfolio" || value === "research" || value === "live";
+  return value === "launch" || value === "generate" || value === "optimize" || value === "pool" || value === "portfolio" || value === "research" || value === "live" || value === "execution";
 }
 
 export function loadInitialPage(): PageKey {
@@ -228,6 +228,7 @@ export const zh = {
   pool: UI_TEXT.page.pool,
   portfolio: UI_TEXT.page.portfolio,
   live: UI_TEXT.page.live,
+  execution: UI_TEXT.page.execution,
   research: UI_TEXT.page.research,
   status: "\u5de5\u4f5c\u53f0\u72b6\u6001",
   recentTasks: "\u6700\u8fd1\u4efb\u52a1",

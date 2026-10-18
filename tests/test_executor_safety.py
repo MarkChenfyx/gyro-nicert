@@ -1,4 +1,4 @@
-﻿"""执行器验收回归：崩溃、乱序、资源、数据分发和单位仓位口径。全部使用合成数据。"""
+"""执行器验收回归：崩溃、乱序、资源、数据分发和单位仓位口径。全部使用合成数据。"""
 from copy import deepcopy
 from dataclasses import asdict
 from datetime import datetime, timedelta
@@ -427,7 +427,7 @@ def test_paper_mode_never_logs_into_account(tmp_path,monkeypatch):
         def close(self): pass
     class ForbiddenAccount:
         def __init__(self,*args,**kwargs): created.append(args)
-    def finish_immediately(self,stop_check,heartbeat_seconds=1.0):
+    def finish_immediately(self,stop_check,**kwargs):
         seen["trade"]=type(self.trade_gw).__name__; self.finish()
     monkeypatch.setattr(qmt,"QmtMarketGateway",FakeMarket)
     monkeypatch.setattr(qmt,"QmtTradeGateway",ForbiddenAccount)
@@ -460,3 +460,12 @@ def test_update_package_includes_executor_but_not_local_config(tmp_path,monkeypa
     names=zipfile.ZipFile(next((tmp_path/"outputs").glob("*.zip"))).namelist()
     assert "gyro_nicert/executor/engine.py" in names and "gyro_nicert/start-executor.bat" in names
     assert "gyro_nicert/executor/config.toml" not in names
+
+
+def test_status_text_shows_quotes_trading_state_and_warmup(factory):
+    from executor.strategies.same_index_rotation import SameIndexRotation
+    e,_,_=factory(strategy=SameIndexRotation("r",[A,B],0.3))
+    text=e.status_text(T)
+    assert "行情 2/2 只在更新（含 IOPV 2）" in text and "交易启用" in text and "预热中 0.0/10 天" in text
+    e._halt(T,"测试暂停")
+    assert "已暂停：测试暂停" in e.status_text(T)

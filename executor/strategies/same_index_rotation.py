@@ -29,6 +29,7 @@ class SameIndexRotation(Strategy):
         self.ttl_seconds, self.max_slip_ticks = ttl_seconds, max_slip_ticks
         per_day = slots_per_day(step_minutes)
         self.window, self.min_samples = lookback_days * per_day, min_days * per_day
+        self.min_days = min_days
         self.history: dict[str, deque] = {s: deque(maxlen=self.window) for s in self.symbols}
 
     def subscription(self) -> Subscription:
@@ -64,6 +65,13 @@ class SameIndexRotation(Strategy):
         self.last_decision["action"] = f"target:{target}"
         return TargetIntent(self.name, f"{snap.time:%Y%m%d%H%M}", snap.time, {target: 1.0},
                             self.ttl_seconds, self.max_slip_ticks, reason)
+
+    def status(self) -> str:
+        per_day = slots_per_day(self.step_minutes)
+        have = min(len(h) for h in self.history.values())
+        if have < self.min_samples:
+            return f"预热中 {have / per_day:.1f}/{self.min_days} 天，暂不交易"
+        return f"上次决策：{self.last_decision.get('action', '无')}"
 
     def state(self) -> dict:
         return {"history": {s: list(h) for s, h in self.history.items()}}

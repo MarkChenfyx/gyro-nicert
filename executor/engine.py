@@ -526,12 +526,32 @@ class Engine:
         self.checkpoint()
         self.store.release()
 
-    def run_live(self,stop_check,heartbeat_seconds=1.0):
+    def status_text(self,now):
+        """给运行窗口看的一段状态：行情是否在进来、能否交易、在途委托、各策略持仓与预热进度。"""
+        symbols=sorted({s for sub in self.subscriptions.values() for s in sub.symbols})
+        fresh=[s for s in symbols if self.market.fresh(s,now)]
+        iopv=sum(1 for s in fresh if self.market.latest[s].iopv is not None)
+        if self.risk.stopped(): state="STOP 文件生效，拒绝新委托"
+        elif self.trading_enabled: state="交易启用"
+        else: state="已暂停："+self.halt_reason
+        lines=[f"行情 {len(fresh)}/{len(symbols)} 只在更新（含 IOPV {iopv}）｜{'交易时段' if in_session(now) else '非交易时段'}｜{state}｜在途委托 {len(self.oms.active())}"]
+        for name,st in self.strategies.items():
+            hold="、".join(f"{s}×{q}" for s,q in self.ledger.books[name].positions.items() if q) or "空仓"
+            extra=st.status()
+            lines.append(f"  {name}: {hold}"+(f"｜{extra}" if extra else "")+("｜当日熔断" if self.risk.halted(name) else ""))
+        return "\n".join(lines)
+
+    def run_live(self,stop_check,heartbeat_seconds=1.0,console=None,status_seconds=60.0):
+        last_status=None
         while not stop_check():
             try:
                 _,_,quotes=self._quotes.get(timeout=heartbeat_seconds)
                 self.on_quotes(self.clock.now(),quotes)
             except queue.Empty:
                 pass
-            self.on_timer(self.clock.now())
+            now=self.clock.now()
+            self.on_timer(now)
+            if console and (last_status is None or (now-last_status).total_seconds() >= status_seconds):
+                last_status=now
+                console(self.status_text(now))
         self.finish()

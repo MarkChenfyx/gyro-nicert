@@ -40,6 +40,7 @@ class Store:
         self.conn = sqlite3.connect(str(db_path))
         self.path = db_path
         self._lock_file = None
+        self.listener = None  # 可选：实时运行时把关键事件同时显示到窗口
         existing = self.conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
         if existing and self.conn.execute("PRAGMA user_version").fetchone()[0] != 2:
             self.conn.close()
@@ -51,6 +52,8 @@ class Store:
             self.log_dir.mkdir(parents=True, exist_ok=True)
 
     def event(self, t: datetime, kind: str, strategy: str = "", **payload: Any) -> None:
+        if self.listener:
+            self.listener(t, kind, strategy, payload)
         text = json.dumps(payload, ensure_ascii=False, default=str)
         self.conn.execute("INSERT INTO events (time, kind, strategy, payload) VALUES (?,?,?,?)", (_ts(t), kind, strategy, text))
         if self.log_dir:
@@ -63,6 +66,8 @@ class Store:
                            o.filled, o.avg_price, o.broker_id, _ts(o.created), _ts(o.updated), o.reason))
 
     def trade(self, strategy: str, t: Trade) -> None:
+        if self.listener:
+            self.listener(t.time, "trade", strategy, {"symbol": t.symbol, "side": t.side.value, "price": t.price, "volume": t.volume})
         self.conn.execute("INSERT OR IGNORE INTO trades VALUES (?,?,?,?,?,?,?,?,?)",
                           (t.trade_id, t.client_id, strategy, t.symbol, t.side.value, t.price, t.volume, _ts(t.time), t.fee))
 

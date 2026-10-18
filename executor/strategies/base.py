@@ -60,3 +60,7 @@ class Strategy(ABC):
 
     def restore(self, state: dict) -> None:
         pass
+
+    def status(self) -> str:
+        """运行窗口里显示的一句话状态（如预热进度）；默认不显示。"""
+        return ""

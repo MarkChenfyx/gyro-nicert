@@ -10,6 +10,8 @@ from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
+import json
+import heapq
 
 from .events import CorporateAction, Quote
 
@@ -48,6 +50,11 @@ def read_symbol(data_dir: Path, symbol: str, start: datetime | None = None, end:
 def iter_quotes(data_dir: Path, symbols: list[str], start: datetime | None = None,
                 end: datetime | None = None) -> Iterator[tuple[datetime, list[Quote]]]:
     """按时间顺序产出同一时刻的一批报价。"""
+    if list(Path(data_dir).glob("events_*.jsonl")):
+        for kind, t, quotes in iter_events(data_dir, symbols, start, end):
+            if kind == "quotes":
+                yield t, quotes
+        return
     parts = []
     for s in symbols:
         f = read_symbol(data_dir, s, start, end)
@@ -67,10 +74,34 @@ def iter_quotes(data_dir: Path, symbols: list[str], start: datetime | None = Non
         while j < n and times[j] == t:
             iv = float(iopv[j])
             batch.append(Quote(sym[j], pd.Timestamp(t).to_pydatetime(), round(float(last[j]), 3), round(float(bid[j]), 3),
-                               round(float(ask[j]), 3), iv if iv > 0 else None))
+                               round(float(ask[j]), 3), iv if iv > 0 else None, interval_end=True))
             j += 1
         yield batch[0].time, batch
         i = j
+
+
+def iter_events(data_dir, symbols, start=None, end=None):
+    """录制文件按原始批次和时钟回放；旧分钟采样文件仅供历史行情输入。"""
+    files = sorted(Path(data_dir).glob("events_*.jsonl"))
+    if not files:
+        for t, quotes in iter_quotes(data_dir, symbols, start, end):
+            yield "quotes", t, quotes
+        return
+    def stream(path):
+        with path.open(encoding="utf-8") as f:
+            for line in f:
+                r = json.loads(line)
+                t = datetime.fromisoformat(r["time"])
+                if (start is None or t >= start) and (end is None or t < end):
+                    yield t, path.name, r["seq"], r
+    for t, _, _, r in heapq.merge(*(stream(path) for path in files), key=lambda x: x[:3]):
+        quotes = []
+        for item in r["quotes"]:
+            if item["symbol"] in symbols:
+                item = dict(item)
+                item["time"] = datetime.fromisoformat(item["time"])
+                quotes.append(Quote(**item))
+        yield r["kind"], t, quotes
 
 
 def load_actions(data_dir: Path) -> list[CorporateAction]:

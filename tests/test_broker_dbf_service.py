@@ -95,6 +95,27 @@ def test_capture_reads_settlements_and_fund_flows(tmp_path, monkeypatch):
     assert [row["amount"] for row in overview["cash_summary"] if row["category"] == "出入金"] == [50_000]
 
 
+def test_split_position_rows_are_merged(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    source.mkdir()
+    account = "2____750003642____"
+    _write_dbf(source / "x_account.dbf", [("账号", 32), ("总资产", 16), ("交易日", 8)], [{"账号": account, "总资产": "1000000", "交易日": "20261016"}])
+    fields = [("账号", 32), ("市场", 4), ("证券代码", 8), ("当前拥股", 12), ("成本价", 12), ("市值", 16)]
+    _write_dbf(source / "x_positions.dbf", fields, [
+        {"账号": account, "市场": "SH", "证券代码": "204001", "当前拥股": "3160", "成本价": "100", "市值": "316000"},
+        {"账号": account, "市场": "SH", "证券代码": "204001", "当前拥股": "3130", "成本价": "100", "市值": "313000"},
+    ])
+    monkeypatch.setenv(broker_dbf_service.DBF_DIR_ENV, str(source))
+    monkeypatch.setattr(database, "APP_DB_PATH", tmp_path / "app.sqlite")
+    monkeypatch.setattr(broker_dbf_service, "BROKER_RAW_ROOT", tmp_path / "archive")
+
+    capture = broker_dbf_service.capture()
+    positions = broker_dbf_service.overview()["positions"]
+
+    assert [(row["vt_symbol"], row["quantity"], row["cost_price"], row["market_value"]) for row in positions] == [("204001.SSE", 6290, 100, 629000)]
+    assert any("204001.SSE" in warning for warning in capture["warnings"])
+
+
 def test_stale_export_group_is_ignored(tmp_path, monkeypatch):
     import os
     from backend.services import broker_dbf_service

@@ -24,7 +24,7 @@ pythonpath = ["."]
 testpaths = ["tests"]
 
 [tool.setuptools.packages.find]
-include = ["backend*"]
+include = ["backend*", "executor*"]
 
 [tool.setuptools.package-data]
 "backend.strategy_generation" = ["assets/**/*.md", "assets/**/*.py"]

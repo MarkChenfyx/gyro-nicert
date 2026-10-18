@@ -7,6 +7,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from enum import Enum
+from math import isfinite
 from typing import Any
 
 
@@ -18,6 +19,8 @@ class Quote:
     bid: float                      # 买一
     ask: float                      # 卖一
     iopv: float | None = None       # 基金份额参考净值；拿不到时为 None
+    interval_end: bool = False      # 历史分钟采样的时间标签是窗口结束；实时 tick 为 False
+    previous_close: float | None = None
 
     @property
     def mid(self) -> float:
@@ -25,12 +28,12 @@ class Quote:
 
     @property
     def valid(self) -> bool:
-        return self.bid > 0 and self.ask > 0 and self.ask >= self.bid
+        return all(isfinite(x) for x in (self.last, self.bid, self.ask)) and self.bid > 0 and self.ask >= self.bid
 
     @property
     def premium(self) -> float | None:
         """溢价（%）= 中间价 / IOPV − 1；IOPV 无效时为 None。"""
-        if not self.valid or not self.iopv or self.iopv <= 0:
+        if not self.valid or not self.iopv or not isfinite(self.iopv) or self.iopv <= 0:
             return None
         return (self.mid / self.iopv - 1) * 100
 
@@ -61,6 +64,7 @@ class Side(str, Enum):
 
 
 class OrderStatus(str, Enum):
+    UNKNOWN = "UNKNOWN"            # 发送/撤单结果未知；保留占用，查询确认前不得重发
     PENDING = "PENDING"            # 本地已创建，尚未确认报出
     SUBMITTED = "SUBMITTED"        # 已报
     PARTIAL = "PARTIAL"            # 部分成交
@@ -71,7 +75,7 @@ class OrderStatus(str, Enum):
 
     @property
     def active(self) -> bool:
-        return self in (OrderStatus.PENDING, OrderStatus.SUBMITTED, OrderStatus.PARTIAL, OrderStatus.CANCELLING)
+        return self in (OrderStatus.UNKNOWN, OrderStatus.PENDING, OrderStatus.SUBMITTED, OrderStatus.PARTIAL, OrderStatus.CANCELLING)
 
 
 @dataclass
@@ -90,6 +94,15 @@ class Order:
     broker_id: str | None = None
     updated: datetime | None = None
     reason: str = ""
+    accounted: int = 0              # 已按逐笔成交记入账本的数量，独立于券商累计成交
+
+    @property
+    def unsettled(self) -> bool:
+        return self.status.active or self.accounted < self.filled
+
+    @property
+    def reserved(self) -> int:
+        return max(0, (self.volume if self.status.active else self.filled) - self.accounted)
 
     @property
     def remaining(self) -> int:
@@ -139,3 +152,33 @@ class GatewayStatus:
     time: datetime
     connected: bool
     message: str = ""
+
+
+@dataclass(frozen=True)
+class CancelError:
+    client_id: str
+    time: datetime
+    message: str
+
+
+@dataclass(frozen=True)
+class Bar:
+    symbol: str
+    start: datetime
+    end: datetime
+    minutes: int
+    open: float
+    high: float
+    low: float
+    close: float
+    samples: int
+    complete: bool = True
+
+
+@dataclass(frozen=True)
+class Subscription:
+    symbols: tuple[str, ...]
+    bar_minutes: tuple[int, ...] = ()
+    ticks: bool = False
+    snapshots: bool = True
+    require_iopv: bool = False

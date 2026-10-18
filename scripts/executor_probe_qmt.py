@@ -1,7 +1,7 @@
 """在服务器上只读探测 QMT 接口（不下单）：打印行情字段（重点看有没有 IOPV）、持仓和资金。
 
 用 VeighNa / QMT 所在的 Python 运行，交易时间内运行最有意义：
-  python scripts/executor_probe_qmt.py --userdata "D:\\国金QMT交易端\\userdata_mini" --account 资金账号
+  python scripts/executor_probe_qmt.py --userdata <userdata_mini目录> --account 资金账号
 不填 --account 时只测行情。
 """
 from __future__ import annotations

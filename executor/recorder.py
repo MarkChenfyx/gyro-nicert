@@ -1,34 +1,28 @@
-"""行情录制：每个标的每分钟保留最后一个快照，按天写入 <data_dir>/<代码>/<日期>.pkl，格式与回放一致。"""
+"""逐批保留原始报价和推进时钟；每次启动新分片，不覆盖旧行情。"""
 from __future__ import annotations
-
-from datetime import datetime
+import json
+from dataclasses import asdict
 from pathlib import Path
-
-import pandas as pd
-
-from .data import write_quotes
-from .events import Quote
-
+from uuid import uuid4
 
 class Recorder:
-    def __init__(self, data_dir: Path, flush_every: int = 300):
-        self.data_dir = Path(data_dir)
-        self.rows: dict[str, dict[datetime, tuple]] = {}
-        self.flush_every, self._count = flush_every, 0
+    def __init__(self,data_dir,flush_every=300):
+        self.data_dir=Path(data_dir)
+        self.session=uuid4().hex
+        self.sequence=0
 
-    def add(self, quotes: list[Quote]) -> None:
-        for q in quotes:
-            minute = (q.time.replace(second=0, microsecond=0) + pd.Timedelta(minutes=1)
-                      if q.time.second or q.time.microsecond else q.time)
-            self.rows.setdefault(q.symbol, {})[minute] = (q.last, q.bid, q.ask, q.iopv or 0.0)
-        self._count += 1
-        if self._count % self.flush_every == 0:
-            self.flush()
+    def event(self,kind,time,quotes=()):
+        self.data_dir.mkdir(parents=True,exist_ok=True)
+        self.sequence+=1
+        row={"kind":kind,"time":time.isoformat(),"seq":self.sequence,"quotes":[asdict(q) for q in quotes]}
+        path=self.data_dir / f"events_{time:%Y%m%d}_{self.session}.jsonl"
+        with path.open("a",encoding="utf-8") as f:
+            f.write(json.dumps(row,default=str,ensure_ascii=False,allow_nan=False)+"\n")
+            f.flush()
 
-    def flush(self) -> None:
-        for symbol, rows in self.rows.items():
-            if not rows:
-                continue
-            frame = pd.DataFrame.from_dict(rows, orient="index", columns=["last", "bid1", "ask1", "iopv"]).sort_index()
-            for day, part in frame.groupby(frame.index.date):
-                write_quotes(self.data_dir, symbol, f"rec_{day:%Y%m%d}", part)
+    def add(self,quotes,time=None):
+        if quotes:
+            self.event("quotes",time or max(q.time for q in quotes),quotes)
+
+    def flush(self):
+        pass

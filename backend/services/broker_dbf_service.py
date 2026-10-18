@@ -193,6 +193,21 @@ def capture() -> dict[str, Any]:
                 "in_transit": _number(_pick(row, "在途数量", "在途股份")), "frozen_quantity": _number(_pick(row, "冻结数量", "冻结股份")), "overnight_quantity": _number(_pick(row, "昨夜拥股", "昨夜持股", "昨日持仓")),
                 "cost_price": _number(_pick(row, "成本价")), "market_value": _number(_pick(row, "市值")), "profit_loss": _number(_pick(row, "盈亏")),
             })
+        # QMT 可能把同一代码拆成多行（如新旧两笔逆回购同日并存）；同账户同代码按数量合并，成本价按数量加权。
+        merged: dict[tuple[str, str], dict[str, Any]] = {}
+        split_symbols: set[str] = set()
+        for row in positions:
+            current = merged.setdefault((row["account_key"], row["vt_symbol"]), row)
+            if current is row:
+                continue
+            split_symbols.add(row["vt_symbol"])
+            cost = (current["cost_price"] or 0) * (current["quantity"] or 0) + (row["cost_price"] or 0) * (row["quantity"] or 0)
+            for field in ("quantity", "available_quantity", "in_transit", "frozen_quantity", "overnight_quantity", "market_value", "profit_loss"):
+                if current[field] is not None or row[field] is not None:
+                    current[field] = (current[field] or 0) + (row[field] or 0)
+            if current["quantity"]:
+                current["cost_price"] = cost / current["quantity"]
+        positions = list(merged.values())
 
         orders: list[dict[str, Any]] = []
         for row in raw_orders:
@@ -254,6 +269,8 @@ def capture() -> dict[str, Any]:
         warnings = [] if any(item.get("strategy_name") for item in orders + deals) else ["券商导出未提供策略名称，当前只能按账户和标的核对"]
         if not raw_settlements:
             warnings.append("导出目录里没有交割单，真实手续费无法统计")
+        if split_symbols:
+            warnings.append(f"持仓导出中同一代码有多行，已按数量合并：{'、'.join(sorted(split_symbols))}")
         broker_repository.save_capture({"capture_id": capture_id, "source_hash": source_hash, "trade_date": trade_date, "captured_at": captured_at, "artifact_path": stored_path(archive), "counts": counts, "warnings": warnings}, accounts, positions, orders, deals, settlements, flows)
         status = "refreshed" if existing else "completed"
         message = "DBF 内容未变化，已重新导入" if existing else "券商 DBF 已归档并导入"

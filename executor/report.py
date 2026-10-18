@@ -13,11 +13,18 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from .data import load_actions, read_symbol
+from .data import iter_events, load_actions, read_symbol
 
 
 def daily_mid(data_dir: Path, symbol: str, start: datetime, end: datetime) -> pd.Series:
     f = read_symbol(data_dir, symbol, start, end)
+    if f.empty and list(Path(data_dir).glob("events_*.jsonl")):
+        prices = {q.time:q.mid for kind,_,quotes in iter_events(data_dir,[symbol],start,end)
+                  for q in quotes if kind=="quotes" and q.valid}
+        if not prices:
+            return pd.Series(dtype=float)
+        s=pd.Series(prices).sort_index()
+        return s.groupby(s.index.normalize()).last()
     f = f[(f.bid1 > 0) & (f.ask1 > 0)]
     mid = (f.bid1 + f.ask1) / 2
     return mid.groupby(mid.index.normalize()).last()
@@ -39,10 +46,12 @@ def benchmark(data_dir: Path, symbols: list[str], start: datetime, end: datetime
 
 
 def summarize(db_path: Path, data_dir: Path, strategies: list[dict], start: datetime, end: datetime) -> dict:
-    conn = sqlite3.connect(str(db_path))
+    conn = sqlite3.connect(f"file:{Path(db_path).as_posix()}?mode=ro", uri=True)
     eq = pd.read_sql("SELECT day, strategy, equity, positions FROM equity", conn, parse_dates=["day"])
     trades = pd.read_sql("SELECT strategy, side, price, volume, time, fee FROM trades", conn, parse_dates=["time"])
+    unit = pd.read_sql("SELECT day, strategy, daily_return FROM unit_returns", conn, parse_dates=["day"])
     intents = pd.read_sql("SELECT strategy, kind FROM events WHERE kind LIKE 'intent%'", conn)
+    conn.close()
     out, curves = {}, {}
     for cfg in strategies:
         name = cfg["name"]
@@ -52,9 +61,12 @@ def summarize(db_path: Path, data_dir: Path, strategies: list[dict], start: date
             out[name] = {"说明": "从未建仓"}
             continue
         first = held[held].index[0]
-        r = e.equity.pct_change()
+        r = unit[unit.strategy == name].set_index("day").daily_return / 100.0
         b = benchmark(data_dir, cfg["symbols"], start, end).reindex(r.index)
         x = pd.DataFrame({"策略": r, "基准": b}).loc[first:].iloc[1:].dropna()
+        if x.empty:
+            out[name] = {"说明": "尚无可计算的单位仓位收益"}
+            continue
         ex = x.策略 - x.基准
         years = len(x) / 252
         k = intents[intents.strategy == name].kind.value_counts()
@@ -64,9 +76,9 @@ def summarize(db_path: Path, data_dir: Path, strategies: list[dict], start: date
             "年化收益%": round(x.策略.sum() / years * 100, 2), "基准年化%": round(x.基准.sum() / years * 100, 2),
             "年化超额%": round(ex.sum() / years * 100, 2),
             "超额夏普": round(ex.mean() / ex.std() * np.sqrt(252), 2) if ex.std() > 0 else 0.0,
-            "超额最大回撤%": round(((ex.cumsum() - ex.cumsum().cummax()).min()) * 100, 2),
+            "超额最大回撤%": round(((ex.cumsum() - ex.cumsum().cummax().clip(lower=0)).min()) * 100, 2),
             "每年换仓": round(k.get("intent_done", 0) / years, 1), "过期意图": int(k.get("intent_expired", 0)),
             "被拦截意图": int(k.get("intent_blocked", 0)), "成交笔数": len(tr), "手续费": round(tr.fee.sum(), 2),
         }
         curves[name] = ex.cumsum() * 100
-    return {"summary": out, "excess_curves": {k: {str(d.date()): round(v, 4) for d, v in s.items()} for k, s in curves.items()}}
+    return {"return_basis": "unit_position", "summary": out, "excess_curves": {k: {str(d.date()): round(v, 4) for d, v in s.items()} for k, s in curves.items()}}

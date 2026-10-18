@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from ..events import Order, Snapshot, TargetIntent, Trade
+from ..events import Bar, Order, Quote, Snapshot, Subscription, TargetIntent, Trade
 from ..portfolio import Book
 
 
@@ -31,8 +31,23 @@ class Strategy(ABC):
     def __init__(self):
         self.last_decision: dict[str, Any] = {}
 
-    @abstractmethod
-    def on_snapshot(self, ctx: Context, snap: Snapshot) -> TargetIntent | None: ...
+    def subscription(self) -> Subscription:
+        return Subscription(tuple(self.symbols))
+
+    def configuration(self) -> dict:
+        sub=self.subscription()
+        return {"type":type(self).__module__+"."+type(self).__qualname__,"symbols":list(sub.symbols),
+                "bar_minutes":list(sub.bar_minutes),"ticks":sub.ticks,"snapshots":sub.snapshots,
+                "require_iopv":sub.require_iopv,"step_minutes":self.step_minutes}
+
+    def on_snapshot(self, ctx: Context, snap: Snapshot) -> TargetIntent | None:
+        return None
+
+    def on_tick(self, ctx: Context, quote: Quote) -> TargetIntent | None:
+        return None
+
+    def on_bars(self, ctx: Context, end: datetime, minutes: int, bars: dict[str, Bar], missing: set[str]) -> TargetIntent | None:
+        return None
 
     def on_order(self, ctx: Context, order: Order) -> None:
         pass

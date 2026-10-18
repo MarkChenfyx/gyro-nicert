@@ -66,9 +66,12 @@ def test_sim_partial_fill_and_cancel():
     o = Order("c1", "s", "i", A, Side.BUY, 1.001, 1000, t0)
     b.send_order(o)
     b.match(t0)
+    assert A not in b.positions                     # 下单不能消耗用于产生信号的旧报价
+    clock.set(t0 + timedelta(seconds=1))
+    b.on_quotes(clock.now(), [q(A, clock.now(), 1.0)])
     assert b.positions[A] == 500
     b.cancel_order(o)
-    b.match(t0)
+    b.match(clock.now())
     last = [e for e in ev if isinstance(e, OrderUpdate)][-1]
     assert last.status is OrderStatus.CANCELLED and last.filled == 500
 

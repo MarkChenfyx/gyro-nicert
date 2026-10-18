@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
+from math import isfinite
 
 from .events import Order
 
@@ -59,10 +60,14 @@ class RiskManager:
         self._intents_today[strategy] = self._intents_today.get(strategy, 0) + 1
         return None
 
-    def check_order(self, order: Order, mid: float | None) -> str | None:
+    def check_order(self, order: Order, mid: float | None, odd_lot_close: bool = False) -> str | None:
         if self.stopped():
             return "停止文件存在"
-        if order.volume <= 0 or order.volume % 100:
+        if order.strategy in self._halted:
+            return self._halted[order.strategy]
+        if not isfinite(order.price) or order.price <= 0:
+            return "委托价格无效"
+        if order.volume <= 0 or (order.volume % 100 and not odd_lot_close):
             return "数量必须为 100 份的正整数倍"
         if mid is None or mid <= 0:
             return "没有有效行情"
@@ -71,3 +76,13 @@ class RiskManager:
         if order.price * order.volume > self.cfg.max_order_value:
             return "单笔金额超过上限"
         return None
+
+    def state(self) -> dict:
+        return {"day": self._day.isoformat() if self._day else None, "intents": self._intents_today,
+                "halted": self._halted, "equities": self._day_start_equity}
+
+    def restore(self, state: dict) -> None:
+        self._day = date.fromisoformat(state["day"]) if state.get("day") else None
+        self._intents_today = dict(state.get("intents", {}))
+        self._halted = dict(state.get("halted", {}))
+        self._day_start_equity = dict(state.get("equities", {}))

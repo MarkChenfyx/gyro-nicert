@@ -6,12 +6,13 @@ import tempfile
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
-DIRECTORIES = ("backend", "scripts", "tests", "frontend/src", "frontend/dist",
+DIRECTORIES = ("backend", "executor", "scripts", "tests", "frontend/src", "frontend/dist",
                "storage/natural_language", "storage/strategies/manual")
 FILES = ("README.md", "pyproject.toml", "requirements-server.txt", ".env.example",
-         "start.bat", "start-server.bat", "frontend/package.json", "frontend/package-lock.json",
+         "start.bat", "start-server.bat", "start-executor.bat", "frontend/package.json", "frontend/package-lock.json",
          "frontend/index.html", "frontend/tsconfig.json", "frontend/tsconfig.node.json",
          "frontend/vite.config.ts")
+EXCLUDED = {"executor/config.toml"}  # 服务器本地配置（含资金账号），不随发布包覆盖
 
 
 def main() -> None:
@@ -37,7 +38,8 @@ def main() -> None:
                 candidates.extend((ROOT / directory).rglob("*"))
             for path in sorted(set(candidates)):
                 relative = path.relative_to(ROOT)
-                if path.is_file() and "__pycache__" not in relative.parts and path.suffix != ".pyc":
+                if (path.is_file() and "__pycache__" not in relative.parts and path.suffix != ".pyc"
+                        and relative.as_posix() not in EXCLUDED):
                     archive.write(path, "gyro_nicert/" + relative.as_posix())
             if copy.is_file():
                 archive.write(copy, "gyro_nicert/storage/db/market_data.sqlite")

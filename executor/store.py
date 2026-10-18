@@ -23,6 +23,9 @@ CREATE TABLE IF NOT EXISTS books (strategy TEXT PRIMARY KEY, payload TEXT, updat
 CREATE TABLE IF NOT EXISTS strategy_state (strategy TEXT PRIMARY KEY, payload TEXT, updated TEXT);
 CREATE TABLE IF NOT EXISTS state_history (day TEXT, strategy TEXT, book TEXT, state TEXT, PRIMARY KEY (day, strategy));
 CREATE TABLE IF NOT EXISTS equity (day TEXT, strategy TEXT, equity REAL, cash REAL, positions TEXT, PRIMARY KEY (day, strategy));
+CREATE TABLE IF NOT EXISTS runtime_state (name TEXT PRIMARY KEY, payload TEXT);
+CREATE TABLE IF NOT EXISTS unit_returns (day TEXT, strategy TEXT, daily_return REAL, cumulative_return REAL,
+    PRIMARY KEY (day, strategy));
 """
 
 
@@ -35,7 +38,14 @@ class Store:
         db_path = Path(db_path)
         db_path.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(str(db_path))
+        self.path = db_path
+        self._lock_file = None
+        existing = self.conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+        if existing and self.conn.execute("PRAGMA user_version").fetchone()[0] != 2:
+            self.conn.close()
+            raise ValueError("旧版执行库只供查看；请配置新的运行目录，不自动迁移或覆盖")
         self.conn.executescript(SCHEMA)
+        self.conn.execute("PRAGMA user_version=2")
         self.log_dir = Path(log_dir) if log_dir else None
         if self.log_dir:
             self.log_dir.mkdir(parents=True, exist_ok=True)
@@ -74,6 +84,45 @@ class Store:
 
     def commit(self) -> None:
         self.conn.commit()
+
+    def save_runtime(self, name: str, state: dict) -> None:
+        self.conn.execute("INSERT OR REPLACE INTO runtime_state VALUES (?,?)",
+                          (name, json.dumps(state, default=str, allow_nan=False)))
+
+    def load_runtime(self, name: str) -> dict:
+        row = self.conn.execute("SELECT payload FROM runtime_state WHERE name=?", (name,)).fetchone()
+        return json.loads(row[0]) if row else {}
+
+    def accounted(self) -> dict[str, int]:
+        return dict(self.conn.execute("SELECT client_id, sum(volume) FROM trades GROUP BY client_id"))
+
+    def acquire(self) -> None:
+        """进程退出自动释放的文件锁，防止两个执行器使用同一交易库。"""
+        if self._lock_file is not None:
+            raise RuntimeError("该交易库已由执行器占用")
+        import os
+        f = self.path.with_suffix(self.path.suffix + ".lock").open("a+b")
+        try:
+            if os.name == "nt":
+                import msvcrt
+                f.seek(0); f.write(b"0"); f.flush(); f.seek(0)
+                msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            f.close()
+            raise RuntimeError("该交易库已由另一执行器占用") from None
+        self._lock_file = f
+
+    def release(self) -> None:
+        if self._lock_file:
+            self._lock_file.close()
+            self._lock_file = None
+
+    def close(self) -> None:
+        self.release()
+        self.conn.close()
 
     # ---- 恢复 ----
     def load_books(self) -> list[dict]:

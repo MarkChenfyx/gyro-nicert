@@ -12,7 +12,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 from typing import Any
 
-from ..events import Order
+from ..events import Order, OrderUpdate, Trade
 
 Sink = Callable[[Any], None]
 
@@ -42,3 +42,15 @@ class TradeGateway(ABC):
     def query_open_orders(self) -> dict[str, dict]:
         """client_id → {status, filled, avg_price}；用于重启后核对未完成委托。"""
         return {}
+
+    def restore_orders(self, orders: list[Order]) -> None:
+        """恢复网关的客户端编号/券商编号关联。"""
+
+    def query_order_updates(self) -> list[OrderUpdate]:
+        raise NotImplementedError("交易网关必须支持完整委托核对")
+
+    def query_trades(self) -> list[Trade]:
+        raise NotImplementedError("交易网关必须支持成交核对")
+
+    def query_sellable_positions(self) -> dict[str, int]:
+        raise NotImplementedError("交易网关必须提供实际可卖数量")

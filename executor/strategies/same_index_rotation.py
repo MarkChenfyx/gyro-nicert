@@ -12,7 +12,7 @@ from collections import deque
 from statistics import median
 
 from ..clock import AFTERNOON_FIRST, MORNING_FIRST
-from ..events import Snapshot, TargetIntent
+from ..events import Snapshot, Subscription, TargetIntent
 from .base import Context, Strategy
 
 
@@ -30,6 +30,9 @@ class SameIndexRotation(Strategy):
         per_day = slots_per_day(step_minutes)
         self.window, self.min_samples = lookback_days * per_day, min_days * per_day
         self.history: dict[str, deque] = {s: deque(maxlen=self.window) for s in self.symbols}
+
+    def subscription(self) -> Subscription:
+        return Subscription(tuple(self.symbols),require_iopv=True)
 
     def on_snapshot(self, ctx: Context, snap: Snapshot) -> TargetIntent | None:
         z: dict[str, float] = {}
@@ -64,6 +67,10 @@ class SameIndexRotation(Strategy):
 
     def state(self) -> dict:
         return {"history": {s: list(h) for s, h in self.history.items()}}
+
+    def configuration(self) -> dict:
+        return {**super().configuration(),"threshold":self.threshold,"window":self.window,
+                "min_samples":self.min_samples,"ttl_seconds":self.ttl_seconds,"max_slip_ticks":self.max_slip_ticks}
 
     def restore(self, state: dict) -> None:
         for s, values in state.get("history", {}).items():

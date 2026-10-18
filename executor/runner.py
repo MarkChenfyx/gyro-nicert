@@ -17,7 +17,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .clock import RealClock, SimClock
-from .data import iter_quotes, load_actions
+from .data import iter_events, load_actions
 from .engine import Engine
 from .gateways.sim import ReplayMarket, SimBroker
 from .recorder import Recorder
@@ -56,60 +56,79 @@ def run_backtest(cfg: dict, start: datetime, end: datetime, data_dir: Path, run_
     run_dir.mkdir(parents=True, exist_ok=True)
     db = run_dir / "executor.sqlite"
     if db.exists():
-        db.unlink()
+        raise FileExistsError("已有同名运行，禁止覆盖，请使用新的 run-name")
     store = Store(db, run_dir / "logs")
     risk = RiskManager(RiskConfig(**{**risk_cfg, "stop_file": ""}))
     engine = Engine(clock=clock, market_gw=ReplayMarket(), trade_gw=broker, strategies=strategies, capitals=capitals,
                     store=store, risk=risk, tplus1=tplus1, commission_bp=eng.get("commission_bp", 1.0),
-                    max_quote_age=eng.get("max_quote_age_seconds", 90.0), actions=actions)
-    engine.start()
-    symbols = sorted({s for st in strategies for s in st.symbols})
-    for t, quotes in iter_quotes(data_dir, symbols, start, end):
-        engine.on_quotes(t, quotes)
-    engine.finish()
+                    max_quote_age=eng.get("max_quote_age_seconds", 90.0), actions=actions, snapshot_wait_seconds=eng.get("snapshot_wait_seconds", 2.0))
+    try:
+        problems = engine.start()
+        if problems:
+            raise RuntimeError("模拟账户核对失败：" + "；".join(problems))
+        symbols = sorted({s for st in strategies for s in st.symbols})
+        for kind, t, quotes in iter_events(data_dir, symbols, start, end):
+            if kind == "quotes":
+                engine.on_quotes(t, quotes)
+            else:
+                engine.on_timer(t)
+        engine.finish()
+    finally:
+        store.close()
     report = summarize(db, data_dir, cfg["strategy"], start, end)
     (run_dir / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8")
     return report
 
 
 def run_realtime(cfg: dict, mode: str) -> None:
-    from .gateways.qmt import QmtGateway
+    from .gateways.qmt import QmtMarketGateway, QmtTradeGateway
 
     eng, risk_cfg, qmt = cfg["engine"], cfg.get("risk", {}), cfg.get("qmt", {})
     live = mode == "live" and bool(eng.get("live_trading", False))
     if mode == "live" and not live:
-        raise SystemExit("mode = live 但 live_trading 不是 true，拒绝启动真实下单。纸面运行请用 mode = paper。")
-    runtime = resolve(eng.get("runtime_dir", "storage/executor"))
+        raise SystemExit("mode = live 但 live_trading 不是 true，拒绝启动真实下单")
+    if live and qmt.get("account_mode", "dedicated") != "dedicated":
+        raise ValueError("当前实盘只支持专用资金账户；共用账户需先接入统一资源协调")
+    runtime = resolve(eng.get("runtime_dir", "storage/executor_v2"))
     strategies = build_strategies(cfg)
     capitals = {s["name"]: float(s["capital"]) for s in cfg["strategy"]}
     tplus1 = set(eng.get("tplus1", []))
     clock = RealClock()
-    gateway = QmtGateway(qmt.get("userdata_path", ""), qmt.get("account_id", ""), allow_orders=live)
-    gateway.connect()
-    if live:
-        trade_gw = gateway
-        store = Store(runtime / "live.sqlite", runtime / "logs" / "live")
-    else:
-        sim = cfg.get("sim", {})
-        trade_gw = SimBroker(clock, sum(capitals.values()), sim.get("latency_seconds", 1.0), eng.get("commission_bp", 1.0),
-                             tplus1=tplus1)
-        store = Store(runtime / "paper.sqlite", runtime / "logs" / "paper")
-    risk_cfg = {**risk_cfg, "stop_file": str(resolve(risk_cfg.get("stop_file", "storage/executor/STOP")))}
-    recorder = Recorder(resolve(eng.get("data_dir", "storage/executor/ticks")))
-    engine = Engine(clock=clock, market_gw=gateway, trade_gw=trade_gw, strategies=strategies, capitals=capitals,
-                    store=store, risk=RiskManager(RiskConfig(**risk_cfg)), tplus1=tplus1,
-                    commission_bp=eng.get("commission_bp", 1.0), max_quote_age=eng.get("max_quote_age_seconds", 90.0),
-                    recorder=recorder, state_save_every=eng.get("state_save_every", 6))
-    problems = engine.start()
-    if problems:
-        print("核对未通过，本次只接行情不交易：", problems)
-    stopping = {"flag": False}
-    signal.signal(signal.SIGINT, lambda *_: stopping.update(flag=True))
+    market = QmtMarketGateway()
+    account = QmtTradeGateway(qmt.get("userdata_path", ""), qmt.get("account_id", ""), allow_orders=True) if live else None
+    store = None
+    recorder = Recorder(resolve(eng.get("recording_dir", "storage/executor_v2/recordings")))
     try:
+        if account is not None:  # 纸面模式不登录交易账户，账户上其他程序的委托和成交不会进入引擎
+            account.connect()
+        store = Store(runtime / ("live.sqlite" if live else "paper.sqlite"), runtime / "logs" / mode)
+        restoring = bool(store.load_runtime("engine"))
+        sim = cfg.get("sim", {})
+        trade_gw = account if live else SimBroker(clock, sum(capitals.values()), sim.get("latency_seconds", 1.0),
+            eng.get("commission_bp", 1.0), fill_ratio=sim.get("fill_ratio", 1.0),
+            reject_rate=sim.get("reject_rate", 0.0), tplus1=tplus1)
+        risk_cfg = {**risk_cfg, "stop_file": str(resolve(risk_cfg.get("stop_file", "storage/executor/STOP")))}
+        engine = Engine(clock=clock, market_gw=market, trade_gw=trade_gw, strategies=strategies, capitals=capitals,
+            store=store, risk=RiskManager(RiskConfig(**risk_cfg)), tplus1=tplus1,
+            commission_bp=eng.get("commission_bp", 1.0), max_quote_age=eng.get("max_quote_age_seconds", 90.0),
+            recorder=recorder, snapshot_wait_seconds=eng.get("snapshot_wait_seconds", 2.0))
+        problems = engine.start()
+        if problems:
+            print("核对未通过，本次只接行情不交易：", problems)
+        if not restoring and eng.get("warmup_start") and eng.get("warmup_end"):
+            symbols = sorted({symbol for sub in engine.subscriptions.values() for symbol in sub.symbols})
+            engine.warmup(iter_events(resolve(eng["data_dir"]), symbols,
+                datetime.fromisoformat(eng["warmup_start"]), datetime.fromisoformat(eng["warmup_end"])))
+        stopping = {"flag": False}
+        signal.signal(signal.SIGINT, lambda *_: stopping.update(flag=True))
         engine.run_live(lambda: stopping["flag"])
     finally:
         recorder.flush()
-        gateway.close()
+        market.close()
+        if account is not None:
+            account.close()
+        if store is not None:
+            store.close()
 
 
 def main() -> None:
@@ -128,7 +147,10 @@ def main() -> None:
         cfg.setdefault("sim", {})["latency_seconds"] = args.latency
     if mode == "backtest":
         data_dir = Path(args.data_dir) if args.data_dir else resolve(cfg["engine"].get("data_dir", "storage/executor/ticks"))
-        run_dir = resolve(cfg["engine"].get("runtime_dir", "storage/executor")) / "backtests" / args.run_name
+        import re
+        if not re.fullmatch(r"[\w-]+", args.run_name):
+            raise ValueError("run-name 只能包含字母、数字、下划线和连字符")
+        run_dir = resolve(cfg["engine"].get("runtime_dir", "storage/executor_v2")) / "backtests" / args.run_name
         report = run_backtest(cfg, datetime.fromisoformat(args.start), datetime.fromisoformat(args.end), data_dir, run_dir)
         print(json.dumps(report["summary"], ensure_ascii=False, indent=1))
         print("结果目录：", run_dir)

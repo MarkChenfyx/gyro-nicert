@@ -52,7 +52,7 @@ function Curves({ series, unit }: { series: { name: string; points: [string, num
       yAxis: { type: "value", scale: true, axisLabel: { formatter: (v: number) => `${v}${unit}` } },
       series: series.map(s => {
         const map = new Map(s.points);
-        return { name: s.name, type: "line", showSymbol: false, connectNulls: true, data: days.map(d => (map.has(d) ? map.get(d) : null)) };
+        return { name: s.name, type: "line", showSymbol: false, connectNulls: false, data: days.map(d => (map.has(d) ? map.get(d) : null)) };
       })
     });
     const observer = new ResizeObserver(() => chart.resize());
@@ -103,15 +103,15 @@ export default function ExecutionPage() {
       return { unit: "%", title: "累计超额（相对组内等权一直持有）", series: Object.entries(excessCurves).map(([name, pts]) => ({ name: label(name), points: Object.entries(pts) as [string, number][] })) };
     }
     return {
-      unit: "%", title: "累计收益（相对初始资金）",
-      series: strategies.map(s => ({ name: label(s.name), points: (s.series || []).map((p: any) => [p.day, (p.equity / s.capital - 1) * 100] as [string, number]) }))
+      unit: "%", title: "单位仓位累计收益（简单累加）",
+      series: strategies.map(s => ({ name: label(s.name), points: (s.series || []).map((p: any) => [p.day, p.return_pct] as [string, number]) }))
     };
   }, [excessCurves, strategies]);
 
   const alerts: any[] = (data?.alerts || []).filter((a: any) => a.kind !== "start" || (a.payload?.problems || []).length);
   const summary = data?.report?.summary || {};
   const totalEquity = strategies.reduce((t, s) => t + Number(s.equity || 0), 0);
-  const totalCapital = strategies.reduce((t, s) => t + Number(s.capital || 0), 0);
+  const totalCash = strategies.reduce((t, s) => t + Number(s.cash || 0), 0);
 
   return (
     <section className="page-shell">
@@ -142,8 +142,8 @@ export default function ExecutionPage() {
               </span>
             </div>
             <div className="library-metric-grid portfolio-metric-grid">
-              <div className="library-metric-card"><span>总权益</span><strong>¥ {num(totalEquity)}</strong></div>
-              <div className={`library-metric-card ${totalEquity >= totalCapital ? "positive" : "negative"}`}><span>累计收益</span><strong>{totalCapital ? num((totalEquity / totalCapital - 1) * 100, 2) : "-"}%</strong></div>
+              <div className="library-metric-card"><span>账本权益</span><strong>¥ {num(totalEquity)}</strong></div>
+              <div className="library-metric-card"><span>账本资金余额</span><strong>¥ {num(totalCash)}</strong></div>
               <div className="library-metric-card"><span>策略数</span><strong>{strategies.length}</strong></div>
             </div>
             {curves.series.length > 0 && (<><div className="broker-table-caption">{curves.title}</div><Curves series={curves.series} unit={curves.unit} /></>)}
@@ -155,7 +155,7 @@ export default function ExecutionPage() {
               { title: "组", dataIndex: "name", render: (v: string) => <strong>{label(v)}</strong> },
               { title: "当前持有", dataIndex: "positions", render: (p: Record<string, number>) => Object.entries(p || {}).map(([s, q]) => `${s} × ${num(q)}`).join("，") || "空仓" },
               { title: "权益", dataIndex: "equity", align: "right", render: (v: number) => num(v) },
-              { title: "累计收益", dataIndex: "return_pct", align: "right", render: (v: number) => <span className={v >= 0 ? "broker-value positive" : "broker-value negative"}>{num(v, 2)}%</span> },
+              { title: "单位仓位累计收益", dataIndex: "return_pct", align: "right", render: (v: number | null) => v === null ? "-" : <span className={v >= 0 ? "broker-value positive" : "broker-value negative"}>{num(v, 2)}%</span> },
               { title: "年化超额", dataIndex: "name", align: "right", render: (n: string) => (summary[n]?.["年化超额%"] !== undefined ? `${num(summary[n]["年化超额%"], 2)}%` : "-") },
               { title: "最近一日换仓", dataIndex: "today", align: "right", render: (t: Record<string, number>) => num((t || {}).intent_done || 0) },
               { title: "最新 z 值", dataIndex: "latest_decision", render: (d: any) => Object.entries(d?.z || {}).sort((a: any, b: any) => a[1] - b[1]).map(([s, z]: any) => `${s.slice(0, 6)} ${Number(z).toFixed(2)}`).join(" / ") || "-" },

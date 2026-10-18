@@ -1,4 +1,4 @@
-"""策略账本：每个策略只管自己的资金和持仓，和账户里其他来源（如 vn.py 策略）的仓位严格隔离。
+"""策略账本：每个策略只管自己的资金和持仓，不替代共用账户的资源协调。
 
 可卖数量：T+1 标的当天买入的部分不可卖；T+0 标的全部可卖。
 """
@@ -61,6 +61,8 @@ class Ledger:
 
     def apply_trade(self, strategy: str, trade: Trade) -> None:
         b = self.books[strategy]
+        if trade.side is Side.SELL and trade.volume > b.qty(trade.symbol):
+            raise ValueError("卖出成交数量超过账本持仓")
         amount = trade.price * trade.volume
         if trade.side is Side.BUY:
             b.cash -= amount + trade.fee
@@ -93,3 +95,58 @@ class Ledger:
             for s, q in b.positions.items():
                 total[s] = total.get(s, 0) + q
         return total
+
+
+class UnitPerformance:
+    """单位持仓盈亏/上期收盘价，逐期简单累加；份数按冻结目标的成交比例记录。"""
+    def __init__(self):
+        self.books = {}
+        self.prices = {}
+        self.references = {}
+
+    def open(self, name):
+        self.books.setdefault(name, {"units": {}, "daily": 0.0, "cumulative": 0.0, "valid": True, "complete": True})
+
+    def new_day(self):
+        self.references = dict(self.prices)
+        for b in self.books.values():
+            b["daily"] = 0.0
+            b["valid"] = True
+
+    def _add(self, name, symbol, pnl):
+        ref = self.references.get(symbol)
+        b = self.books[name]
+        if not ref:
+            if pnl:
+                b["valid"] = False
+                b["complete"] = False
+            return
+        value = pnl / ref * 100
+        b["daily"] += value
+        b["cumulative"] += value
+
+    def mark(self, symbol, price):
+        old = self.prices.get(symbol, price)
+        for name, b in self.books.items():
+            self._add(name, symbol, b["units"].get(symbol, 0.0) * (price-old))
+        self.prices[symbol] = price
+
+    def trade(self, name, trade, previous_qty, target_qty, target_weight):
+        b = self.books[name]
+        if trade.side is Side.BUY:
+            units = trade.volume / target_qty * target_weight if target_qty else 0.0
+            b["units"][trade.symbol] = b["units"].get(trade.symbol, 0.0) + units
+            pnl = units * (self.prices.get(trade.symbol, trade.price)-trade.price)
+        else:
+            units = b["units"].get(trade.symbol, 0.0) * trade.volume / previous_qty if previous_qty else 0.0
+            b["units"][trade.symbol] = max(0.0, b["units"].get(trade.symbol, 0.0)-units)
+            pnl = units * (trade.price-self.prices.get(trade.symbol, trade.price))
+        self._add(name, trade.symbol, pnl - units * trade.fee / trade.volume)
+
+    def state(self):
+        return {"books": self.books, "prices": self.prices, "references": self.references}
+
+    def restore(self, state):
+        self.books = state.get("books", {})
+        self.prices = state.get("prices", {})
+        self.references = state.get("references", {})

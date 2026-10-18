@@ -23,3 +23,5 @@ outputs/
 lab/
 storage/executor/
 executor/config.toml
+
+storage/executor_v2/

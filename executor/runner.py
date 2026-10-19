@@ -82,7 +82,9 @@ def run_backtest(cfg: dict, start: datetime, end: datetime, data_dir: Path, run_
 
 EVENT_LABELS = {"start": "启动", "intent": "新目标", "intent_done": "换仓完成", "intent_expired": "换仓过期",
                 "intent_blocked": "目标被拦截", "order_blocked": "委托被风控拦截", "order_rejected": "委托被拒",
-                "trade": "成交", "gateway_down": "暂停交易", "broker_query_failed": "券商查询失败"}
+                "trade": "成交", "gateway_down": "暂停交易", "broker_query_failed": "券商查询失败",
+                "corporate_action": "除权除息", "corporate_action_mismatch": "除权数据不一致，相关策略今日暂停",
+                "corporate_action_source_failed": "读取除权数据失败"}
 
 
 def console(text: str) -> None:
@@ -111,6 +113,8 @@ def show_event(t, kind: str, strategy: str, payload: dict) -> None:
     if kind == "gateway_down" or (kind == "start" and not payload.get("trading_enabled")):
         reason = payload.get("message") or "；".join(payload.get("problems") or [])
         popup("交易引擎已暂停交易", f"{reason}（新委托已停止，请查看引擎窗口）")
+    elif kind in ("corporate_action_mismatch", "corporate_action_source_failed"):
+        popup("交易引擎：除权数据需核对", f"{EVENT_LABELS[kind]} {detail[:200]}")
 
 
 def run_realtime(cfg: dict, mode: str) -> None:
@@ -143,7 +147,9 @@ def run_realtime(cfg: dict, mode: str) -> None:
             eng.get("commission_bp", 1.0), fill_ratio=sim.get("fill_ratio", 1.0),
             reject_rate=sim.get("reject_rate", 0.0), tplus1=tplus1)
         risk_cfg = {**risk_cfg, "stop_file": str(resolve(risk_cfg.get("stop_file", "storage/executor/STOP")))}
+        symbols = sorted({symbol for st in strategies for symbol in st.subscription().symbols})
         engine = Engine(clock=clock, market_gw=market, trade_gw=trade_gw, strategies=strategies, capitals=capitals,
+            action_source=lambda day: market.corporate_actions(symbols, day),
             store=store, risk=RiskManager(RiskConfig(**risk_cfg)), tplus1=tplus1,
             commission_bp=eng.get("commission_bp", 1.0), max_quote_age=eng.get("max_quote_age_seconds", 90.0),
             recorder=recorder, snapshot_wait_seconds=eng.get("snapshot_wait_seconds", 2.0))

@@ -5,9 +5,9 @@
 """
 from __future__ import annotations
 import time as _time
-from datetime import datetime
+from datetime import datetime, timedelta
 from ..clock import BEIJING, beijing_now
-from ..events import CancelError, GatewayStatus, OrderStatus, OrderUpdate, Quote, Side, Trade
+from ..events import CorporateAction, CancelError, GatewayStatus, OrderStatus, OrderUpdate, Quote, Side, Trade
 from .base import MarketGateway, TradeGateway
 
 IOPV_KEYS=("iopv","IOPV","iopvPrice","fundIopv")
@@ -19,6 +19,15 @@ def _iopv(tick):
     for key in IOPV_KEYS:
         if tick.get(key): return float(tick[key])
     return None
+
+def _action_date(index):
+    """除权数据的日期索引：毫秒时间戳、YYYYMMDD 字符串或日期类型。"""
+    text=str(index)
+    if text.isdigit() and len(text) == 8:
+        return datetime.strptime(text,"%Y%m%d").date()
+    if text.replace(".","",1).isdigit():
+        return datetime.fromtimestamp(float(text)/1000,BEIJING).date()
+    return datetime.fromisoformat(text[:10]).date()
 
 def _ts(value):
     v=float(value)
@@ -54,6 +63,30 @@ class QmtMarketGateway(MarketGateway):
         self._subscription=xtdata.subscribe_whole_quote(list(symbols),callback=callback)
         if self._subscription is None or self._subscription < 0:
             raise RuntimeError("QMT 行情订阅失败")
+
+
+    def corporate_actions(self,symbols,day):
+        """只读 QMT 除权数据，返回 day 当日的现金分红和送转。字段不符时报错，不猜测格式。"""
+        from xtquant import xtdata
+        start=(day-timedelta(days=10)).strftime("%Y%m%d")
+        result=[]
+        for symbol in symbols:
+            frame=xtdata.get_divid_factors(symbol,start,day.strftime("%Y%m%d"))
+            if frame is None or len(frame)==0:
+                continue
+            missing={"interest","stockBonus","stockGift"}-set(frame.columns)
+            if missing:
+                raise ValueError(f"QMT 除权数据缺少字段 {sorted(missing)}，实际字段 {list(frame.columns)}")
+            for index,row in frame.iterrows():
+                if _action_date(index) != day:
+                    continue
+                if float(row.get("allotNum",0) or 0):
+                    raise ValueError(f"{symbol} 当日含配股，引擎暂不支持")
+                cash=float(row["interest"] or 0)
+                split=1+float(row["stockBonus"] or 0)+float(row["stockGift"] or 0)
+                if cash or split != 1:
+                    result.append(CorporateAction(datetime.combine(day,datetime.min.time()),symbol,cash,split))
+        return result
 
 
 class QmtTradeGateway(TradeGateway):

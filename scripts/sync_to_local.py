@@ -1,7 +1,8 @@
 """在服务器上运行：把实盘相关数据增量同步到远程桌面挂载的本地硬盘（只读源、只增不删）。
 
-  python scripts/sync_to_local.py --dest "\\\\tsclient\\C\\<本地目录>"
-目标目录也可写在 .env 的 GYRO_SYNC_DEST。只复制大小或修改时间有变化的文件；SQLite 用备份接口得到一致副本。
+  双击项目根目录的 sync-to-local.bat，或 python scripts/sync_to_local.py
+默认目标：远程桌面挂载的本地硬盘上 gyro_nicert 项目的 storage/server_mirror（storage 不入库）。
+也可用 --dest 或 .env 的 GYRO_SYNC_DEST 指定。只复制大小或修改时间有变化的文件；SQLite 用备份接口得到一致副本。
 同步内容：storage 下的 app.sqlite、live/、executor_v2/、实盘调度状态；.vntrader 下的 log/ 和两个 CTA json；券商 DBF。
 .vntrader 里的连接配置（connect_*.json、vt_setting.json）不会被复制。
 """
@@ -64,13 +65,29 @@ def _tree(root: Path, target: Path, stats: dict, pattern: str = "*") -> None:
                 _copy(path, target / path.relative_to(root), stats)
 
 
+def _find_local_mirror() -> Path:
+    """在远程桌面挂载的本地硬盘（\\\\tsclient\\<盘符>）上找到本地的 gyro_nicert 项目，目标为其 storage/server_mirror。"""
+    found = []
+    for drive in "CDEFGH":
+        root = Path(f"\\\\tsclient\\{drive}")
+        try:
+            if not root.is_dir():
+                continue
+            found += [p for p in root.glob("Users/*/Desktop/*/gyro_nicert") if (p / "storage").is_dir()]
+        except OSError:
+            continue
+    if len(found) != 1:
+        hint = "；".join(map(str, found)) or "没有找到"
+        raise SystemExit(f"无法自动确定本地项目（{hint}）。请确认远程桌面已挂载本地硬盘，"
+                         "或用 --dest / .env 的 GYRO_SYNC_DEST 指定目标目录")
+    return found[0] / "storage" / "server_mirror"
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dest", default=env("GYRO_SYNC_DEST"))
     args = parser.parse_args()
-    if not args.dest:
-        raise SystemExit("请用 --dest 或 .env 的 GYRO_SYNC_DEST 指定本地目录")
-    dest = Path(args.dest)
+    dest = Path(args.dest) if args.dest else _find_local_mirror()
     if not dest.parent.exists():
         raise SystemExit(f"目标不可访问（远程桌面是否已挂载本地硬盘？）：{dest}")
     stats = {"files": 0, "bytes": 0}

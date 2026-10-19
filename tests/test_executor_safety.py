@@ -469,3 +469,55 @@ def test_status_text_shows_quotes_trading_state_and_warmup(factory):
     assert "行情 2/2 只在更新（含 IOPV 2）" in text and "交易启用" in text and "预热中 0.0/10 天" in text
     e._halt(T,"测试暂停")
     assert "已暂停：测试暂停" in e.status_text(T)
+
+def _two_day_engine(tmp_path,actions=None,action_source=None):
+    from executor.strategies.same_index_rotation import SameIndexRotation
+    store=Store(tmp_path/"ca.sqlite")
+    e=Engine(clock=SimClock(T-timedelta(minutes=1)),market_gw=ReplayMarket(),trade_gw=ControlledBroker(),
+             strategies=[SameIndexRotation("r",[A,B],0.3,signal="price")],capitals={"r":1000},store=store,
+             risk=RiskManager(RiskConfig()),actions=actions,action_source=action_source)
+    assert e.start()==[]
+    e.on_quotes(T,[Quote(A,T,1.0,.999,1.001,None),Quote(B,T,2.0,1.999,2.001,None)])
+    return e,store
+
+
+def test_price_signal_offsets_on_dividend_keep_series_continuous(tmp_path):
+    import math
+    from executor.events import CorporateAction
+    day2=T+timedelta(days=1)
+    e,store=_two_day_engine(tmp_path,actions=[CorporateAction(day2,A,0.02,1.0)])
+    try:
+        e.on_quotes(day2,[Quote(A,day2,.98,.979,.981,None,previous_close=.98),Quote(B,day2,2.0,1.999,2.001,None,previous_close=2.0)])
+        st=e.strategies["r"]
+        assert math.isclose(st.offsets[A],-math.log(.98)) and not e.risk.halted("r")
+        assert math.isclose(math.log(.98)+st.offsets[A],math.log(1.0),abs_tol=1e-9)  # 复权后价格连续
+    finally: store.close()
+
+
+def test_missing_dividend_data_is_caught_by_exchange_reference(tmp_path):
+    import math
+    day2=T+timedelta(days=1)
+    e,store=_two_day_engine(tmp_path,action_source=lambda day:[])
+    try:
+        e.on_quotes(day2,[Quote(A,day2,.97,.969,.971,None,previous_close=.97),Quote(B,day2,2.0,1.999,2.001,None,previous_close=2.0)])
+        assert "除权数据" in e.risk.halted("r")
+        assert math.isclose(e.strategies["r"].offsets[A],-math.log(.97))
+        kinds=[r[0] for r in store.conn.execute("SELECT kind FROM events")]
+        assert "corporate_action_mismatch" in kinds
+    finally: store.close()
+
+
+def test_qmt_corporate_actions_parse_and_reject_unknown_format(monkeypatch):
+    import sys, types
+    import pandas as pd
+    from datetime import date
+    frame=pd.DataFrame({"interest":[0.01,0.02],"stockBonus":[0,0],"stockGift":[0,0],"allotNum":[0,0]},
+                       index=["20261016","20261019"])
+    fake=types.SimpleNamespace(get_divid_factors=lambda code,start,end:frame if code==A else pd.DataFrame())
+    monkeypatch.setitem(sys.modules,"xtquant",types.SimpleNamespace(xtdata=fake))
+    monkeypatch.setitem(sys.modules,"xtquant.xtdata",fake)
+    got=QmtMarketGateway().corporate_actions([A,B],date(2026,10,19))
+    assert [(a.symbol,a.cash_per_share,a.split_ratio) for a in got]==[(A,0.02,1.0)]
+    fake.get_divid_factors=lambda code,start,end:pd.DataFrame({"x":[1]},index=["20261019"])
+    with pytest.raises(ValueError):
+        QmtMarketGateway().corporate_actions([A],date(2026,10,19))

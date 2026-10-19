@@ -55,6 +55,11 @@ class Strategy(ABC):
     def on_trade(self, ctx: Context, trade: Trade) -> None:
         pass
 
+    def on_corporate_action(self, ctx: Context, symbol: str, ratio: float) -> None:
+        """除权除息日开盘前通知：ratio = 除权后参考价 / 除权前收盘价（现金分红和拆分都已折算）。
+        依赖价格历史的策略应据此调整，避免把除权缺口当成价格变化。"""
+        pass
+
     def state(self) -> dict:
         return {}
 

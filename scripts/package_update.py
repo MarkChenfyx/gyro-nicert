@@ -6,7 +6,7 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 DIRECTORIES = ("backend", "executor", "scripts", "frontend/dist")
-FILES = ("pyproject.toml", "requirements-server.txt", "start-server.bat", "start-executor.bat", ".env.example")
+FILES = ("pyproject.toml", "requirements-server.txt", "start-server.bat", "start-executor.bat", "sync-to-local.bat", ".env.example")
 EXCLUDED = {"executor/config.toml"}  # 服务器本地配置（含资金账号），不随更新包覆盖
 
 

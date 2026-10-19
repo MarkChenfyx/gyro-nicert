@@ -25,7 +25,7 @@ def state_digest(state):
 
 class Engine:
     def __init__(self, *, clock, market_gw, trade_gw, strategies, capitals, store, risk, tplus1=None,
-                 commission_bp=1.0, max_quote_age=90.0, actions=None, recorder=None, state_save_every=0,
+                 commission_bp=1.0, max_quote_age=90.0, actions=None, action_source=None, recorder=None, state_save_every=0,
                  snapshot_wait_seconds=2.0):
         if len({s.name for s in strategies}) != len(strategies) or set(capitals) != {s.name for s in strategies}:
             raise ValueError("策略名称必须唯一，且与资金分配一致")
@@ -62,6 +62,9 @@ class Engine:
         self._warming=False
         self._dirty=set(self.strategies)
         self._last_poll=None
+        self.action_source=action_source  # 可选：day → 当日除权除息列表（实盘从 QMT 读取）
+        self._prev_last={}
+        self._day_ratio={}
         market_gw.sink=self.post
         trade_gw.sink=self.post
 
@@ -236,6 +239,8 @@ class Engine:
         for q in quotes:
             if q.time > t or not q.valid:
                 continue
+            if q.previous_close is not None and isfinite(q.previous_close) and q.previous_close > 0 and q.symbol in self._prev_last:
+                self._check_reference(t,q.symbol,self._prev_last.pop(q.symbol),q.previous_close)
             if self.market.update(q):
                 if q.previous_close is not None and isfinite(q.previous_close) and q.previous_close > 0:
                     self.performance.references[q.symbol]=q.previous_close
@@ -492,13 +497,49 @@ class Engine:
     def _equity(self,book):
         return book.cash+sum(q*(self.market.mid(s) or self.performance.prices.get(s,0)) for s,q in book.positions.items())
 
+    def _notify_action(self,t,symbol,ratio):
+        for name,sub in self.subscriptions.items():
+            if symbol in sub.symbols:
+                self._invoke(name,"on_corporate_action",self._ctx(name,t),symbol,ratio)
+                self._dirty.add(name)
+
+    def _check_reference(self,t,symbol,last,reference):
+        """前收盘参考价（交易所已按除权调整）应≈昨日收盘×当日除权比例；不符说明除权数据缺失或错误。"""
+        used=self._day_ratio.get(symbol,1.0)
+        expected=last*used
+        if abs(reference/expected-1) <= max(0.002,1.5*0.001/expected):
+            return
+        self.store.event(t,"corporate_action_mismatch",symbol=symbol,last_close=last,reference=reference,used_ratio=round(used,6))
+        self._notify_action(t,symbol,reference/expected)  # 以交易所参考价为准修正价格历史
+        for name,sub in self.subscriptions.items():
+            if symbol in sub.symbols:
+                self.risk.halt(name,f"{symbol} 除权数据与交易所前收盘价不一致，今日暂停，需人工核对")
+
     def _new_day(self,t):
         if self._day is not None:
             self.end_of_day(self._day)
         self._day=t.date()
         self.ledger.new_day(self._day)
         self.performance.new_day()
+        if self.action_source is not None:  # 实盘/纸面：每天从行情源取当日除权除息
+            try:
+                fetched=[a for a in self.action_source(self._day) if a.date.date()==self._day]
+            except Exception as exc:
+                fetched=[]
+                self.store.event(t,"corporate_action_source_failed",message=str(exc))
+            known={a.symbol for a in self.actions.get(self._day,[])}
+            new=[a for a in fetched if a.symbol not in known]
+            self.actions.setdefault(self._day,[]).extend(new)
+            if new and isinstance(self.trade_gw,SimBroker):
+                self.trade_gw.add_actions(new)
+        # 昨日最后成交价：开盘后与交易所公布的前收盘参考价核对除权数据
+        self._prev_last={s:q.last for s,q in self.market.latest.items() if q.valid and q.last > 0}
+        self._day_ratio={}
         for a in self.actions.get(self._day,[]):
+            prev=self._prev_last.get(a.symbol) or self.market.mid(a.symbol)
+            if prev and a.split_ratio > 0 and prev > a.cash_per_share:
+                self._day_ratio[a.symbol]=(prev-a.cash_per_share)/prev/a.split_ratio
+                self._notify_action(t,a.symbol,self._day_ratio[a.symbol])
             self.ledger.apply_action(a)
             for name,b in self.performance.books.items():
                 self.performance._add(name,a.symbol,b["units"].get(a.symbol,0)*a.cash_per_share)

@@ -49,6 +49,11 @@ class SimBroker(TradeGateway):
             self._actions.setdefault(a.date.date(),[]).append(a)
         self.sink=lambda event:None
 
+    def add_actions(self,actions):
+        """纸面模式：引擎每天从行情源取到的除权除息同步给模拟券商，须在该日首批报价前调用。"""
+        for a in actions:
+            self._actions.setdefault(a.date.date(),[]).append(a)
+
     def _update(self,u):
         self._updates[u.client_id]=u
         self.sink(u)

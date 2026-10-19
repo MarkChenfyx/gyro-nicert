@@ -45,6 +45,10 @@ class RiskManager:
     def halted(self, strategy: str) -> str | None:
         return self._halted.get(strategy)
 
+    def halt(self, strategy: str, reason: str) -> None:
+        """暂停单个策略到次日（数据异常等），不影响其他策略。"""
+        self._halted.setdefault(strategy, reason)
+
     def check_equity(self, strategy: str, equity: float) -> None:
         start = self._day_start_equity.get(strategy)
         if start and equity < start * (1 - self.cfg.max_daily_loss_pct / 100):

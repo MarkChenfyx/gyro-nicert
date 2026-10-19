@@ -39,7 +39,9 @@ report.py       单位仓位收益与基准超额报告
 
 ## 策略接口
 
-策略实现 `subscription()` 返回 `Subscription(symbols, bar_minutes, ticks, snapshots, require_iopv)`。同指数轮动声明需要 IOPV；普通价格策略可以不依赖 IOPV。
+策略实现 `subscription()` 返回 `Subscription(symbols, bar_minutes, ticks, snapshots, require_iopv)`。同指数轮动有两种信号：`signal = "premium"`（溢价，需要 IOPV）和 `signal = "price"`（组内相对复权价格，不需要 IOPV）。QMT 推送只在深市 ETF 的 `pe` 字段里给出 IOPV，沪市为 0，因此含沪市 ETF 的组合使用价格版。
+
+除权除息：回测读 `corporate_actions.csv`；纸面/实盘每天开盘前读 QMT 除权数据（`get_divid_factors`）。引擎据此调整账本，并以 `on_corporate_action(symbol, ratio)` 通知策略调整价格历史。每只标的当日首笔行情的交易所前收盘参考价会与“昨日收盘 × 除权比例”核对，不符时按交易所参考价修正、相关策略当日暂停并弹窗。
 
 - `on_tick(ctx, quote)`：只接收订阅标的的有效报价。
 - `on_snapshot(ctx, snapshot)`：收到同一分钟窗口的数据，附带 stale 集合。缺失标的不会用另一分钟的旧报价悄悄补齐。
@@ -87,4 +89,4 @@ python -m pytest tests/test_executor.py tests/test_executor_safety.py tests/test
 
 `warmup_start` 与 `warmup_end` 同时配置时，首次启动从 data_dir 通过相同的策略接口进行历史预热，预热期间禁止交易。已有交易状态直接恢复，不重新预热。
 
-服务器下一步是使用 `scripts/executor_probe_qmt.py` 只读检查行情字段、IOPV、资金和持仓。通过后才进行 paper 模式联调。QMT 的真实柜台回调时序、字段和 IOPV 可得性尚未在服务器验证。实盘分红、拆分和实际费用还需要权威数据源核对；本地离线测试不替代这些步骤。
+2026-10-19 服务器只读探测：QMT 行情推送正常；深市 ETF 的 IOPV 在 `pe` 字段，沪市没有 IOPV。QMT 除权数据的实际格式尚未在服务器上见过，代码对字段做检查，不符即报错。QMT 的真实柜台回调时序尚未在服务器验证。实盘分红、拆分和实际费用还需要权威数据源核对；本地离线测试不替代这些步骤。

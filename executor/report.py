@@ -50,7 +50,7 @@ def summarize(db_path: Path, data_dir: Path, strategies: list[dict], start: date
     eq = pd.read_sql("SELECT day, strategy, equity, positions FROM equity", conn, parse_dates=["day"])
     trades = pd.read_sql("SELECT strategy, side, price, volume, time, fee FROM trades", conn, parse_dates=["time"])
     unit = pd.read_sql("SELECT day, strategy, daily_return FROM unit_returns", conn, parse_dates=["day"])
-    intents = pd.read_sql("SELECT strategy, kind FROM events WHERE kind LIKE 'intent%'", conn)
+    intents = pd.read_sql("SELECT strategy, kind, time FROM events WHERE kind LIKE 'intent%'", conn, parse_dates=["time"])
     conn.close()
     out, curves = {}, {}
     for cfg in strategies:
@@ -69,7 +69,8 @@ def summarize(db_path: Path, data_dir: Path, strategies: list[dict], start: date
             continue
         ex = x.策略 - x.基准
         years = len(x) / 252
-        k = intents[intents.strategy == name].kind.value_counts()
+        days = intents.time.dt.normalize()  # 只统计报告区间内的换仓，不能用全程次数除以区间年数
+        k = intents[(intents.strategy == name) & days.between(x.index[0], x.index[-1])].kind.value_counts()
         tr = trades[trades.strategy == name]
         out[name] = {
             "统计起点": str(first.date()), "交易日": len(x),

@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DIRECTORIES = ("backend", "executor", "scripts", "tests", "frontend/src", "frontend/dist",
                "storage/natural_language", "storage/strategies/manual")
 FILES = ("README.md", "pyproject.toml", "requirements-server.txt", ".env.example",
-         "start.bat", "start-server.bat", "start-executor.bat", "frontend/package.json", "frontend/package-lock.json",
+         "start.bat", "start-server.bat", "start-executor.bat", "sync-to-local.bat", "frontend/package.json", "frontend/package-lock.json",
          "frontend/index.html", "frontend/tsconfig.json", "frontend/tsconfig.node.json",
          "frontend/vite.config.ts")
 EXCLUDED = {"executor/config.toml"}  # 服务器本地配置（含资金账号），不随发布包覆盖

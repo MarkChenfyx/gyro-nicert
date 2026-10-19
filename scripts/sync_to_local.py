@@ -3,21 +3,29 @@
   双击项目根目录的 sync-to-local.bat，或 python scripts/sync_to_local.py
 默认目标：远程桌面挂载的本地硬盘上 gyro_nicert 项目的 storage/server_mirror（storage 不入库）。
 也可用 --dest 或 .env 的 GYRO_SYNC_DEST 指定。只复制大小或修改时间有变化的文件；SQLite 用备份接口得到一致副本。
-同步内容：storage 下的 app.sqlite、live/、executor_v2/、实盘调度状态；.vntrader 下的 log/ 和两个 CTA json；券商 DBF。
-.vntrader 里的连接配置（connect_*.json、vt_setting.json）不会被复制。
+
+同步内容（远程桌面传小文件很慢，只传分析需要的部分）：
+- storage：app.sqlite、实盘调度状态、executor_v2/；live/ 下的快照配置与状态、每日跟踪结果（不含体积很大的 rows.json）、
+  券商 DBF 归档；快照里的策略代码和模型只传最新一天。
+- .vntrader：两个 CTA json；log/ 只传最近 --log-days 天，gzip 压缩后传输（日志多为重复的乱序 tick 提示，压缩率很高）。
+- 券商 DBF 导出目录。连接配置（connect_*.json、vt_setting.json）不会被复制。
 """
 import argparse
+import gzip
 import os
 from pathlib import Path
+import re
 import shutil
 import sqlite3
 import sys
+import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from backend.core.environment import env
 from backend.core.paths import RUNTIME_ROOT, STORAGE_ROOT
 
 VNTRADER_FILES = ("cta_strategy_setting.json", "cta_strategy_data.json")
+SKIP_SUFFIXES = (".part", ".tmp", "-journal", "-wal", "-shm", ".lock")
 
 
 def _long(path: Path) -> Path:
@@ -28,41 +36,77 @@ def _long(path: Path) -> Path:
     return Path("\\\\?\\UNC\\" + text[2:] if text.startswith("\\\\") else "\\\\?\\" + text)
 
 
-def _changed(source: Path, target: Path) -> bool:
+def _changed(source: Path, target: Path, kind: str) -> bool:
     if not target.is_file():
         return True
     a, b = source.stat(), target.stat()
+    if kind == "gzip":  # 压缩后大小不同，只比修改时间
+        return int(a.st_mtime) != int(b.st_mtime)
     return a.st_size != b.st_size or int(a.st_mtime) != int(b.st_mtime)
 
 
-def _copy(source: Path, target: Path, stats: dict) -> None:
-    is_sqlite = source.suffix.lower() == ".sqlite"  # 数据库路径都很短，SQLite 不支持长路径前缀
-    if not is_sqlite:
-        source, target = _long(source), _long(target)
-    if not _changed(source, target):
-        return
+def _copy(source: Path, target: Path, kind: str) -> int:
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary = target.with_name(target.name + ".part")
-    if is_sqlite:
+    if kind == "sqlite":
         reader = sqlite3.connect(f"file:{source.as_posix()}?mode=ro", uri=True)
         writer = sqlite3.connect(temporary)
         try:
             reader.backup(writer)
         finally:
             writer.close(); reader.close()
-        os.utime(temporary, (source.stat().st_atime, source.stat().st_mtime))
+    elif kind == "gzip":
+        with source.open("rb") as src, gzip.open(temporary, "wb", compresslevel=6) as dst:
+            shutil.copyfileobj(src, dst, 1 << 20)
     else:
-        shutil.copy2(source, temporary)
+        shutil.copyfile(source, temporary)
+    os.utime(temporary, (source.stat().st_atime, source.stat().st_mtime))
     temporary.replace(target)
-    stats["files"] += 1
-    stats["bytes"] += target.stat().st_size
+    return target.stat().st_size
 
 
-def _tree(root: Path, target: Path, stats: dict, pattern: str = "*") -> None:
+def _files(root: Path, pattern: str = "*"):
     if root.is_dir():
         for path in root.rglob(pattern):
-            if path.is_file() and "__pycache__" not in path.parts and not path.name.endswith((".part", ".tmp", "-journal", "-wal", "-shm", ".lock")):
-                _copy(path, target / path.relative_to(root), stats)
+            if path.is_file() and "__pycache__" not in path.parts and not path.name.endswith(SKIP_SUFFIXES):
+                yield path
+
+
+def _live_files(live: Path):
+    """live/ 下除快照代码外全部传；每个实盘源只传最新一天快照的 code/。"""
+    latest = {}
+    for day in live.glob("*/snapshots/*"):
+        if day.is_dir():
+            latest[day.parent] = max(latest.get(day.parent, day), day, key=lambda p: p.name)
+    for path in _files(live):
+        parts = path.relative_to(live).parts
+        if path.name == "rows.json":
+            continue
+        if "code" in parts and len(parts) > 3 and parts[1] == "snapshots":
+            if live / parts[0] / "snapshots" / parts[2] != latest.get(live / parts[0] / "snapshots"):
+                continue
+        yield path
+
+
+def _plan(dest: Path, log_days: int) -> list[tuple[Path, Path, str]]:
+    items = [(STORAGE_ROOT / "db" / "app.sqlite", dest / "storage" / "db" / "app.sqlite", "sqlite")]
+    status = RUNTIME_ROOT / "live_scheduler_status.json"
+    if status.is_file():
+        items.append((status, dest / "storage" / "runtime" / status.name, "copy"))
+    live = STORAGE_ROOT / "live"
+    items += [(p, dest / "storage" / "live" / p.relative_to(live), "copy") for p in _live_files(live)]
+    executor = STORAGE_ROOT / "executor_v2"
+    items += [(p, dest / "storage" / "executor_v2" / p.relative_to(executor),
+               "sqlite" if p.suffix == ".sqlite" else "copy") for p in _files(executor)]
+    vntrader = Path(env("GYRO_LIVE_VNTRADER_DIR") or Path.home() / ".vntrader")
+    items += [(vntrader / n, dest / "vntrader" / n, "copy") for n in VNTRADER_FILES if (vntrader / n).is_file()]
+    logs = sorted((p for p in (vntrader / "log").glob("*.log") if re.search(r"\d{8}", p.name)),
+                  key=lambda p: re.search(r"\d{8}", p.name).group())[-log_days:] if (vntrader / "log").is_dir() else []
+    items += [(p, dest / "vntrader" / "log" / (p.name + ".gz"), "gzip") for p in logs]
+    dbf = env("GYRO_LIVE_BROKER_DBF_DIR")
+    if dbf:
+        items += [(p, dest / "broker_dbf" / p.relative_to(dbf), "copy") for p in _files(Path(dbf), "*.dbf")]
+    return [(s, t, k) if k == "sqlite" else (_long(s), _long(t), k) for s, t, k in items]
 
 
 def _find_local_mirror() -> Path:
@@ -86,26 +130,30 @@ def _find_local_mirror() -> Path:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dest", default=env("GYRO_SYNC_DEST"))
+    parser.add_argument("--log-days", type=int, default=10, help="VeighNa 日志只同步最近多少天")
     args = parser.parse_args()
+    print("正在查找本地目录……", flush=True)
     dest = Path(args.dest) if args.dest else _find_local_mirror()
     if not dest.parent.exists():
         raise SystemExit(f"目标不可访问（远程桌面是否已挂载本地硬盘？）：{dest}")
-    stats = {"files": 0, "bytes": 0}
-    _copy(STORAGE_ROOT / "db" / "app.sqlite", dest / "storage" / "db" / "app.sqlite", stats)
-    for name in ("live", "executor_v2"):
-        _tree(STORAGE_ROOT / name, dest / "storage" / name, stats)
-    status = RUNTIME_ROOT / "live_scheduler_status.json"
-    if status.is_file():
-        _copy(status, dest / "storage" / "runtime" / status.name, stats)
-    vntrader = Path(env("GYRO_LIVE_VNTRADER_DIR") or Path.home() / ".vntrader")
-    _tree(vntrader / "log", dest / "vntrader" / "log", stats)
-    for name in VNTRADER_FILES:
-        if (vntrader / name).is_file():
-            _copy(vntrader / name, dest / "vntrader" / name, stats)
-    dbf = env("GYRO_LIVE_BROKER_DBF_DIR")
-    if dbf:
-        _tree(Path(dbf), dest / "broker_dbf", stats, "*.dbf")
-    print(f"同步完成：更新 {stats['files']} 个文件，{stats['bytes'] / 1e6:.1f} MB → {dest}")
+    print(f"目标：{dest}\n正在比对哪些文件需要更新……", flush=True)
+    todo = [(s, t, k) for s, t, k in _plan(dest, args.log_days) if _changed(s, t, k)]
+    total = sum(s.stat().st_size for s, _, _ in todo)
+    print(f"需要传输 {len(todo)} 个文件，原始大小 {total / 1e6:.1f} MB", flush=True)
+    done = moved = sent = 0
+    started = last = time.monotonic()
+    for source, target, kind in todo:
+        sent += _copy(source, target, kind)
+        done += 1
+        moved += source.stat().st_size
+        now = time.monotonic()
+        if now - last >= 0.5 or done == len(todo):
+            last = now
+            share = moved / total if total else 1
+            bar = "#" * int(share * 30)
+            print(f"\r[{bar:<30}] {share:4.0%}  {done}/{len(todo)} 个文件  {moved / 1e6:.1f}/{total / 1e6:.1f} MB  "
+                  f"已用 {now - started:.0f} 秒", end="", flush=True)
+    print(f"\n同步完成：更新 {done} 个文件，实际传输 {sent / 1e6:.1f} MB → {dest}")
 
 
 if __name__ == "__main__":

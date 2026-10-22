@@ -7,7 +7,7 @@
 同步内容（远程桌面传小文件很慢，只传分析需要的部分）：
 - storage：app.sqlite、实盘调度状态、executor_v2/；live/ 下的快照配置与状态、每日跟踪结果（不含体积很大的 rows.json）、
   券商 DBF 归档；快照里的策略代码和模型只传最新一天。
-- .vntrader：两个 CTA json；log/ 只传最近 --log-days 天，gzip 压缩后传输（日志多为重复的乱序 tick 提示，压缩率很高）。
+- .vntrader：两个 CTA json；log/ 默认不传（每天约 80MB），排查问题时用 --log-days N 传最近 N 天，gzip 压缩后传输。
 - 券商 DBF 导出目录。连接配置（connect_*.json、vt_setting.json）不会被复制。
 """
 import argparse
@@ -101,7 +101,7 @@ def _plan(dest: Path, log_days: int) -> list[tuple[Path, Path, str]]:
     vntrader = Path(env("GYRO_LIVE_VNTRADER_DIR") or Path.home() / ".vntrader")
     items += [(vntrader / n, dest / "vntrader" / n, "copy") for n in VNTRADER_FILES if (vntrader / n).is_file()]
     logs = sorted((p for p in (vntrader / "log").glob("*.log") if re.search(r"\d{8}", p.name)),
-                  key=lambda p: re.search(r"\d{8}", p.name).group())[-log_days:] if (vntrader / "log").is_dir() else []
+                  key=lambda p: re.search(r"\d{8}", p.name).group())[-log_days:] if log_days > 0 and (vntrader / "log").is_dir() else []
     items += [(p, dest / "vntrader" / "log" / (p.name + ".gz"), "gzip") for p in logs]
     dbf = env("GYRO_LIVE_BROKER_DBF_DIR")
     if dbf:
@@ -120,6 +120,8 @@ def _find_local_mirror() -> Path:
             found += [p for p in root.glob("Users/*/Desktop/*/gyro_nicert") if (p / "storage").is_dir()]
         except OSError:
             continue
+        if found:  # 通常在 C 盘就找到；远程桌面访问不存在的盘要等超时，找到即停
+            break
     if len(found) != 1:
         hint = "；".join(map(str, found)) or "没有找到"
         raise SystemExit(f"无法自动确定本地项目（{hint}）。请确认远程桌面已挂载本地硬盘，"
@@ -130,7 +132,7 @@ def _find_local_mirror() -> Path:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dest", default=env("GYRO_SYNC_DEST"))
-    parser.add_argument("--log-days", type=int, default=10, help="VeighNa 日志只同步最近多少天")
+    parser.add_argument("--log-days", type=int, default=0, help="同步最近几天的 VeighNa 日志（默认不传；排查问题时再加，如 --log-days 3）")
     args = parser.parse_args()
     print("正在查找本地目录……", flush=True)
     dest = Path(args.dest) if args.dest else _find_local_mirror()

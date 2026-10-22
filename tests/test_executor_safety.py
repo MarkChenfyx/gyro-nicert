@@ -521,3 +521,31 @@ def test_qmt_corporate_actions_parse_and_reject_unknown_format(monkeypatch):
     fake.get_divid_factors=lambda code,start,end:pd.DataFrame({"x":[1]},index=["20261019"])
     with pytest.raises(ValueError):
         QmtMarketGateway().corporate_actions([A],date(2026,10,19))
+
+class FlakyMarket(ReplayMarket):
+    """前两次订阅失败、第三次成功的行情网关。"""
+    def __init__(self):
+        super().__init__(); self.connected=False; self.attempts=0; self.last_error="QMT 未启动"
+    def subscribe(self,symbols):
+        super().subscribe(symbols); return self.resubscribe()
+    def resubscribe(self):
+        self.attempts+=1; self.connected=self.attempts>=3; return self.connected
+
+
+def test_market_feed_watchdog_retries_until_qmt_ready(tmp_path):
+    from executor.engine import RETRY_SECONDS, FEED_TIMEOUT
+    store=Store(tmp_path/"w.sqlite"); market=FlakyMarket()
+    e=Engine(clock=SimClock(T),market_gw=market,trade_gw=ControlledBroker(),strategies=[Passive()],capitals={"r":1000},
+             store=store,risk=RiskManager(RiskConfig()))
+    try:
+        assert e.start()==[] and market.attempts==1 and not market.connected
+        assert "未连接" in e.status_text(T)
+        assert e.watch_feed(T,None,None) and market.attempts==2
+        assert not e.watch_feed(T+timedelta(seconds=10),None,T)                  # 1 分钟内不重复重试
+        assert e.watch_feed(T+timedelta(seconds=RETRY_SECONDS),None,T) and market.connected
+        night=datetime(2026,1,5,20,0)
+        assert not e.watch_feed(night,night-timedelta(hours=5),None)             # 已连上、非交易时段：不动
+        later=T+timedelta(minutes=10)
+        assert e.watch_feed(later,later-timedelta(seconds=FEED_TIMEOUT+1),None)  # 交易时段长时间无报价：重订阅
+        assert not e.watch_feed(later,later-timedelta(seconds=30),None)          # 刚有报价：不动
+    finally: store.close()

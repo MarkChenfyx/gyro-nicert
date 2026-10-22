@@ -25,3 +25,4 @@ storage/executor/
 executor/config.toml
 
 storage/executor_v2/
+storage/server_mirror/

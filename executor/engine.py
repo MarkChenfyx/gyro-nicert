@@ -18,6 +18,8 @@ from .portfolio import Book, Ledger, UnitPerformance
 from .strategies.base import Context
 
 POLL_SECONDS=30
+FEED_TIMEOUT=120    # 交易时段超过这么久没有新报价，重新订阅行情
+RETRY_SECONDS=60    # 订阅失败或重订阅后的重试间隔
 
 def state_digest(state):
     text=json.dumps(state,default=str,sort_keys=True,allow_nan=False,separators=(",",":"))
@@ -572,7 +574,8 @@ class Engine:
         symbols=sorted({s for sub in self.subscriptions.values() for s in sub.symbols})
         fresh=[s for s in symbols if self.market.fresh(s,now)]
         iopv=sum(1 for s in fresh if self.market.latest[s].iopv is not None)
-        if self.risk.stopped(): state="STOP 文件生效，拒绝新委托"
+        if getattr(self.market_gw,"connected",True) is False: state="QMT 行情未连接，每分钟重试"
+        elif self.risk.stopped(): state="STOP 文件生效，拒绝新委托"
         elif self.trading_enabled: state="交易启用"
         else: state="已暂停："+self.halt_reason
         lines=[f"行情 {len(fresh)}/{len(symbols)} 只在更新（含 IOPV {iopv}）｜{'交易时段' if in_session(now) else '非交易时段'}｜{state}｜在途委托 {len(self.oms.active())}"]
@@ -582,15 +585,33 @@ class Engine:
             lines.append(f"  {name}: {hold}"+(f"｜{extra}" if extra else "")+("｜当日熔断" if self.risk.halted(name) else ""))
         return "\n".join(lines)
 
+    def watch_feed(self,now,last_feed,last_retry,console=None):
+        """行情看门狗：未订阅成功就每分钟重试；交易时段超过 FEED_TIMEOUT 秒没有新报价就重新订阅。返回本次是否重试。"""
+        gw=self.market_gw
+        if not hasattr(gw,"resubscribe"):
+            return False
+        if last_retry is not None and (now-last_retry).total_seconds() < RETRY_SECONDS:
+            return False
+        silent=last_feed is None or (now-last_feed).total_seconds() > FEED_TIMEOUT
+        if gw.connected and not (in_session(now) and silent):
+            return False
+        ok=gw.resubscribe()
+        if console:
+            console("QMT 行情已连接" if ok else f"等待 QMT 行情……（{gw.last_error or '暂无报价'}），1 分钟后重试")
+        return True
+
     def run_live(self,stop_check,heartbeat_seconds=1.0,console=None,status_seconds=60.0):
-        last_status=None
+        last_status=last_feed=last_retry=None
         while not stop_check():
             try:
                 _,_,quotes=self._quotes.get(timeout=heartbeat_seconds)
                 self.on_quotes(self.clock.now(),quotes)
+                last_feed=self.clock.now()
             except queue.Empty:
                 pass
             now=self.clock.now()
+            if self.watch_feed(now,last_feed,last_retry,console):
+                last_retry=last_feed=now  # 重订阅后重新计时：已连上但仍无报价时，再等 FEED_TIMEOUT 秒才重试
             self.on_timer(now)
             if console and (last_status is None or (now-last_status).total_seconds() >= status_seconds):
                 last_status=now

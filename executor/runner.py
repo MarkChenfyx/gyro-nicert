@@ -156,6 +156,8 @@ def run_realtime(cfg: dict, mode: str) -> None:
         problems = engine.start()
         if problems:
             print("核对未通过，本次只接行情不交易：", problems)
+        if not getattr(market, "connected", True):
+            console(f"QMT 行情暂未就绪（{market.last_error}），引擎会每分钟重试，QMT 启动后自动接上")
         if not restoring and eng.get("warmup_start") and eng.get("warmup_end"):
             symbols = sorted({symbol for sub in engine.subscriptions.values() for symbol in sub.symbols})
             console("正在用历史行情预热策略……")

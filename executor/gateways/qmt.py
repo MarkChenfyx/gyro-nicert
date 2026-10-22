@@ -41,28 +41,51 @@ class QmtMarketGateway(MarketGateway):
     def __init__(self):
         self.sink=lambda event:None
         self._subscription=None
+        self.symbols=[]
+        self.last_error=""
+
+    @property
+    def connected(self):
+        return self._subscription is not None
 
     def close(self):
         if self._subscription is not None:
-            from xtquant import xtdata
-            xtdata.unsubscribe_quote(self._subscription)
+            try:
+                from xtquant import xtdata
+                xtdata.unsubscribe_quote(self._subscription)
+            except Exception:
+                pass
             self._subscription=None
 
+    def _callback(self,data):
+        quotes=[]
+        for code,tick in data.items():
+            try:
+                bid=(tick.get("bidPrice") or [0])[0]; ask=(tick.get("askPrice") or [0])[0]
+                quotes.append(Quote(code,_ts(tick["time"]),float(tick.get("lastPrice",0)),float(bid),float(ask),_iopv(tick),
+                    previous_close=float(tick["lastClose"]) if tick.get("lastClose") else None))
+            except (KeyError,ValueError,TypeError):
+                continue
+        if quotes: self.sink(("quotes",beijing_now(),quotes))
+
     def subscribe(self,symbols):
-        from xtquant import xtdata
-        def callback(data):
-            quotes=[]
-            for code,tick in data.items():
-                try:
-                    bid=(tick.get("bidPrice") or [0])[0]; ask=(tick.get("askPrice") or [0])[0]
-                    quotes.append(Quote(code,_ts(tick["time"]),float(tick.get("lastPrice",0)),float(bid),float(ask),_iopv(tick),
-                        previous_close=float(tick["lastClose"]) if tick.get("lastClose") else None))
-                except (KeyError,ValueError,TypeError):
-                    continue
-            if quotes: self.sink(("quotes",beijing_now(),quotes))
-        self._subscription=xtdata.subscribe_whole_quote(list(symbols),callback=callback)
-        if self._subscription is None or self._subscription < 0:
-            raise RuntimeError("QMT 行情订阅失败")
+        """QMT 未就绪时不报错退出：记下失败原因，由引擎定时重试（见 Engine.run_live）。"""
+        self.symbols=list(symbols)
+        return self.resubscribe()
+
+    def resubscribe(self):
+        self.close()
+        try:
+            from xtquant import xtdata
+            sid=xtdata.subscribe_whole_quote(self.symbols,callback=self._callback)
+            if sid is None or sid < 0:
+                raise RuntimeError(f"订阅返回 {sid}")
+            self._subscription=sid
+            self.last_error=""
+            return True
+        except Exception as exc:
+            self.last_error=str(exc)
+            return False
 
 
     def corporate_actions(self,symbols,day):
